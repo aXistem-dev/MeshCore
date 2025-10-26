@@ -1,8 +1,6 @@
 #include "MQTTMessageBuilder.h"
 #include <ArduinoJson.h>
 #include <time.h>
-#include <Timezone.h>
-#include "MeshCore.h"
 
 int MQTTMessageBuilder::buildStatusMessage(
   const char* origin,
@@ -14,16 +12,9 @@ int MQTTMessageBuilder::buildStatusMessage(
   const char* status,
   const char* timestamp,
   char* buffer,
-  size_t buffer_size,
-  int battery_mv,
-  int uptime_secs,
-  int errors,
-  int queue_len,
-  int noise_floor,
-  int tx_air_secs,
-  int rx_air_secs
+  size_t buffer_size
 ) {
-  DynamicJsonDocument doc(768);  // Increased size to accommodate stats
+  DynamicJsonDocument doc(512);
   JsonObject root = doc.to<JsonObject>();
   
   root["status"] = status;
@@ -34,34 +25,6 @@ int MQTTMessageBuilder::buildStatusMessage(
   root["firmware_version"] = firmware_version;
   root["radio"] = radio;
   root["client_version"] = client_version;
-  
-  // Add stats object if any stats are provided
-  if (battery_mv >= 0 || uptime_secs >= 0 || errors >= 0 || queue_len >= 0 || 
-      noise_floor > -999 || tx_air_secs >= 0 || rx_air_secs >= 0) {
-    JsonObject stats = root.createNestedObject("stats");
-    
-    if (battery_mv >= 0) {
-      stats["battery_mv"] = battery_mv;
-    }
-    if (uptime_secs >= 0) {
-      stats["uptime_secs"] = uptime_secs;
-    }
-    if (errors >= 0) {
-      stats["errors"] = errors;
-    }
-    if (queue_len >= 0) {
-      stats["queue_len"] = queue_len;
-    }
-    if (noise_floor > -999) {
-      stats["noise_floor"] = noise_floor;
-    }
-    if (tx_air_secs >= 0) {
-      stats["tx_air_secs"] = tx_air_secs;
-    }
-    if (rx_air_secs >= 0) {
-      stats["rx_air_secs"] = rx_air_secs;
-    }
-  }
   
   size_t len = serializeJson(root, buffer, buffer_size);
   return (len > 0 && len < buffer_size) ? len : 0;
@@ -86,15 +49,7 @@ int MQTTMessageBuilder::buildPacketMessage(
   char* buffer,
   size_t buffer_size
 ) {
-  // Size-adaptive JSON document: estimate needed size based on raw hex string length
-  // Base JSON overhead ~200 bytes, raw hex can be up to 510 chars (255 bytes packet)
-  // Use minimum needed to reduce memory fragmentation
-  size_t raw_len = raw ? strlen(raw) : 0;
-  size_t doc_size = 256 + raw_len + 128; // Base + raw + overhead, but cap at buffer_size
-  if (doc_size > buffer_size) doc_size = buffer_size;
-  if (doc_size < 512) doc_size = 512;   // Minimum for small packets
-  if (doc_size > 2048) doc_size = 2048; // Maximum cap
-  DynamicJsonDocument doc(doc_size);
+  DynamicJsonDocument doc(1024);
   JsonObject root = doc.to<JsonObject>();
   
   root["origin"] = origin;
@@ -147,55 +102,45 @@ int MQTTMessageBuilder::buildPacketJSON(
   bool is_tx,
   const char* origin,
   const char* origin_id,
-  Timezone* timezone,
   char* buffer,
   size_t buffer_size
 ) {
   if (!packet) return 0;
   
-  // Get current device time (should be UTC since system timezone is set to UTC)
+  // Get current device time
   time_t now = time(nullptr);
+  struct tm* timeinfo = localtime(&now);
   
-  // Convert to local time using timezone library (for timestamp field only)
-  time_t local_time = timezone ? timezone->toLocal(now) : now;
-  struct tm* local_timeinfo = localtime(&local_time);
-  
-  // Format timestamp in ISO 8601 format (LOCAL TIME)
+  // Format timestamp in ISO 8601 format
   char timestamp[32];
-  if (local_timeinfo) {
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S.000000", local_timeinfo);
+  if (timeinfo) {
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S.000000", timeinfo);
   } else {
     strcpy(timestamp, "2024-01-01T12:00:00.000000");
   }
   
-  // Get UTC time (since system timezone is UTC, time() returns UTC)
-  struct tm* utc_timeinfo = gmtime(&now);
-  
-  // Format time and date (ALWAYS UTC)
+  // Format time and date
   char time_str[16];
   char date_str[16];
-  if (utc_timeinfo) {
-    strftime(time_str, sizeof(time_str), "%H:%M:%S", utc_timeinfo);
-    strftime(date_str, sizeof(date_str), "%d/%m/%Y", utc_timeinfo);
+  if (timeinfo) {
+    strftime(time_str, sizeof(time_str), "%H:%M:%S", timeinfo);
+    strftime(date_str, sizeof(date_str), "%d/%m/%Y", timeinfo);
   } else {
     strcpy(time_str, "12:00:00");
     strcpy(date_str, "01/01/2024");
   }
   
   // Convert packet to hex
-  // MAX_TRANS_UNIT is 255 bytes, hex = 510 chars, but allow for larger with headers
-  char raw_hex[1024];
+  char raw_hex[512];
   packetToHex(packet, raw_hex, sizeof(raw_hex));
   
   // Get packet characteristics
   int packet_type = packet->getPayloadType();
   const char* route_str = getRouteTypeString(packet->isRouteDirect() ? 1 : 0);
   
-  // Create proper packet hash using MeshCore's calculatePacketHash method
+  // Create hash (simplified - use first 8 bytes of packet)
   char hash_str[17];
-  uint8_t packet_hash[MAX_HASH_SIZE];
-  packet->calculatePacketHash(packet_hash);
-  bytesToHex(packet_hash, MAX_HASH_SIZE, hash_str, sizeof(hash_str));
+  bytesToHex(packet->payload, min(8, (int)packet->payload_len), hash_str, sizeof(hash_str));
   
   // Build path string for direct packets
   char path_str[128] = "";
@@ -220,93 +165,10 @@ int MQTTMessageBuilder::buildPacketJSON(
   );
 }
 
-int MQTTMessageBuilder::buildPacketJSONFromRaw(
-  const uint8_t* raw_data,
-  int raw_len,
-  mesh::Packet* packet,
-  bool is_tx,
-  const char* origin,
-  const char* origin_id,
-  float snr,
-  float rssi,
-  Timezone* timezone,
-  char* buffer,
-  size_t buffer_size
-) {
-  if (!packet || !raw_data || raw_len <= 0) return 0;
-  
-  // Get current device time (should be UTC since system timezone is set to UTC)
-  time_t now = time(nullptr);
-  
-  // Convert to local time using timezone library (for timestamp field only)
-  time_t local_time = timezone ? timezone->toLocal(now) : now;
-  struct tm* local_timeinfo = localtime(&local_time);
-  
-  // Format timestamp in ISO 8601 format (LOCAL TIME)
-  char timestamp[32];
-  if (local_timeinfo) {
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S.000000", local_timeinfo);
-  } else {
-    strcpy(timestamp, "2024-01-01T12:00:00.000000");
-  }
-  
-  // Get UTC time (since system timezone is UTC, time() returns UTC)
-  struct tm* utc_timeinfo = gmtime(&now);
-  
-  // Format time and date (ALWAYS UTC)
-  char time_str[16];
-  char date_str[16];
-  if (utc_timeinfo) {
-    strftime(time_str, sizeof(time_str), "%H:%M:%S", utc_timeinfo);
-    strftime(date_str, sizeof(date_str), "%d/%m/%Y", utc_timeinfo);
-  } else {
-    strcpy(time_str, "12:00:00");
-    strcpy(date_str, "01/01/2024");
-  }
-  
-  // Convert raw radio data to hex (this includes radio headers)
-  // MAX_TRANS_UNIT is 255 bytes, hex = 510 chars, but allow for larger with headers
-  char raw_hex[1024];
-  bytesToHex(raw_data, raw_len, raw_hex, sizeof(raw_hex));
-  
-  // Get packet characteristics from the parsed packet
-  int packet_type = packet->getPayloadType();
-  const char* route_str = getRouteTypeString(packet->isRouteDirect() ? 1 : 0);
-  
-  // Create proper packet hash using MeshCore's calculatePacketHash method
-  char hash_str[17];
-  uint8_t packet_hash[MAX_HASH_SIZE];
-  packet->calculatePacketHash(packet_hash);
-  bytesToHex(packet_hash, MAX_HASH_SIZE, hash_str, sizeof(hash_str));
-  
-  // Build path string for direct packets
-  char path_str[128] = "";
-  if (packet->isRouteDirect() && packet->path_len > 0) {
-    // Simplified path representation
-    snprintf(path_str, sizeof(path_str), "path_len_%d", packet->path_len);
-  }
-  
-  return buildPacketMessage(
-    origin, origin_id, timestamp,
-    is_tx ? "tx" : "rx",
-    time_str, date_str,
-    raw_len, // Use actual raw radio data length
-    packet_type, route_str,
-    packet->payload_len,
-    raw_hex,
-    snr,  // Use actual SNR from radio
-    rssi, // Use actual RSSI from radio
-    hash_str,
-    packet->isRouteDirect() ? path_str : nullptr,
-    buffer, buffer_size
-  );
-}
-
 int MQTTMessageBuilder::buildRawJSON(
   mesh::Packet* packet,
   const char* origin,
   const char* origin_id,
-  Timezone* timezone,
   char* buffer,
   size_t buffer_size
 ) {
@@ -314,10 +176,7 @@ int MQTTMessageBuilder::buildRawJSON(
   
   // Get current device time
   time_t now = time(nullptr);
-  
-  // Convert to local time using timezone library
-  time_t local_time = timezone ? timezone->toLocal(now) : now;
-  struct tm* timeinfo = localtime(&local_time);
+  struct tm* timeinfo = localtime(&now);
   
   // Format timestamp in ISO 8601 format
   char timestamp[32];
@@ -328,8 +187,7 @@ int MQTTMessageBuilder::buildRawJSON(
   }
   
   // Convert packet to hex
-  // MAX_TRANS_UNIT is 255, so max hex size is 510 chars + null = 511 bytes
-  char raw_hex[1024];
+  char raw_hex[512];
   packetToHex(packet, raw_hex, sizeof(raw_hex));
   
   return buildRawMessage(origin, origin_id, timestamp, raw_hex, buffer, buffer_size);
@@ -391,15 +249,21 @@ void MQTTMessageBuilder::bytesToHex(const uint8_t* data, size_t len, char* hex, 
 }
 
 void MQTTMessageBuilder::packetToHex(mesh::Packet* packet, char* hex, size_t hex_size) {
-  // Serialize full on-air/wire format using Packet::writeTo()
-  // This includes header, transport codes (if present), path_len, path, and payload
-  uint8_t raw_buf[512];
-  uint8_t raw_len = packet->writeTo(raw_buf);
-  if (raw_len == 0 || raw_len > sizeof(raw_buf)) return;
+  // Convert entire packet to hex string
+  size_t total_len = packet->path_len + packet->payload_len + 2;
+  if (hex_size < total_len * 2 + 1) return;
   
-  // Check if hex buffer is large enough (2 hex chars per byte + null terminator)
-  if (hex_size < (size_t)raw_len * 2 + 1) return;
+  size_t offset = 0;
   
-  // Convert serialized packet to hex
-  bytesToHex(raw_buf, raw_len, hex, hex_size);
+  // Add path data
+  if (packet->path_len > 0) {
+    bytesToHex(packet->path, packet->path_len, hex + offset, hex_size - offset);
+    offset += packet->path_len * 2;
+  }
+  
+  // Add payload data
+  if (packet->payload_len > 0) {
+    bytesToHex(packet->payload, packet->payload_len, hex + offset, hex_size - offset);
+    offset += packet->payload_len * 2;
+  }
 }

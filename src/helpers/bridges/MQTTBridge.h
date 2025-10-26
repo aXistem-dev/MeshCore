@@ -2,12 +2,10 @@
 
 #include "MeshCore.h"
 #include "helpers/bridges/BridgeBase.h"
-#include <PsychicMqttClient.h>
+#include <PubSubClient.h>
 #include <WiFi.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
-#include <Timezone.h>
-#include "helpers/JWTHelper.h"
 
 #if defined(MQTT_DEBUG) && defined(ARDUINO)
   #include <Arduino.h>
@@ -45,7 +43,8 @@
  */
 class MQTTBridge : public BridgeBase {
 private:
-  PsychicMqttClient* _mqtt_client;
+  PubSubClient* _mqtt_client;
+  WiFiClient* _wifi_client;
   
   // MQTT broker configuration
   struct MQTTBroker {
@@ -71,11 +70,9 @@ private:
   char _device_id[65];  // Device public key (hex string)
   char _firmware_version[64];  // Firmware version string
   char _board_model[64];  // Board model string
-  char _build_date[32];  // Build date string
   bool _status_enabled;
   bool _packets_enabled;
   bool _raw_enabled;
-  bool _tx_enabled;
   unsigned long _last_status_publish;
   unsigned long _status_interval;
   
@@ -84,15 +81,9 @@ private:
     mesh::Packet* packet;
     unsigned long timestamp;
     bool is_tx;
-    // Store raw radio data with each packet to avoid it being overwritten
-    uint8_t raw_data[256];
-    int raw_len;
-    float snr;
-    float rssi;
-    bool has_raw_data;
   };
   
-  static const int MAX_QUEUE_SIZE = 10;
+  static const int MAX_QUEUE_SIZE = 50;
   QueuedPacket _packet_queue[MAX_QUEUE_SIZE];
   int _queue_head;
   int _queue_tail;
@@ -104,76 +95,17 @@ private:
   unsigned long _last_ntp_sync;
   bool _ntp_synced;
   
-  // Timezone handling
-  Timezone* _timezone;
-  
-  // Raw radio data storage
-  uint8_t _last_raw_data[256];
-  int _last_raw_len;
-  float _last_snr;
-  float _last_rssi;
-  unsigned long _last_raw_timestamp;
-  
-  // Let's Mesh Analyzer support
-  bool _analyzer_us_enabled;
-  bool _analyzer_eu_enabled;
-  char _auth_token_us[768]; // JWT token for US server authentication (increased for owner/client fields)
-  char _auth_token_eu[768]; // JWT token for EU server authentication (increased for owner/client fields)
-  char _analyzer_username[70]; // Username in format v1_{UPPERCASE_PUBLIC_KEY}
-  
-  // Token expiration tracking
-  unsigned long _token_us_expires_at;
-  unsigned long _token_eu_expires_at;
-  unsigned long _last_token_renewal_attempt_us;
-  unsigned long _last_token_renewal_attempt_eu;
-  unsigned long _last_reconnect_attempt_us;
-  unsigned long _last_reconnect_attempt_eu;
-  
-  // Status publish retry tracking
-  unsigned long _last_status_retry;  // Track last retry attempt (separate from successful publish)
-  static const unsigned long STATUS_RETRY_INTERVAL = 30000; // Retry every 30 seconds if failed
-  
-  // Device identity for JWT token creation
-  mesh::LocalIdentity *_identity;
-  
-  // PsychicMqttClient instances for different brokers
-  PsychicMqttClient* _analyzer_us_client;
-  PsychicMqttClient* _analyzer_eu_client;
-  
-  // Configuration validation state
-  bool _config_valid;
-  
-  // Throttle logging for disconnected broker messages
-  unsigned long _last_no_broker_log;
-  static const unsigned long NO_BROKER_LOG_INTERVAL = 30000; // Log every 30 seconds max
-  
-  // Throttle logging for analyzer client disconnected messages
-  unsigned long _last_analyzer_us_log;
-  unsigned long _last_analyzer_eu_log;
-  static const unsigned long ANALYZER_LOG_INTERVAL = 30000; // Log every 30 seconds max
-  
-  // Optional pointers for collecting stats internally (set by mesh if available)
-  mesh::Dispatcher* _dispatcher;  // For air times and errors
-  mesh::Radio* _radio;             // For noise floor
-  mesh::MainBoard* _board;         // For battery voltage
-  mesh::MillisecondClock* _ms;    // For uptime
-  
   // Internal methods
   void connectToBrokers();
   void processPacketQueue();
-  bool publishStatus();  // Returns true if status was successfully published
-  void publishPacket(mesh::Packet* packet, bool is_tx, 
-                     const uint8_t* raw_data = nullptr, int raw_len = 0, 
-                     float snr = 0.0f, float rssi = 0.0f);
+  void publishStatus();
+  void publishPacket(mesh::Packet* packet, bool is_tx);
   void publishRaw(mesh::Packet* packet);
   void queuePacket(mesh::Packet* packet, bool is_tx);
   void dequeuePacket();
   bool isAnyBrokerConnected();
   void setBrokerDefaults();
   void syncTimeWithNTP();
-  Timezone* createTimezoneFromString(const char* tz_string);
-  bool isMQTTConfigValid();
-  bool isIATAValid() const;  // Check if IATA code is configured
   
 public:
   /**
@@ -182,9 +114,8 @@ public:
    * @param prefs Node preferences for configuration settings
    * @param mgr PacketManager for allocating and queuing packets
    * @param rtc RTCClock for timestamping debug messages
-   * @param identity Device identity for JWT token creation
    */
-  MQTTBridge(NodePrefs *prefs, mesh::PacketManager *mgr, mesh::RTCClock *rtc, mesh::LocalIdentity *identity);
+  MQTTBridge(NodePrefs *prefs, mesh::PacketManager *mgr, mesh::RTCClock *rtc);
 
   /**
    * Initializes the MQTT bridge
@@ -203,28 +134,6 @@ public:
    * - Releases resources
    */
   void end() override;
-
-  /**
-   * Checks if MQTT configuration is valid
-   *
-   * @return true if all required MQTT settings are properly configured
-   */
-  bool isConfigValid() const;
-
-  /**
-   * Static method to validate MQTT configuration from preferences
-   *
-   * @param prefs Node preferences containing MQTT settings
-   * @return true if all required MQTT settings are properly configured
-   */
-  static bool isConfigValid(const NodePrefs* prefs);
-
-  /**
-   * Check if MQTT bridge is ready to operate (has WiFi credentials)
-   *
-   * @return true if WiFi credentials are configured and bridge can connect
-   */
-  bool isReady() const;
 
   /**
    * Main loop handler
@@ -299,34 +208,6 @@ public:
   void setBoardModel(const char* board_model);
 
   /**
-   * Set build date for client version
-   *
-   * @param build_date Build date string
-   */
-  void setBuildDate(const char* build_date);
-
-  /**
-   * Stores raw radio data for MQTT messages
-   *
-   * @param raw_data Raw radio transmission data
-   * @param len Length of raw data
-   * @param snr Signal-to-noise ratio
-   * @param rssi Received signal strength indicator
-   */
-  void storeRawRadioData(const uint8_t* raw_data, int len, float snr, float rssi);
-  
-  // Let's Mesh Analyzer methods
-  void setupAnalyzerServers();
-  bool createAuthToken();
-  void publishToAnalyzerServers(const char* topic, const char* payload, bool retained = false);
-  
-  // PsychicMqttClient WebSocket methods
-  void setupAnalyzerClients();
-  void maintainAnalyzerConnections();
-  void publishToAnalyzerClient(PsychicMqttClient* client, const char* topic, const char* payload, bool retained = false);
-  void publishStatusToAnalyzerClient(PsychicMqttClient* client, const char* server_name);
-
-  /**
    * Enable/disable message types
    *
    * @param status Enable status messages
@@ -348,33 +229,6 @@ public:
    * @return Number of queued packets
    */
   int getQueueSize() const;
-
-  /**
-   * Set optional pointers for stats collection.
-   * If these are set, stats will be collected automatically when publishing status.
-   *
-   * @param dispatcher Dispatcher (or Mesh*) for air times and errors
-   * @param radio Radio for noise floor
-   * @param board MainBoard for battery voltage
-   * @param ms MillisecondClock for uptime
-   */
-  void setStatsSources(mesh::Dispatcher* dispatcher, mesh::Radio* radio, 
-                       mesh::MainBoard* board, mesh::MillisecondClock* ms);
-
-private:
-  /**
-   * Generate client version string in format "meshcore/{firmware_version}"
-   * Memory-efficient: writes to provided buffer, no dynamic allocation
-   *
-   * @param buffer Buffer to write the client version string to
-   * @param buffer_size Size of the buffer (must be at least 64 bytes)
-   */
-  void getClientVersion(char* buffer, size_t buffer_size) const;
-
-  /**
-   * Log memory status for debugging
-   */
-  void logMemoryStatus();
 };
 
 #endif

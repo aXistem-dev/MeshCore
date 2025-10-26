@@ -343,19 +343,12 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
   mesh::Utils::printHex(Serial, raw, len);
   Serial.println();
 #endif
-
-#ifdef WITH_BRIDGE
-  if (_prefs.bridge_enabled) {
-    // Store raw radio data for MQTT messages
-    bridge.storeRawRadioData(raw, len, snr, rssi);
-  }
-#endif
 }
 
 void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
 #ifdef WITH_BRIDGE
   if (_prefs.bridge_pkt_src == 1) {
-    bridge.onPacketReceived(pkt);
+    bridge.sendPacket(pkt);
   }
 #endif
 
@@ -681,7 +674,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 #elif defined(WITH_ESPNOW_BRIDGE)
       , bridge(&_prefs, _mgr, &rtc)
 #elif defined(WITH_MQTT_BRIDGE)
-      , bridge(&_prefs, _mgr, &rtc, &self_id)
+      , bridge(&_prefs, _mgr, &rtc)
 #endif
 {
   last_millis = 0;
@@ -719,7 +712,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   // bridge defaults
   _prefs.bridge_enabled = 1;    // enabled
   _prefs.bridge_delay   = 500;  // milliseconds
-  _prefs.bridge_pkt_src = 1;    // logRx (RX packets)
+  _prefs.bridge_pkt_src = 0;    // logTx
   _prefs.bridge_baud = 115200;  // baud rate
   _prefs.bridge_channel = 1;    // channel 1
 
@@ -736,20 +729,11 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.mqtt_status_enabled = 1;    // enabled
   _prefs.mqtt_packets_enabled = 1;   // enabled
   _prefs.mqtt_raw_enabled = 0;       // disabled
-  _prefs.mqtt_tx_enabled = 0;        // disabled (RX only for now)
   _prefs.mqtt_status_interval = 300000; // 5 minutes
   
   // WiFi defaults
   StrHelper::strncpy(_prefs.wifi_ssid, "ssid_here", sizeof(_prefs.wifi_ssid));
   StrHelper::strncpy(_prefs.wifi_password, "password_here", sizeof(_prefs.wifi_password));
-  
-        // Timezone defaults (Pacific Time with DST support)
-        StrHelper::strncpy(_prefs.timezone_string, "America/Los_Angeles", sizeof(_prefs.timezone_string));
-        _prefs.timezone_offset = -8; // fallback
-        
-        // Let's Mesh Analyzer defaults (both enabled by default)
-        _prefs.mqtt_analyzer_us_enabled = 1; // enabled
-        _prefs.mqtt_analyzer_eu_enabled = 1; // enabled
 }
 
 void MyMesh::begin(FILESYSTEM *fs) {
@@ -757,18 +741,6 @@ void MyMesh::begin(FILESYSTEM *fs) {
   _fs = fs;
   // load persisted prefs
   _cli.loadPrefs(_fs);
-
-  // Ensure analyzer servers are enabled by default (in case no prefs were loaded)
-  if (_prefs.mqtt_analyzer_us_enabled == 0 && _prefs.mqtt_analyzer_eu_enabled == 0) {
-    _prefs.mqtt_analyzer_us_enabled = 1; // enabled
-    _prefs.mqtt_analyzer_eu_enabled = 1; // enabled
-    MESH_DEBUG_PRINTLN("Setting analyzer servers to enabled by default");
-  }
-  
-  // Set MQTT origin to actual device name (not build-time ADVERT_NAME)
-  StrHelper::strncpy(_prefs.mqtt_origin, _prefs.node_name, sizeof(_prefs.mqtt_origin));
-  MESH_DEBUG_PRINTLN("MQTT origin set to device name: %s", _prefs.mqtt_origin);
-
   acl.load(_fs);
   // TODO: key_store.begin();
   region_map.load(_fs);
@@ -787,16 +759,6 @@ void MyMesh::begin(FILESYSTEM *fs) {
     
     // Set board model
     bridge.setBoardModel(_cli.getBoard()->getManufacturerName());
-    
-    // Set build date
-    bridge.setBuildDate(getBuildDate());
-    
-#ifdef WITH_MQTT_BRIDGE
-    // Set stats sources for automatic stats collection (optional - can be done in custom initialization)
-    // This enables stats to be included in status messages automatically
-    // this (Mesh*) inherits from Dispatcher, so it can be passed as Dispatcher*
-    bridge.setStatsSources(this, _radio, _cli.getBoard(), _ms);
-#endif
     
     bridge.begin();
   }

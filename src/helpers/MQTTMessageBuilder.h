@@ -3,7 +3,6 @@
 #include "MeshCore.h"
 #include <ArduinoJson.h>
 #include <Mesh.h>
-#include <Timezone.h>
 
 /**
  * @brief Utility class for building MQTT JSON messages
@@ -30,13 +29,6 @@ public:
    * @param timestamp ISO 8601 timestamp
    * @param buffer Output buffer for JSON string
    * @param buffer_size Size of output buffer
-   * @param battery_mv Battery voltage in millivolts (optional, -1 to omit)
-   * @param uptime_secs Uptime in seconds (optional, -1 to omit)
-   * @param errors Error flags (optional, -1 to omit)
-   * @param queue_len Queue length (optional, -1 to omit)
-   * @param noise_floor Noise floor in dBm (optional, -999 to omit)
-   * @param tx_air_secs TX air time in seconds (optional, -1 to omit)
-   * @param rx_air_secs RX air time in seconds (optional, -1 to omit)
    * @return Length of JSON string, or 0 on error
    */
   static int buildStatusMessage(
@@ -49,14 +41,7 @@ public:
     const char* status,
     const char* timestamp,
     char* buffer,
-    size_t buffer_size,
-    int battery_mv = -1,
-    int uptime_secs = -1,
-    int errors = -1,
-    int queue_len = -1,
-    int noise_floor = -999,
-    int tx_air_secs = -1,
-    int rx_air_secs = -1
+    size_t buffer_size
   );
 
   /**
@@ -137,21 +122,6 @@ public:
     bool is_tx,
     const char* origin,
     const char* origin_id,
-    Timezone* timezone,
-    char* buffer,
-    size_t buffer_size
-  );
-
-  static int buildPacketJSONFromRaw(
-    const uint8_t* raw_data,
-    int raw_len,
-    mesh::Packet* packet,
-    bool is_tx,
-    const char* origin,
-    const char* origin_id,
-    float snr,
-    float rssi,
-    Timezone* timezone,
     char* buffer,
     size_t buffer_size
   );
@@ -170,7 +140,6 @@ public:
     mesh::Packet* packet,
     const char* origin,
     const char* origin_id,
-    Timezone* timezone,
     char* buffer,
     size_t buffer_size
   );
