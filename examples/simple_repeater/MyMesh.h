@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <Mesh.h>
 #include <RTClib.h>
+#include <CayenneLPP.h>
 #include <target.h>
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -23,6 +24,11 @@
 #define WITH_BRIDGE
 #endif
 
+#ifdef WITH_MQTT_BRIDGE
+#include "helpers/bridges/MQTTBridge.h"
+#define WITH_BRIDGE
+#endif
+
 #include <helpers/AdvertDataHelpers.h>
 #include <helpers/ArduinoHelpers.h>
 #include <helpers/ClientACL.h>
@@ -35,9 +41,6 @@
 #include <helpers/RegionMap.h>
 #include "RateLimiter.h"
 
-#ifdef WITH_BRIDGE
-extern AbstractBridge* bridge;
-#endif
 
 struct RepeaterStats {
   uint16_t batt_milli_volts;
@@ -110,6 +113,8 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   RS232Bridge bridge;
 #elif defined(WITH_ESPNOW_BRIDGE)
   ESPNowBridge bridge;
+#elif defined(WITH_MQTT_BRIDGE)
+  MQTTBridge bridge;
 #endif
 
   void putNeighbour(const mesh::Identity& id, uint32_t timestamp, float snr);
