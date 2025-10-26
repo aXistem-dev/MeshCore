@@ -62,6 +62,10 @@ struct NodePrefs { // persisted to file
   // Timezone settings
   char timezone_string[32]; // Timezone string (e.g., "America/Los_Angeles")
   int8_t timezone_offset;   // Timezone offset in hours (-12 to +14) - fallback
+  
+  // Let's Mesh Analyzer settings
+  uint8_t mqtt_analyzer_us_enabled; // Enable US analyzer server
+  uint8_t mqtt_analyzer_eu_enabled; // Enable EU analyzer server
 };
 
 class CommonCLICallbacks {

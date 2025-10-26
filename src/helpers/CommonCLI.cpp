@@ -82,9 +82,13 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *)&_prefs->wifi_ssid, sizeof(_prefs->wifi_ssid));                             // 209
     file.read((uint8_t *)&_prefs->wifi_password, sizeof(_prefs->wifi_password));                    // 241
     
-    // Timezone settings
-    file.read((uint8_t *)&_prefs->timezone_string, sizeof(_prefs->timezone_string));                // 305
-    file.read((uint8_t *)&_prefs->timezone_offset, sizeof(_prefs->timezone_offset));                // 337
+        // Timezone settings
+        file.read((uint8_t *)&_prefs->timezone_string, sizeof(_prefs->timezone_string));                // 305
+        file.read((uint8_t *)&_prefs->timezone_offset, sizeof(_prefs->timezone_offset));                // 337
+        
+        // Let's Mesh Analyzer settings
+        file.read((uint8_t *)&_prefs->mqtt_analyzer_us_enabled, sizeof(_prefs->mqtt_analyzer_us_enabled)); // 338
+        file.read((uint8_t *)&_prefs->mqtt_analyzer_eu_enabled, sizeof(_prefs->mqtt_analyzer_eu_enabled)); // 339
     // 209
 
     // sanitise bad pref values
@@ -175,9 +179,13 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *)&_prefs->wifi_ssid, sizeof(_prefs->wifi_ssid));                             // 209
     file.write((uint8_t *)&_prefs->wifi_password, sizeof(_prefs->wifi_password));                    // 241
     
-    // Timezone settings
-    file.write((uint8_t *)&_prefs->timezone_string, sizeof(_prefs->timezone_string));                // 305
-    file.write((uint8_t *)&_prefs->timezone_offset, sizeof(_prefs->timezone_offset));                // 337
+        // Timezone settings
+        file.write((uint8_t *)&_prefs->timezone_string, sizeof(_prefs->timezone_string));                // 305
+        file.write((uint8_t *)&_prefs->timezone_offset, sizeof(_prefs->timezone_offset));                // 337
+        
+        // Let's Mesh Analyzer settings
+        file.write((uint8_t *)&_prefs->mqtt_analyzer_us_enabled, sizeof(_prefs->mqtt_analyzer_us_enabled)); // 338
+        file.write((uint8_t *)&_prefs->mqtt_analyzer_eu_enabled, sizeof(_prefs->mqtt_analyzer_eu_enabled)); // 339
     // 209
 
     file.close();
@@ -384,6 +392,10 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                 sprintf(reply, "> %s", _prefs->timezone_string);
               } else if (memcmp(config, "timezone.offset", 15) == 0) {
                 sprintf(reply, "> %d", _prefs->timezone_offset);
+              } else if (memcmp(config, "mqtt.analyzer.us", 16) == 0) {
+                sprintf(reply, "> %s", _prefs->mqtt_analyzer_us_enabled ? "on" : "off");
+              } else if (memcmp(config, "mqtt.analyzer.eu", 16) == 0) {
+                sprintf(reply, "> %s", _prefs->mqtt_analyzer_eu_enabled ? "on" : "off");
 #endif
       } else {
         sprintf(reply, "??: %s", config);
@@ -632,6 +644,14 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                 } else {
                   strcpy(reply, "Error: timezone offset must be between -12 and +14");
                 }
+              } else if (memcmp(config, "mqtt.analyzer.us ", 17) == 0) {
+                _prefs->mqtt_analyzer_us_enabled = memcmp(&config[17], "on", 2) == 0;
+                savePrefs();
+                strcpy(reply, "OK");
+              } else if (memcmp(config, "mqtt.analyzer.eu ", 17) == 0) {
+                _prefs->mqtt_analyzer_eu_enabled = memcmp(&config[17], "on", 2) == 0;
+                savePrefs();
+                strcpy(reply, "OK");
 #endif
       } else {
         sprintf(reply, "unknown config: %s", config);
