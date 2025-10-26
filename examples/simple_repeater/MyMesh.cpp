@@ -589,8 +589,9 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
       _cli(board, rtc, sensors, &_prefs, this), telemetry(MAX_PACKET_PAYLOAD - 4)
 #if defined(WITH_RS232_BRIDGE)
       , bridge(&_prefs, WITH_RS232_BRIDGE, _mgr, &rtc)
-#endif
-#if defined(WITH_ESPNOW_BRIDGE)
+#elif defined(WITH_ESPNOW_BRIDGE)
+      , bridge(&_prefs, _mgr, &rtc)
+#elif defined(WITH_MQTT_BRIDGE)
       , bridge(&_prefs, _mgr, &rtc)
 #endif
 {
@@ -638,6 +639,18 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.gps_enabled = 0;
   _prefs.gps_interval = 0;
   _prefs.advert_loc_policy = ADVERT_LOC_PREFS;
+
+  // MQTT defaults
+  StrHelper::strncpy(_prefs.mqtt_origin, "MeshCore-Repeater", sizeof(_prefs.mqtt_origin));
+  StrHelper::strncpy(_prefs.mqtt_iata, "SEA", sizeof(_prefs.mqtt_iata));
+  _prefs.mqtt_status_enabled = 1;    // enabled
+  _prefs.mqtt_packets_enabled = 1;   // enabled
+  _prefs.mqtt_raw_enabled = 0;       // disabled
+  _prefs.mqtt_status_interval = 300000; // 5 minutes
+  
+  // WiFi defaults
+  StrHelper::strncpy(_prefs.wifi_ssid, "ssid_here", sizeof(_prefs.wifi_ssid));
+  StrHelper::strncpy(_prefs.wifi_password, "password_here", sizeof(_prefs.wifi_password));
 }
 
 void MyMesh::begin(FILESYSTEM *fs) {
@@ -650,6 +663,19 @@ void MyMesh::begin(FILESYSTEM *fs) {
 
 #if defined(WITH_BRIDGE)
   if (_prefs.bridge_enabled) {
+    // Set device public key for MQTT topics
+    char device_id[65];
+    mesh::LocalIdentity self_id = getSelfId();
+    mesh::Utils::toHex(device_id, self_id.pub_key, PUB_KEY_SIZE);
+    MESH_DEBUG_PRINTLN("Setting device ID: %s", device_id);
+    bridge.setDeviceID(device_id);
+    
+    // Set firmware version
+    bridge.setFirmwareVersion(getFirmwareVer());
+    
+    // Set board model
+    bridge.setBoardModel(_cli.getBoard()->getManufacturerName());
+    
     bridge.begin();
   }
 #endif

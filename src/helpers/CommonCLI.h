@@ -4,7 +4,7 @@
 #include <helpers/IdentityStore.h>
 #include <helpers/SensorManager.h>
 
-#if defined(WITH_RS232_BRIDGE) || defined(WITH_ESPNOW_BRIDGE)
+#if defined(WITH_RS232_BRIDGE) || defined(WITH_ESPNOW_BRIDGE) || defined(WITH_MQTT_BRIDGE)
 #define WITH_BRIDGE
 #endif
 
@@ -46,6 +46,17 @@ struct NodePrefs { // persisted to file
   uint8_t gps_enabled;
   uint32_t gps_interval; // in seconds
   uint8_t advert_loc_policy;
+  // MQTT settings
+  char mqtt_origin[32];     // Device name for MQTT topics
+  char mqtt_iata[8];        // IATA code for MQTT topics
+  uint8_t mqtt_status_enabled;   // Enable status messages
+  uint8_t mqtt_packets_enabled;  // Enable packet messages
+  uint8_t mqtt_raw_enabled;      // Enable raw messages
+  uint32_t mqtt_status_interval; // Status publish interval (ms)
+  
+  // WiFi settings
+  char wifi_ssid[32];       // WiFi SSID
+  char wifi_password[64];  // WiFi password
 };
 
 class CommonCLICallbacks {
@@ -102,5 +113,6 @@ public:
   void loadPrefs(FILESYSTEM* _fs);
   void savePrefs(FILESYSTEM* _fs);
   void handleCommand(uint32_t sender_timestamp, const char* command, char* reply);
+  mesh::MainBoard* getBoard() { return _board; }
   uint8_t buildAdvertData(uint8_t node_type, uint8_t* app_data);
 };

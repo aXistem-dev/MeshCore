@@ -69,7 +69,18 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *)&_prefs->gps_enabled, sizeof(_prefs->gps_enabled));                       // 156
     file.read((uint8_t *)&_prefs->gps_interval, sizeof(_prefs->gps_interval));                     // 157
     file.read((uint8_t *)&_prefs->advert_loc_policy, sizeof (_prefs->advert_loc_policy));          // 161
-    // 162
+    // MQTT settings
+    file.read((uint8_t *)&_prefs->mqtt_origin, sizeof(_prefs->mqtt_origin));                         // 162
+    file.read((uint8_t *)&_prefs->mqtt_iata, sizeof(_prefs->mqtt_iata));                           // 194
+    file.read((uint8_t *)&_prefs->mqtt_status_enabled, sizeof(_prefs->mqtt_status_enabled));         // 202
+    file.read((uint8_t *)&_prefs->mqtt_packets_enabled, sizeof(_prefs->mqtt_packets_enabled));       // 203
+    file.read((uint8_t *)&_prefs->mqtt_raw_enabled, sizeof(_prefs->mqtt_raw_enabled));               // 204
+    file.read((uint8_t *)&_prefs->mqtt_status_interval, sizeof(_prefs->mqtt_status_interval));       // 205
+    
+    // WiFi settings
+    file.read((uint8_t *)&_prefs->wifi_ssid, sizeof(_prefs->wifi_ssid));                             // 209
+    file.read((uint8_t *)&_prefs->wifi_password, sizeof(_prefs->wifi_password));                    // 241
+    // 209
 
     // sanitise bad pref values
     _prefs->rx_delay_base = constrain(_prefs->rx_delay_base, 0, 20.0f);
@@ -146,7 +157,18 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *)&_prefs->gps_enabled, sizeof(_prefs->gps_enabled));                       // 156
     file.write((uint8_t *)&_prefs->gps_interval, sizeof(_prefs->gps_interval));                     // 157
     file.write((uint8_t *)&_prefs->advert_loc_policy, sizeof(_prefs->advert_loc_policy));           // 161
-    // 162
+    // MQTT settings
+    file.write((uint8_t *)&_prefs->mqtt_origin, sizeof(_prefs->mqtt_origin));                         // 162
+    file.write((uint8_t *)&_prefs->mqtt_iata, sizeof(_prefs->mqtt_iata));                           // 194
+    file.write((uint8_t *)&_prefs->mqtt_status_enabled, sizeof(_prefs->mqtt_status_enabled));         // 202
+    file.write((uint8_t *)&_prefs->mqtt_packets_enabled, sizeof(_prefs->mqtt_packets_enabled));       // 203
+    file.write((uint8_t *)&_prefs->mqtt_raw_enabled, sizeof(_prefs->mqtt_raw_enabled));               // 204
+    file.write((uint8_t *)&_prefs->mqtt_status_interval, sizeof(_prefs->mqtt_status_interval));     // 205
+    
+    // WiFi settings
+    file.write((uint8_t *)&_prefs->wifi_ssid, sizeof(_prefs->wifi_ssid));                             // 209
+    file.write((uint8_t *)&_prefs->wifi_password, sizeof(_prefs->wifi_password));                    // 241
+    // 209
 
     file.close();
   }
@@ -328,6 +350,24 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         sprintf(reply, "> %d", (uint32_t)_prefs->bridge_channel);
       } else if (memcmp(config, "bridge.secret", 13) == 0) {
         sprintf(reply, "> %s", _prefs->bridge_secret);
+#endif
+#ifdef WITH_MQTT_BRIDGE
+      } else if (memcmp(config, "mqtt.origin", 11) == 0) {
+        sprintf(reply, "> %s", _prefs->mqtt_origin);
+      } else if (memcmp(config, "mqtt.iata", 9) == 0) {
+        sprintf(reply, "> %s", _prefs->mqtt_iata);
+      } else if (memcmp(config, "mqtt.status", 11) == 0) {
+        sprintf(reply, "> %s", _prefs->mqtt_status_enabled ? "on" : "off");
+      } else if (memcmp(config, "mqtt.packets", 12) == 0) {
+        sprintf(reply, "> %s", _prefs->mqtt_packets_enabled ? "on" : "off");
+      } else if (memcmp(config, "mqtt.raw", 8) == 0) {
+        sprintf(reply, "> %s", _prefs->mqtt_raw_enabled ? "on" : "off");
+              } else if (memcmp(config, "mqtt.interval", 13) == 0) {
+                sprintf(reply, "> %d", (uint32_t)_prefs->mqtt_status_interval);
+              } else if (memcmp(config, "wifi.ssid", 9) == 0) {
+                sprintf(reply, "> %s", _prefs->wifi_ssid);
+              } else if (memcmp(config, "wifi.pwd", 8) == 0) {
+                sprintf(reply, "> %s", _prefs->wifi_password);
 #endif
       } else {
         sprintf(reply, "??: %s", config);
@@ -520,6 +560,45 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         _callbacks->restartBridge();
         savePrefs();
         strcpy(reply, "OK");
+#endif
+#ifdef WITH_MQTT_BRIDGE
+      } else if (memcmp(config, "mqtt.origin ", 12) == 0) {
+        StrHelper::strncpy(_prefs->mqtt_origin, &config[12], sizeof(_prefs->mqtt_origin));
+        savePrefs();
+        strcpy(reply, "OK");
+      } else if (memcmp(config, "mqtt.iata ", 10) == 0) {
+        StrHelper::strncpy(_prefs->mqtt_iata, &config[10], sizeof(_prefs->mqtt_iata));
+        savePrefs();
+        strcpy(reply, "OK");
+      } else if (memcmp(config, "mqtt.status ", 12) == 0) {
+        _prefs->mqtt_status_enabled = memcmp(&config[12], "on", 2) == 0;
+        savePrefs();
+        strcpy(reply, "OK");
+      } else if (memcmp(config, "mqtt.packets ", 13) == 0) {
+        _prefs->mqtt_packets_enabled = memcmp(&config[13], "on", 2) == 0;
+        savePrefs();
+        strcpy(reply, "OK");
+      } else if (memcmp(config, "mqtt.raw ", 9) == 0) {
+        _prefs->mqtt_raw_enabled = memcmp(&config[9], "on", 2) == 0;
+        savePrefs();
+        strcpy(reply, "OK");
+              } else if (memcmp(config, "mqtt.interval ", 15) == 0) {
+                uint32_t interval = _atoi(&config[15]);
+                if (interval >= 1000 && interval <= 3600000) { // 1 second to 1 hour
+                  _prefs->mqtt_status_interval = interval;
+                  savePrefs();
+                  strcpy(reply, "OK");
+                } else {
+                  strcpy(reply, "Error: interval must be between 1000-3600000 ms");
+                }
+              } else if (memcmp(config, "wifi.ssid ", 10) == 0) {
+                StrHelper::strncpy(_prefs->wifi_ssid, &config[10], sizeof(_prefs->wifi_ssid));
+                savePrefs();
+                strcpy(reply, "OK");
+              } else if (memcmp(config, "wifi.pwd ", 9) == 0) {
+                StrHelper::strncpy(_prefs->wifi_password, &config[9], sizeof(_prefs->wifi_password));
+                savePrefs();
+                strcpy(reply, "OK");
 #endif
       } else {
         sprintf(reply, "unknown config: %s", config);
