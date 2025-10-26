@@ -57,6 +57,10 @@ struct NodePrefs { // persisted to file
   // WiFi settings
   char wifi_ssid[32];       // WiFi SSID
   char wifi_password[64];  // WiFi password
+  
+  // Timezone settings
+  char timezone_string[32]; // Timezone string (e.g., "America/Los_Angeles")
+  int8_t timezone_offset;   // Timezone offset in hours (-12 to +14) - fallback
 };
 
 class CommonCLICallbacks {

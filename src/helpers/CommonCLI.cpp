@@ -80,6 +80,10 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     // WiFi settings
     file.read((uint8_t *)&_prefs->wifi_ssid, sizeof(_prefs->wifi_ssid));                             // 209
     file.read((uint8_t *)&_prefs->wifi_password, sizeof(_prefs->wifi_password));                    // 241
+    
+    // Timezone settings
+    file.read((uint8_t *)&_prefs->timezone_string, sizeof(_prefs->timezone_string));                // 305
+    file.read((uint8_t *)&_prefs->timezone_offset, sizeof(_prefs->timezone_offset));                // 337
     // 209
 
     // sanitise bad pref values
@@ -168,6 +172,10 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     // WiFi settings
     file.write((uint8_t *)&_prefs->wifi_ssid, sizeof(_prefs->wifi_ssid));                             // 209
     file.write((uint8_t *)&_prefs->wifi_password, sizeof(_prefs->wifi_password));                    // 241
+    
+    // Timezone settings
+    file.write((uint8_t *)&_prefs->timezone_string, sizeof(_prefs->timezone_string));                // 305
+    file.write((uint8_t *)&_prefs->timezone_offset, sizeof(_prefs->timezone_offset));                // 337
     // 209
 
     file.close();
@@ -368,6 +376,10 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                 sprintf(reply, "> %s", _prefs->wifi_ssid);
               } else if (memcmp(config, "wifi.pwd", 8) == 0) {
                 sprintf(reply, "> %s", _prefs->wifi_password);
+              } else if (memcmp(config, "timezone", 8) == 0) {
+                sprintf(reply, "> %s", _prefs->timezone_string);
+              } else if (memcmp(config, "timezone.offset", 15) == 0) {
+                sprintf(reply, "> %d", _prefs->timezone_offset);
 #endif
       } else {
         sprintf(reply, "??: %s", config);
@@ -599,6 +611,19 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                 StrHelper::strncpy(_prefs->wifi_password, &config[9], sizeof(_prefs->wifi_password));
                 savePrefs();
                 strcpy(reply, "OK");
+              } else if (memcmp(config, "timezone ", 10) == 0) {
+                StrHelper::strncpy(_prefs->timezone_string, &config[10], sizeof(_prefs->timezone_string));
+                savePrefs();
+                strcpy(reply, "OK");
+              } else if (memcmp(config, "timezone.offset ", 17) == 0) {
+                int8_t offset = _atoi(&config[17]);
+                if (offset >= -12 && offset <= 14) {
+                  _prefs->timezone_offset = offset;
+                  savePrefs();
+                  strcpy(reply, "OK");
+                } else {
+                  strcpy(reply, "Error: timezone offset must be between -12 and +14");
+                }
 #endif
       } else {
         sprintf(reply, "unknown config: %s", config);
