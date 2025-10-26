@@ -72,10 +72,11 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     // MQTT settings
     file.read((uint8_t *)&_prefs->mqtt_origin, sizeof(_prefs->mqtt_origin));                         // 162
     file.read((uint8_t *)&_prefs->mqtt_iata, sizeof(_prefs->mqtt_iata));                           // 194
-    file.read((uint8_t *)&_prefs->mqtt_status_enabled, sizeof(_prefs->mqtt_status_enabled));         // 202
-    file.read((uint8_t *)&_prefs->mqtt_packets_enabled, sizeof(_prefs->mqtt_packets_enabled));       // 203
-    file.read((uint8_t *)&_prefs->mqtt_raw_enabled, sizeof(_prefs->mqtt_raw_enabled));               // 204
-    file.read((uint8_t *)&_prefs->mqtt_status_interval, sizeof(_prefs->mqtt_status_interval));       // 205
+        file.read((uint8_t *)&_prefs->mqtt_status_enabled, sizeof(_prefs->mqtt_status_enabled));         // 202
+        file.read((uint8_t *)&_prefs->mqtt_packets_enabled, sizeof(_prefs->mqtt_packets_enabled));       // 203
+        file.read((uint8_t *)&_prefs->mqtt_raw_enabled, sizeof(_prefs->mqtt_raw_enabled));               // 204
+        file.read((uint8_t *)&_prefs->mqtt_tx_enabled, sizeof(_prefs->mqtt_tx_enabled));                 // 205
+        file.read((uint8_t *)&_prefs->mqtt_status_interval, sizeof(_prefs->mqtt_status_interval));       // 206
     
     // WiFi settings
     file.read((uint8_t *)&_prefs->wifi_ssid, sizeof(_prefs->wifi_ssid));                             // 209
@@ -164,10 +165,11 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     // MQTT settings
     file.write((uint8_t *)&_prefs->mqtt_origin, sizeof(_prefs->mqtt_origin));                         // 162
     file.write((uint8_t *)&_prefs->mqtt_iata, sizeof(_prefs->mqtt_iata));                           // 194
-    file.write((uint8_t *)&_prefs->mqtt_status_enabled, sizeof(_prefs->mqtt_status_enabled));         // 202
-    file.write((uint8_t *)&_prefs->mqtt_packets_enabled, sizeof(_prefs->mqtt_packets_enabled));       // 203
-    file.write((uint8_t *)&_prefs->mqtt_raw_enabled, sizeof(_prefs->mqtt_raw_enabled));               // 204
-    file.write((uint8_t *)&_prefs->mqtt_status_interval, sizeof(_prefs->mqtt_status_interval));     // 205
+        file.write((uint8_t *)&_prefs->mqtt_status_enabled, sizeof(_prefs->mqtt_status_enabled));         // 202
+        file.write((uint8_t *)&_prefs->mqtt_packets_enabled, sizeof(_prefs->mqtt_packets_enabled));       // 203
+        file.write((uint8_t *)&_prefs->mqtt_raw_enabled, sizeof(_prefs->mqtt_raw_enabled));               // 204
+        file.write((uint8_t *)&_prefs->mqtt_tx_enabled, sizeof(_prefs->mqtt_tx_enabled));                 // 205
+        file.write((uint8_t *)&_prefs->mqtt_status_interval, sizeof(_prefs->mqtt_status_interval));     // 206
     
     // WiFi settings
     file.write((uint8_t *)&_prefs->wifi_ssid, sizeof(_prefs->wifi_ssid));                             // 209
@@ -368,8 +370,10 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         sprintf(reply, "> %s", _prefs->mqtt_status_enabled ? "on" : "off");
       } else if (memcmp(config, "mqtt.packets", 12) == 0) {
         sprintf(reply, "> %s", _prefs->mqtt_packets_enabled ? "on" : "off");
-      } else if (memcmp(config, "mqtt.raw", 8) == 0) {
-        sprintf(reply, "> %s", _prefs->mqtt_raw_enabled ? "on" : "off");
+              } else if (memcmp(config, "mqtt.raw", 8) == 0) {
+                sprintf(reply, "> %s", _prefs->mqtt_raw_enabled ? "on" : "off");
+              } else if (memcmp(config, "mqtt.tx", 7) == 0) {
+                sprintf(reply, "> %s", _prefs->mqtt_tx_enabled ? "on" : "off");
               } else if (memcmp(config, "mqtt.interval", 13) == 0) {
                 sprintf(reply, "> %d", (uint32_t)_prefs->mqtt_status_interval);
               } else if (memcmp(config, "wifi.ssid", 9) == 0) {
@@ -590,10 +594,14 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         _prefs->mqtt_packets_enabled = memcmp(&config[13], "on", 2) == 0;
         savePrefs();
         strcpy(reply, "OK");
-      } else if (memcmp(config, "mqtt.raw ", 9) == 0) {
-        _prefs->mqtt_raw_enabled = memcmp(&config[9], "on", 2) == 0;
-        savePrefs();
-        strcpy(reply, "OK");
+              } else if (memcmp(config, "mqtt.raw ", 9) == 0) {
+                _prefs->mqtt_raw_enabled = memcmp(&config[9], "on", 2) == 0;
+                savePrefs();
+                strcpy(reply, "OK");
+              } else if (memcmp(config, "mqtt.tx ", 8) == 0) {
+                _prefs->mqtt_tx_enabled = memcmp(&config[8], "on", 2) == 0;
+                savePrefs();
+                strcpy(reply, "OK");
               } else if (memcmp(config, "mqtt.interval ", 15) == 0) {
                 uint32_t interval = _atoi(&config[15]);
                 if (interval >= 1000 && interval <= 3600000) { // 1 second to 1 hour

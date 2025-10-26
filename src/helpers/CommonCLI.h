@@ -52,6 +52,7 @@ struct NodePrefs { // persisted to file
   uint8_t mqtt_status_enabled;   // Enable status messages
   uint8_t mqtt_packets_enabled;  // Enable packet messages
   uint8_t mqtt_raw_enabled;      // Enable raw messages
+  uint8_t mqtt_tx_enabled;       // Enable TX packet uplinking
   uint32_t mqtt_status_interval; // Status publish interval (ms)
   
   // WiFi settings
