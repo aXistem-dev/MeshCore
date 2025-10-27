@@ -41,6 +41,29 @@ pio run -e Heltec_v3_repeater_bridge_mqtt
 pio run -e Station_G2_repeater_bridge_mqtt
 ```
 
+**⚠️ IMPORTANT - Station G2 Partition Table Update Required**
+
+Installing the MQTT bridge on Station G2 requires a **full flash erase and reinstall** due to the need for a new partition table to accommodate additional libraries. This will **completely wipe the device**, including:
+
+- Device private key (Ed25519 identity)
+- All stored preferences and configuration
+- WiFi credentials
+- Any other stored data
+
+**Before flashing:**
+1. **Back up your device's private key** if you need to maintain the same identity
+2. **Note your current radio configuration** (frequency, power, etc.)
+3. **Prepare for serial console configuration** to restore settings
+
+**After flashing:**
+1. The device will boot with default settings
+2. Use serial console to reconfigure radio parameters
+3. Set up WiFi credentials via CLI
+4. Configure MQTT settings as needed
+
+**Why this is necessary:**
+The MQTT bridge requires additional libraries (PsychicMqttClient, ArduinoJson, etc.) that need more flash space than the default partition table provides. The new partition table (`default_16MB.csv`) allocates more space for the application firmware.
+
 ### Custom MQTT Server Configuration
 
 You can configure a custom MQTT server using build flags in `platformio.ini`:

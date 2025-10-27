@@ -166,8 +166,12 @@ void MQTTBridge::begin() {
     }
   });
   
-  // Set default broker from preferences or build flags
-  setBroker(0, _prefs->mqtt_server, _prefs->mqtt_port, _prefs->mqtt_username, _prefs->mqtt_password, true);
+  // Set default broker from preferences or build flags (only if valid)
+  if (isMQTTConfigValid()) {
+    setBroker(0, _prefs->mqtt_server, _prefs->mqtt_port, _prefs->mqtt_username, _prefs->mqtt_password, true);
+  } else {
+    MQTT_DEBUG_PRINTLN("No valid MQTT server configured, skipping broker setup");
+  }
   
   // Setup Let's Mesh Analyzer servers
   setupAnalyzerServers();
@@ -282,7 +286,7 @@ void MQTTBridge::onPacketReceived(mesh::Packet *packet) {
     return;
   }
   
-  MQTT_DEBUG_PRINTLN("Packet received, queuing for transmission");
+  // MQTT_DEBUG_PRINTLN("Packet received, queuing for transmission");
   // Queue packet for transmission
   queuePacket(packet, false);
 }
@@ -381,14 +385,14 @@ void MQTTBridge::processPacketQueue() {
     return;
   }
   
-  MQTT_DEBUG_PRINTLN("Processing packet queue - count: %d", _queue_count);
+  // MQTT_DEBUG_PRINTLN("Processing packet queue - count: %d", _queue_count);
   
   // Process up to 5 packets per loop to avoid blocking
   int processed = 0;
   while (_queue_count > 0 && processed < 5) {
     QueuedPacket& queued = _packet_queue[_queue_head];
     
-    MQTT_DEBUG_PRINTLN("Processing queued packet (is_tx: %s)", queued.is_tx ? "true" : "false");
+    // MQTT_DEBUG_PRINTLN("Processing queued packet (is_tx: %s)", queued.is_tx ? "true" : "false");
     
     // Publish packet
     publishPacket(queued.packet, queued.is_tx);
@@ -500,7 +504,7 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx) {
       if (_brokers[i].enabled && _brokers[i].connected) {
         char topic[128];
         snprintf(topic, sizeof(topic), "meshcore/%s/%s/packets", _iata, _device_id);
-        MQTT_DEBUG_PRINTLN("Publishing packet to topic: %s", topic);
+        // MQTT_DEBUG_PRINTLN("Publishing packet to topic: %s", topic);
         
         // Set broker for this connection (PsychicMqttClient uses URI format)
         char broker_uri[128];
@@ -723,14 +727,14 @@ void MQTTBridge::publishToAnalyzerServers(const char* topic, const char* payload
     return;
   }
   
-  MQTT_DEBUG_PRINTLN("Publishing to analyzer servers via WebSocket MQTT");
-  MQTT_DEBUG_PRINTLN("Topic: %s", topic);
-  MQTT_DEBUG_PRINTLN("Payload length: %d", strlen(payload));
-  MQTT_DEBUG_PRINTLN("US enabled: %s, EU enabled: %s", _analyzer_us_enabled ? "true" : "false", _analyzer_eu_enabled ? "true" : "false");
+  // MQTT_DEBUG_PRINTLN("Publishing to analyzer servers via WebSocket MQTT");
+  // MQTT_DEBUG_PRINTLN("Topic: %s", topic);
+  // MQTT_DEBUG_PRINTLN("Payload length: %d", strlen(payload));
+  // MQTT_DEBUG_PRINTLN("US enabled: %s, EU enabled: %s", _analyzer_us_enabled ? "true" : "false", _analyzer_eu_enabled ? "true" : "false");
   
   // Publish to US server if enabled
   if (_analyzer_us_enabled && _analyzer_us_client) {
-    MQTT_DEBUG_PRINTLN("Publishing to US analyzer server");
+    // MQTT_DEBUG_PRINTLN("Publishing to US analyzer server");
     publishToAnalyzerClient(_analyzer_us_client, topic, payload, retained);
   } else {
     MQTT_DEBUG_PRINTLN("US analyzer server not available (enabled: %s, client: %s)", 
@@ -739,7 +743,7 @@ void MQTTBridge::publishToAnalyzerServers(const char* topic, const char* payload
   
   // Publish to EU server if enabled
   if (_analyzer_eu_enabled && _analyzer_eu_client) {
-    MQTT_DEBUG_PRINTLN("Publishing to EU analyzer server");
+    // MQTT_DEBUG_PRINTLN("Publishing to EU analyzer server");
     publishToAnalyzerClient(_analyzer_eu_client, topic, payload, retained);
   } else {
     MQTT_DEBUG_PRINTLN("EU analyzer server not available (enabled: %s, client: %s)", 
