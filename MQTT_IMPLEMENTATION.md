@@ -2,53 +2,6 @@
 
 This document describes the MQTT bridge implementation that allows MeshCore repeaters to uplink packet data to multiple MQTT brokers.
 
-## Quick Start Guide
-
-### Essential Commands to Get MQTT Repeater Running
-
-**1. Connect to device console via repeater login or serial console (115200 baud)**
-```bash
-# Connect to device via serial
-```
-
-**2. Configure WiFi Credentials**
-```bash
-set wifi.ssid YourWiFiNetwork
-set wifi.pwd YourWiFiPassword
-```
-
-**3. Reboot to Connect to WiFi**
-```bash
-reboot
-```
-
-**4. Verify Configuration**
-```bash
-get wifi.ssid
-get bridge.enabled
-get mqtt.origin
-get mqtt.iata
-```
-If you wish to change mqtt.iata, use `set mqtt.iata XXX`
-
-**5. Restart Bridge (if needed)**
-```bash
-# Option A: Toggle bridge off then on
-set bridge.enabled off
-set bridge.enabled on
-
-# Option B: Full device reboot
-reboot
-```
-
-**That's it!** The device will now:
-- Connect to WiFi automatically
-- Start uplinking mesh packets to Let's Mesh Analyzer
-- Publish to both custom MQTT broker and Let's Mesh Analyzer servers
-- Use device name as MQTT origin (set automatically)
-
----
-
 ## Overview
 
 The MQTT bridge implementation provides:
@@ -364,12 +317,14 @@ The device needs internet connectivity to publish to MQTT brokers.
 **Via LoRa Repeater Console:**
 ```
 # Set your WiFi credentials
-set wifi.ssid "YourWiFiNetwork"
-set wifi.pwd "YourWiFiPassword"
+set wifi.ssid YourWiFiNetwork
+set wifi.pwd YourWiFiPassword
 
 # Verify WiFi settings
 get wifi.ssid
 get wifi.pwd
+
+reboot
 ```
 
 ### Step 4: Configure Device Identity
@@ -378,7 +333,7 @@ Set up your device's identity for MQTT topics and status messages.
 **Via LoRa Repeater Console:**
 ```
 # Set IATA code for topic structure (e.g., airport code)
-set mqtt.iata "SEA"
+set mqtt.iata SEA
 
 # Verify settings (origin is set automatically to device name)
 get mqtt.origin
@@ -404,19 +359,19 @@ Customize which messages to publish and how often.
 
 **Via LoRa Repeater Console:**
 ```
-# Configure MQTT server (optional - uses defaults if not set)
-set mqtt.server "your-mqtt-broker.com"
+# Configure MQTT server (optional - only uploads to Let's Mesh Analyzer MQTT if not set)
+set mqtt.server your-mqtt-broker.com
 set mqtt.port 1883
-set mqtt.username "your-username"
-set mqtt.password "your-password"
+set mqtt.username your-username
+set mqtt.password your-password
 
-# Enable/disable message types
+# (Optional) Enable/disable message types
 set mqtt.status on                    # Device status messages
 set mqtt.packets on                   # Packet data messages
 set mqtt.raw off                      # Raw packet data (optional)
 set mqtt.tx off                       # Transmitted packets (optional)
 
-# Set status publish interval (default: 5 minutes)
+# (Optional) Set status publish interval (default: 5 minutes)
 set mqtt.interval 300000
 
 # Verify settings
@@ -447,10 +402,6 @@ get mqtt.analyzer.eu
 ### Step 8: Monitor MQTT Messages
 Once configured, the device will automatically publish messages to MQTT brokers.
 
-**Default MQTT Broker**: `meshtastic.pugetmesh.org:1883`
-- Username: `meshdev`
-- Password: `large4cats`
-
 **Topic Structure**:
 - Status: `meshcore/{IATA}/{DEVICE_PUBLIC_KEY}/status`
 - Packets: `meshcore/{IATA}/{DEVICE_PUBLIC_KEY}/packets`
@@ -474,8 +425,8 @@ set wifi.ssid ""
 set wifi.pwd ""
 
 # Reconfigure with correct credentials
-set wifi.ssid "YourWiFiNetwork"
-set wifi.pwd "YourWiFiPassword"
+set wifi.ssid YourWiFiNetwork
+set wifi.pwd YourWiFiPassword
 ```
 
 #### No MQTT Messages Appearing
