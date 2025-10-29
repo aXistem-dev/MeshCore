@@ -218,5 +218,9 @@ public:
     bridge.end();
     bridge.begin();
   }
+
+  int getQueueSize() override {
+    return bridge.getQueueSize();
+  }
 #endif
 };
