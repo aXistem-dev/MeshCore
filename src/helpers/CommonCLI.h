@@ -153,6 +153,10 @@ public:
   virtual void restartBridge() {
     // no op by default
   };
+
+  virtual int getQueueSize() {
+    return 0; // no op by default
+  };
 };
 
 class CommonCLI {

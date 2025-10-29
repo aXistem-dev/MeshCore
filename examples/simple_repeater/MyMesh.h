@@ -229,6 +229,10 @@ public:
     bridge.end();
     bridge.begin();
   }
+
+  int getQueueSize() override {
+    return bridge.getQueueSize();
+  }
 #endif
 
   // To check if there is pending work
