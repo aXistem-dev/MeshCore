@@ -98,8 +98,6 @@ struct MQTTPrefs {
   // Timezone settings
   char timezone_string[32]; // Timezone string (e.g., "America/Los_Angeles")
   int8_t timezone_offset;   // Timezone offset in hours (-12 to +14) - fallback
-<<<<<<< HEAD
-<<<<<<< HEAD
   
   // MQTT server settings
   char mqtt_server[64];     // MQTT server hostname
