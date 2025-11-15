@@ -118,4 +118,5 @@ extern const int SCK;
 #define PIN_AREF                (2)
 #define PIN_NFC1                (9)
 #define PIN_NFC2                (10)
-#define PIN_BUZZER              (21)
+// PIN_BUZZER is defined via build flags in platformio.ini (default: 21)
+// To disable: use -UPIN_BUZZER (no space) or -U PIN_BUZZER in PLATFORMIO_BUILD_FLAGS
