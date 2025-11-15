@@ -1,5 +1,6 @@
-#ifdef PIN_BUZZER
 #include "buzzer.h"
+
+#if defined(PIN_BUZZER) && !defined(NO_BUZZER)
 
 void genericBuzzer::begin() {
 //    Serial.print("DBG: Setting up buzzer on pin ");
@@ -59,4 +60,39 @@ bool genericBuzzer::isQuiet() {
     return _is_quiet;
 }
 
-#endif  // ifdef PIN_BUZZER
+#else  // PIN_BUZZER not defined or NO_BUZZER is set - stub implementations
+
+void genericBuzzer::begin() {
+    // No-op when buzzer is disabled
+}
+
+void genericBuzzer::play(const char *melody) {
+    // No-op when buzzer is disabled
+    (void)melody; // suppress unused parameter warning
+}
+
+bool genericBuzzer::isPlaying() {
+    return false; // Never playing when disabled
+}
+
+void genericBuzzer::loop() {
+    // No-op when buzzer is disabled
+}
+
+void genericBuzzer::startup() {
+    // No-op when buzzer is disabled
+}
+
+void genericBuzzer::shutdown() {
+    // No-op when buzzer is disabled
+}
+
+void genericBuzzer::quiet(bool buzzer_state) {
+    _is_quiet = buzzer_state;
+}
+
+bool genericBuzzer::isQuiet() {
+    return _is_quiet;
+}
+
+#endif  // if defined(PIN_BUZZER) && !defined(NO_BUZZER)
