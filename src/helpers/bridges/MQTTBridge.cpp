@@ -49,7 +49,7 @@ MQTTBridge::MQTTBridge(NodePrefs *prefs, mesh::PacketManager *mgr, mesh::RTCCloc
               _timezone(nullptr), _last_raw_len(0), _last_snr(0), _last_rssi(0), _last_raw_timestamp(0),
               _analyzer_us_enabled(false), _analyzer_eu_enabled(false), _identity(identity),
               _analyzer_us_client(nullptr), _analyzer_eu_client(nullptr), _config_valid(false),
-              _last_no_broker_log(0), _dispatcher(nullptr), _radio(nullptr), _board(nullptr), _ms(nullptr) {
+              _last_no_broker_log(0), _last_config_warning(0), _dispatcher(nullptr), _radio(nullptr), _board(nullptr), _ms(nullptr) {
   
   // Initialize default values
   strncpy(_origin, "MeshCore-Repeater", sizeof(_origin) - 1);
@@ -160,6 +160,9 @@ void MQTTBridge::begin() {
   
   MQTT_DEBUG_PRINTLN("Status publishing: enabled=%s, interval=%lu ms", 
                      _status_enabled ? "true" : "false", _status_interval);
+  
+  // Check for configuration mismatch: bridge.source=tx but mqtt.tx=off
+  checkConfigurationMismatch();
   
   MQTT_DEBUG_PRINTLN("Origin: %s, IATA: %s", _origin, _iata);
   MQTT_DEBUG_PRINTLN("Device ID: %s", _device_id);
@@ -338,6 +341,22 @@ bool MQTTBridge::isConfigValid(const NodePrefs* prefs) {
   return true;
 }
 
+void MQTTBridge::checkConfigurationMismatch() {
+  // Check if bridge.source is set to tx (logTx) but mqtt.tx is disabled
+  // This would prevent packet publishing since sendPacket() requires both packets_enabled and tx_enabled
+  if (_prefs->bridge_pkt_src == 0 && _packets_enabled && !_tx_enabled) {
+    unsigned long now = millis();
+    // Always log on first detection, then throttle to every 5 minutes to avoid spam
+    if (_last_config_warning == 0 || (now - _last_config_warning > CONFIG_WARNING_INTERVAL)) {
+      MQTT_DEBUG_PRINTLN("MQTT: Configuration mismatch detected! bridge.source=tx (logTx) but mqtt.tx=off. Packets will not be published. Run 'set bridge.source rx' or 'set mqtt.tx on' to fix.");
+      _last_config_warning = now;
+    }
+  } else {
+    // Configuration is correct, reset warning timer so we log immediately if it becomes wrong again
+    _last_config_warning = 0;
+  }
+}
+
 bool MQTTBridge::isReady() const {
   return _initialized && isWiFiConfigValid(_prefs);
 }
@@ -353,6 +372,9 @@ void MQTTBridge::loop() {
   
   // Process packet queue
   processPacketQueue();
+  
+  // Periodic configuration check (throttled to avoid spam)
+  checkConfigurationMismatch();
   
   // Periodic NTP sync (every hour)
   if (WiFi.status() == WL_CONNECTED && millis() - _last_ntp_sync > 3600000) {
