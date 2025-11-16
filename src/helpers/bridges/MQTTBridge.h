@@ -151,6 +151,8 @@ private:
   unsigned long _last_analyzer_us_log;
   unsigned long _last_analyzer_eu_log;
   static const unsigned long ANALYZER_LOG_INTERVAL = 30000; // Log every 30 seconds max
+  unsigned long _last_config_warning; // Throttle configuration mismatch warnings
+  static const unsigned long CONFIG_WARNING_INTERVAL = 300000; // Log every 5 minutes max
   
   // Optional pointers for collecting stats internally (set by mesh if available)
   mesh::Dispatcher* _dispatcher;  // For air times and errors
@@ -173,6 +175,7 @@ private:
   void syncTimeWithNTP();
   Timezone* createTimezoneFromString(const char* tz_string);
   bool isMQTTConfigValid();
+  void checkConfigurationMismatch(); // Check for bridge.source/mqtt.tx mismatch
   bool isIATAValid() const;  // Check if IATA code is configured
   
 public:
