@@ -638,20 +638,19 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                 sprintf(reply, "> %s", _prefs->mqtt_analyzer_us_enabled ? "on" : "off");
               } else if (memcmp(config, "mqtt.analyzer.eu", 17) == 0) {
                 sprintf(reply, "> %s", _prefs->mqtt_analyzer_eu_enabled ? "on" : "off");
-              } else if (memcmp(config, "mqtt.owner", 10) == 0) {
+              } else if (sender_timestamp == 0 && memcmp(config, "mqtt.owner", 10) == 0) {  // from serial command line only
                 if (_prefs->mqtt_owner_public_key[0] != '\0') {
                   sprintf(reply, "> %s", _prefs->mqtt_owner_public_key);
                 } else {
                   strcpy(reply, "> (not set)");
                 }
-              } else if (memcmp(config, "mqtt.email", 10) == 0) {
+              } else if (sender_timestamp == 0 && memcmp(config, "mqtt.email", 10) == 0) {  // from serial command line only
                 if (_prefs->mqtt_email[0] != '\0') {
                   sprintf(reply, "> %s", _prefs->mqtt_email);
                 } else {
                   strcpy(reply, "> (not set)");
                 }
               } else if (memcmp(config, "mqtt.config.valid", 17) == 0) {
-                // Check if MQTT configuration is valid using static method
                 bool valid = MQTTBridge::isConfigValid(_prefs);
                 sprintf(reply, "> %s", valid ? "valid" : "invalid");
 #endif
