@@ -6,6 +6,12 @@
   #include <WiFi.h>
 #endif
 
+#if defined(ESP32) && (defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE))
+extern bool g_wifi_sta_connected;
+#else
+static const bool g_wifi_sta_connected = false;
+#endif
+
 #ifndef AUTO_OFF_MILLIS
   #define AUTO_OFF_MILLIS     15000   // 15 seconds
 #endif
@@ -205,6 +211,10 @@ public:
         display.setColor(DisplayDriver::GREEN);
         display.setTextSize(1);
         display.drawTextCentered(display.width() / 2, 43, "< Connected >");
+      } else if (g_wifi_sta_connected) {
+        display.setColor(DisplayDriver::LIGHT);
+        display.setTextSize(1);
+        display.drawTextCentered(display.width() / 2, 43, "< WiFi Ready >");
       } else {
         // Show BLE pin if available (regardless of which interface is active)
         uint32_t ble_pin = the_mesh.getBLEPin();

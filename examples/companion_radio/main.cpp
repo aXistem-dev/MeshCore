@@ -36,6 +36,9 @@ static uint32_t _atoi(const char* sp) {
 
 #ifdef ESP32
   #include <WiFi.h>
+  #if defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE)
+    bool g_wifi_sta_connected = false;  // shared with UI so it can hide the BLE PIN when WiFi is online
+  #endif
   // Runtime interface selection: WiFi preferred, BLE as fallback
   // Both interfaces are created if both compile-time flags are set
   BaseSerialInterface* serial_interface_ptr = nullptr;
@@ -224,6 +227,7 @@ void setup() {
   // If WiFi credentials are valid, try WiFi. Otherwise, use BLE.
   bool wifi_connected = false;
   bool use_wifi = false;
+  g_wifi_sta_connected = false;
   
   // Try runtime prefs first (new for repeaters/room servers and companion_radio)
   NodePrefs* prefs = the_mesh.getNodePrefs();
@@ -273,9 +277,11 @@ void setup() {
         WiFi.mode(WIFI_STA); // Ensure WiFi is on
         wifi_interface.begin(TCP_PORT);
         serial_interface_ptr = &wifi_interface;
+        g_wifi_sta_connected = true;
         // BLE not initialized when WiFi is connected (pin still available via getBLEPin())
       } else {
         // WiFi not connected or no credentials - use BLE
+        g_wifi_sta_connected = false;
         // Ensure WiFi is fully disabled before initializing BLE
         if (WiFi.getMode() != WIFI_OFF) {
           WiFi.disconnect(true);
@@ -306,6 +312,9 @@ void setup() {
             WiFi.begin(WIFI_SSID, WIFI_PWD);
           }
         #endif
+        g_wifi_sta_connected = (WiFi.status() == WL_CONNECTED);
+      } else {
+        g_wifi_sta_connected = false;
       }
       serial_interface_ptr = &wifi_interface;
     #endif
