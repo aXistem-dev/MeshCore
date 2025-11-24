@@ -35,22 +35,31 @@ static uint32_t _atoi(const char* sp) {
 #endif
 
 #ifdef ESP32
-  #ifdef WIFI_SSID
+  #include <WiFi.h>
+  // Runtime interface selection: WiFi preferred, BLE as fallback
+  // Both interfaces are created if both compile-time flags are set
+  BaseSerialInterface* serial_interface_ptr = nullptr;
+  #if defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE)
     #include <helpers/esp32/SerialWifiInterface.h>
-    SerialWifiInterface serial_interface;
+    SerialWifiInterface wifi_interface;
     #ifndef TCP_PORT
       #define TCP_PORT 5000
     #endif
-  #elif defined(BLE_PIN_CODE)
+  #endif
+  #if defined(BLE_PIN_CODE)
     #include <helpers/esp32/SerialBLEInterface.h>
-    SerialBLEInterface serial_interface;
-  #elif defined(SERIAL_RX)
-    #include <helpers/ArduinoSerialInterface.h>
-    ArduinoSerialInterface serial_interface;
-    HardwareSerial companion_serial(1);
-  #else
-    #include <helpers/ArduinoSerialInterface.h>
-    ArduinoSerialInterface serial_interface;
+    SerialBLEInterface ble_interface;
+  #endif
+  #if !defined(WIFI_SSID) && !defined(WITH_WIFI_INTERFACE) && !defined(BLE_PIN_CODE)
+    #if defined(SERIAL_RX)
+      #include <helpers/ArduinoSerialInterface.h>
+      ArduinoSerialInterface serial_interface;
+      HardwareSerial companion_serial(1);
+    #else
+      #include <helpers/ArduinoSerialInterface.h>
+      ArduinoSerialInterface serial_interface;
+    #endif
+    #define USE_SERIAL_INTERFACE
   #endif
 #elif defined(RP2040_PLATFORM)
   //#ifdef WIFI_SSID
@@ -88,16 +97,32 @@ static uint32_t _atoi(const char* sp) {
 /* GLOBAL OBJECTS */
 #ifdef DISPLAY_CLASS
   #include "UITask.h"
-  UITask ui_task(&board, &serial_interface);
+  #ifdef ESP32
+    #if defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE) || defined(BLE_PIN_CODE)
+      // Initialize UI with BLE interface if available (to ensure pin code is shown)
+      // Otherwise use WiFi interface
+      #if defined(BLE_PIN_CODE)
+        UITask ui_task(&board, &ble_interface);
+      #elif defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE)
+        UITask ui_task(&board, &wifi_interface);
+      #else
+        UITask ui_task(&board, &serial_interface);
+      #endif
+    #else
+      UITask ui_task(&board, &serial_interface);
+    #endif
+  #else
+    UITask ui_task(&board, &serial_interface);
+  #endif
 #endif
 
 StdRNG fast_rng;
 SimpleMeshTables tables;
-MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
-   #ifdef DISPLAY_CLASS
-      , &ui_task
-   #endif
-);
+#ifdef DISPLAY_CLASS
+  MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store, &ui_task);
+#else
+  MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store);
+#endif
 
 /* END GLOBAL OBJECTS */
 
@@ -195,21 +220,125 @@ void setup() {
     #endif
   );
 
-#ifdef WIFI_SSID
-  WiFi.begin(WIFI_SSID, WIFI_PWD);
-  serial_interface.begin(TCP_PORT);
-#elif defined(BLE_PIN_CODE)
-  char dev_name[32+16];
-  sprintf(dev_name, "%s%s", BLE_NAME_PREFIX, the_mesh.getNodeName());
-  serial_interface.begin(dev_name, the_mesh.getBLEPin());
-#elif defined(SERIAL_RX)
-  companion_serial.setPins(SERIAL_RX, SERIAL_TX);
-  companion_serial.begin(115200);
-  serial_interface.begin(companion_serial);
-#else
-  serial_interface.begin(Serial);
-#endif
-  the_mesh.startInterface(serial_interface);
+  // Runtime interface selection: Choose WiFi OR BLE, not both
+  // If WiFi credentials are valid, try WiFi. Otherwise, use BLE.
+  bool wifi_connected = false;
+  bool use_wifi = false;
+  
+  // Try runtime prefs first (new for repeaters/room servers and companion_radio)
+  NodePrefs* prefs = the_mesh.getNodePrefs();
+  #if defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE)
+    // Check if we should try WiFi
+    if (prefs && prefs->wifi_enabled && strlen(prefs->wifi_ssid) > 0) {
+      use_wifi = true;
+    }
+    // Fall back to compile-time flags (legacy support)
+    #ifdef WIFI_SSID
+      if (!use_wifi && strlen(WIFI_SSID) > 0) {
+        use_wifi = true;
+      }
+    #endif
+    
+    // Choose interface: Try WiFi first if credentials exist, otherwise use BLE
+    #if defined(BLE_PIN_CODE)
+      // Prepare BLE initialization (like upstream always does)
+      char dev_name[32+16];
+      sprintf(dev_name, "%s%s", BLE_NAME_PREFIX, the_mesh.getNodeName());
+      uint32_t pin = the_mesh.getBLEPin();
+      
+      // If we have WiFi credentials, try WiFi first
+      if (use_wifi) {
+        // Try WiFi connection
+        WiFi.mode(WIFI_STA);
+        if (prefs && prefs->wifi_enabled && strlen(prefs->wifi_ssid) > 0) {
+          WiFi.begin(prefs->wifi_ssid, prefs->wifi_password);
+        }
+        #ifdef WIFI_SSID
+          else if (strlen(WIFI_SSID) > 0) {
+            WiFi.begin(WIFI_SSID, WIFI_PWD);
+          }
+        #endif
+        
+        // WiFi.begin() is non-blocking - connection happens in background
+        // Check connection status briefly (500ms max) to see if it connects quickly
+        unsigned long wifi_start = millis();
+        while (WiFi.status() != WL_CONNECTED && (millis() - wifi_start) < 500) {
+          delay(50);
+        }
+        wifi_connected = (WiFi.status() == WL_CONNECTED);
+      }
+      
+      if (wifi_connected) {
+        // WiFi connected - use WiFi
+        WiFi.mode(WIFI_STA); // Ensure WiFi is on
+        wifi_interface.begin(TCP_PORT);
+        serial_interface_ptr = &wifi_interface;
+        // BLE not initialized when WiFi is connected (pin still available via getBLEPin())
+      } else {
+        // WiFi not connected or no credentials - use BLE
+        // Ensure WiFi is fully disabled before initializing BLE
+        if (WiFi.getMode() != WIFI_OFF) {
+          WiFi.disconnect(true);
+          delay(200); // Give time for disconnect
+        }
+        WiFi.mode(WIFI_OFF);
+        delay(500); // Longer delay to ensure WiFi is fully off before BLE init
+        
+        // Initialize BLE (this can hang if WiFi isn't fully off)
+        if (pin != 0) {
+          ble_interface.begin(dev_name, pin);
+          serial_interface_ptr = &ble_interface;
+        } else {
+          // BLE pin not set, fall back to WiFi
+          wifi_interface.begin(TCP_PORT);
+          serial_interface_ptr = &wifi_interface;
+        }
+      }
+    #else
+      // No BLE available, try WiFi if credentials exist
+      if (use_wifi) {
+        WiFi.mode(WIFI_STA);
+        if (prefs && prefs->wifi_enabled && strlen(prefs->wifi_ssid) > 0) {
+          WiFi.begin(prefs->wifi_ssid, prefs->wifi_password);
+        }
+        #ifdef WIFI_SSID
+          else if (strlen(WIFI_SSID) > 0) {
+            WiFi.begin(WIFI_SSID, WIFI_PWD);
+          }
+        #endif
+      }
+      serial_interface_ptr = &wifi_interface;
+    #endif
+  #elif defined(BLE_PIN_CODE)
+    // No WiFi interface, use BLE
+    char dev_name[32+16];
+    sprintf(dev_name, "%s%s", BLE_NAME_PREFIX, the_mesh.getNodeName());
+    ble_interface.begin(dev_name, the_mesh.getBLEPin());
+    serial_interface_ptr = &ble_interface;
+  #elif defined(USE_SERIAL_INTERFACE)
+    #if defined(SERIAL_RX)
+      companion_serial.setPins(SERIAL_RX, SERIAL_TX);
+      companion_serial.begin(115200);
+      serial_interface.begin(companion_serial);
+    #else
+      serial_interface.begin(Serial);
+    #endif
+    serial_interface_ptr = &serial_interface;
+  #endif
+  
+  the_mesh.startInterface(*serial_interface_ptr);
+  
+  // Update UI to use the active interface for connection status (for ESP32 with runtime interface selection)
+  #ifdef DISPLAY_CLASS
+    #ifdef ESP32
+      #if defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE) || defined(BLE_PIN_CODE)
+        // UI was initialized with BLE interface (if available) to ensure pin code is always shown
+        // Now update it to use the active interface for connection status checking
+        // The pin code display uses the_mesh.getBLEPin() which works regardless of active interface
+        ui_task.setSerialInterface(serial_interface_ptr);
+      #endif
+    #endif
+  #endif
 #else
   #error "need to define filesystem"
 #endif

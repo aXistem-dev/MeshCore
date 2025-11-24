@@ -2,6 +2,9 @@
 
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
+#ifdef ESP32
+  #include <WiFi.h>
+#endif
 
 #define CMD_APP_START                 1
 #define CMD_SEND_TXT_MSG              2
@@ -46,7 +49,14 @@
 #define CMD_SET_CUSTOM_VAR            41
 #define CMD_GET_ADVERT_PATH           42
 #define CMD_GET_TUNING_PARAMS         43
-// NOTE: CMD range 44..49 parked, potentially for WiFi operations
+// WiFi commands (two-byte: cmd_frame[0] == 44, cmd_frame[1] == subcommand)
+#define CMD_SET_WIFI_SSID             44  // cmd_frame[0] == 44, cmd_frame[1] == 0
+#define CMD_SET_WIFI_PASSWORD         44  // cmd_frame[0] == 44, cmd_frame[1] == 1
+#define CMD_GET_WIFI_SSID             44  // cmd_frame[0] == 44, cmd_frame[1] == 2
+#define CMD_GET_WIFI_PASSWORD         44  // cmd_frame[0] == 44, cmd_frame[1] == 3
+#define CMD_GET_WIFI_CONFIG           44  // cmd_frame[0] == 44, cmd_frame[1] == 4
+#define CMD_SET_WIFI_ENABLED          44  // cmd_frame[0] == 44, cmd_frame[1] == 5
+#define CMD_SET_WIFI_CONFIG           44  // cmd_frame[0] == 44, cmd_frame[1] == 6
 #define CMD_SEND_BINARY_REQ           50
 #define CMD_FACTORY_RESET             51
 #define CMD_SEND_PATH_DISCOVERY_REQ   52
@@ -84,6 +94,7 @@
 #define RESP_CODE_ADVERT_PATH         22
 #define RESP_CODE_TUNING_PARAMS       23
 #define RESP_CODE_STATS               24   // v8+, second byte is stats type
+#define RESP_CODE_WIFI                25  // Two-byte: RESP_CODE_WIFI (25), subcommand (0=SSID, 1=password, 2=config)
 
 #define SEND_TIMEOUT_BASE_MILLIS        500
 #define FLOOD_SEND_TIMEOUT_FACTOR       16.0f
@@ -742,6 +753,11 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _prefs.gps_enabled = 0;       // GPS disabled by default
   _prefs.gps_interval = 0;      // No automatic GPS updates by default
   //_prefs.rx_delay_base = 10.0f;  enable once new algo fixed
+  
+  // WiFi defaults (empty strings, disabled)
+  memset(_prefs.wifi_ssid, 0, sizeof(_prefs.wifi_ssid));
+  memset(_prefs.wifi_password, 0, sizeof(_prefs.wifi_password));
+  _prefs.wifi_enabled = 0;
 }
 
 void MyMesh::begin(bool has_display) {
@@ -1206,6 +1222,151 @@ void MyMesh::handleCmdFrame(size_t len) {
     }
     savePrefs();
     writeOKFrame();
+  } else if (cmd_frame[0] == CMD_SET_WIFI_SSID && cmd_frame[1] == 0 && len >= 3) {
+    // Two-byte command: CMD_SET_WIFI_SSID (44, 0)
+    // Format: [44, 0, ssid_len, ssid_data...]
+    uint8_t ssid_len = cmd_frame[2];
+    if (ssid_len > 0 && ssid_len <= sizeof(_prefs.wifi_ssid) - 1 && len >= 3 + ssid_len) {
+      memset(_prefs.wifi_ssid, 0, sizeof(_prefs.wifi_ssid));
+      memcpy(_prefs.wifi_ssid, &cmd_frame[3], ssid_len);
+      savePrefs();
+      writeOKFrame();
+    } else {
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    }
+  } else if (cmd_frame[0] == CMD_SET_WIFI_PASSWORD && cmd_frame[1] == 1 && len >= 3) {
+    // Two-byte command: CMD_SET_WIFI_PASSWORD (44, 1)
+    // Format: [44, 1, pwd_len, pwd_data...]
+    uint8_t pwd_len = cmd_frame[2];
+    if (pwd_len > 0 && pwd_len <= sizeof(_prefs.wifi_password) - 1 && len >= 3 + pwd_len) {
+      memset(_prefs.wifi_password, 0, sizeof(_prefs.wifi_password));
+      memcpy(_prefs.wifi_password, &cmd_frame[3], pwd_len);
+      savePrefs();
+      writeOKFrame();
+    } else {
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    }
+  } else if (cmd_frame[0] == CMD_GET_WIFI_SSID && cmd_frame[1] == 2 && len >= 2) {
+    // Two-byte command: CMD_GET_WIFI_SSID (44, 2)
+    // Returns: [RESP_CODE_WIFI (25), 0 (subcommand for SSID), ssid_len, ssid_data...]
+    uint8_t ssid_len = strlen(_prefs.wifi_ssid);
+    int i = 0;
+    out_frame[i++] = RESP_CODE_WIFI;
+    out_frame[i++] = 0;  // subcommand: 0 = SSID
+    out_frame[i++] = ssid_len;
+    if (ssid_len > 0) {
+      memcpy(&out_frame[i], _prefs.wifi_ssid, ssid_len);
+      i += ssid_len;
+    }
+    _serial->writeFrame(out_frame, i);
+  } else if (cmd_frame[0] == CMD_GET_WIFI_PASSWORD && cmd_frame[1] == 3 && len >= 2) {
+    // Two-byte command: CMD_GET_WIFI_PASSWORD (44, 3)
+    // Returns: [RESP_CODE_WIFI (25), 1 (subcommand for password), pwd_len, pwd_data...]
+    uint8_t pwd_len = strlen(_prefs.wifi_password);
+    int i = 0;
+    out_frame[i++] = RESP_CODE_WIFI;
+    out_frame[i++] = 1;  // subcommand: 1 = password
+    out_frame[i++] = pwd_len;
+    if (pwd_len > 0) {
+      memcpy(&out_frame[i], _prefs.wifi_password, pwd_len);
+      i += pwd_len;
+    }
+    _serial->writeFrame(out_frame, i);
+  } else if (cmd_frame[0] == CMD_GET_WIFI_CONFIG && cmd_frame[1] == 4 && len >= 2) {
+    // Two-byte command: CMD_GET_WIFI_CONFIG (44, 4)
+    // Returns: [RESP_CODE_WIFI (25), 2 (subcommand for config), status, ip[4], subnet[4], gateway[4], dns1[4], dns2[4], rssi[2], ssid_len, ssid...]
+    #ifdef ESP32
+      int i = 0;
+      out_frame[i++] = RESP_CODE_WIFI;
+      out_frame[i++] = 2;  // subcommand: 2 = config
+      
+      wl_status_t wifi_status = WiFi.status();
+      out_frame[i++] = (uint8_t)wifi_status;
+      
+      IPAddress ip = WiFi.localIP();
+      IPAddress subnet = WiFi.subnetMask();
+      IPAddress gateway = WiFi.gatewayIP();
+      IPAddress dns1 = WiFi.dnsIP(0);
+      IPAddress dns2 = WiFi.dnsIP(1);
+      
+      memcpy(&out_frame[i], &ip[0], 4); i += 4;
+      memcpy(&out_frame[i], &subnet[0], 4); i += 4;
+      memcpy(&out_frame[i], &gateway[0], 4); i += 4;
+      memcpy(&out_frame[i], &dns1[0], 4); i += 4;
+      memcpy(&out_frame[i], &dns2[0], 4); i += 4;
+      
+      int16_t rssi = WiFi.RSSI();
+      memcpy(&out_frame[i], &rssi, 2); i += 2;
+      
+      String current_ssid = WiFi.SSID();
+      uint8_t ssid_len = current_ssid.length();
+      out_frame[i++] = ssid_len;
+      if (ssid_len > 0 && ssid_len < 32) {
+        memcpy(&out_frame[i], current_ssid.c_str(), ssid_len);
+        i += ssid_len;
+      }
+      
+      _serial->writeFrame(out_frame, i);
+    #else
+      // Not ESP32, return error or empty config
+      writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
+    #endif
+  } else if (cmd_frame[0] == CMD_SET_WIFI_ENABLED && cmd_frame[1] == 5 && len >= 3) {
+    // Two-byte command: CMD_SET_WIFI_ENABLED (44, 5)
+    // Format: [44, 5, enabled] where enabled is 0 (off) or 1 (on)
+    uint8_t enabled = cmd_frame[2];
+    if (enabled <= 1) {
+      _prefs.wifi_enabled = enabled;
+      savePrefs();
+      
+      #ifdef ESP32
+        if (enabled) {
+          // Enable WiFi - connect if credentials are set
+          if (strlen(_prefs.wifi_ssid) > 0) {
+            WiFi.mode(WIFI_STA);
+            WiFi.begin(_prefs.wifi_ssid, _prefs.wifi_password);
+          } else {
+            // No credentials, just enable WiFi mode
+            WiFi.mode(WIFI_STA);
+          }
+        } else {
+          // Disable WiFi
+          WiFi.disconnect();
+          WiFi.mode(WIFI_AP_STA);  // Set to AP+STA mode then disable
+          WiFi.disconnect(true);    // Disconnect and disable station mode
+        }
+      #endif
+      
+      writeOKFrame();
+    } else {
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    }
+  } else if (cmd_frame[0] == CMD_SET_WIFI_CONFIG && cmd_frame[1] == 6 && len >= 2 + 4 + 4 + 4 + 4 + 4) {
+    // Two-byte command: CMD_SET_WIFI_CONFIG (44, 6)
+    // Format: [44, 6, ip[4], subnet[4], gateway[4], dns1[4], dns2[4]]
+    // Same format as GET response (excluding status, rssi, ssid which are read-only)
+    #ifdef ESP32
+      int i = 2;  // Skip command bytes [44, 6]
+      
+      IPAddress ip, subnet, gateway, dns1, dns2;
+      
+      // Read IP addresses from command frame
+      memcpy(&ip[0], &cmd_frame[i], 4); i += 4;
+      memcpy(&subnet[0], &cmd_frame[i], 4); i += 4;
+      memcpy(&gateway[0], &cmd_frame[i], 4); i += 4;
+      memcpy(&dns1[0], &cmd_frame[i], 4); i += 4;
+      memcpy(&dns2[0], &cmd_frame[i], 4); i += 4;
+      
+      // Configure static IP
+      if (WiFi.config(ip, gateway, subnet, dns1, dns2)) {
+        writeOKFrame();
+      } else {
+        writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+      }
+    #else
+      // Not ESP32, return error
+      writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
+    #endif
   } else if (cmd_frame[0] == CMD_REBOOT && memcmp(&cmd_frame[1], "reboot", 6) == 0) {
     if (dirty_contacts_expiry) { // is there are pending dirty contacts write needed?
       saveContacts();

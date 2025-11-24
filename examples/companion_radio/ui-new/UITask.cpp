@@ -205,12 +205,16 @@ public:
         display.setColor(DisplayDriver::GREEN);
         display.setTextSize(1);
         display.drawTextCentered(display.width() / 2, 43, "< Connected >");
-
-      } else if (the_mesh.getBLEPin() != 0) { // BT pin
-        display.setColor(DisplayDriver::RED);
-        display.setTextSize(2);
-        sprintf(tmp, "Pin:%d", the_mesh.getBLEPin());
-        display.drawTextCentered(display.width() / 2, 43, tmp);
+      } else {
+        // Show BLE pin if available (regardless of which interface is active)
+        uint32_t ble_pin = the_mesh.getBLEPin();
+        if (ble_pin != 0) {
+          display.setColor(DisplayDriver::RED);
+          display.setTextSize(2);
+          sprintf(tmp, "Pin:%d", ble_pin);
+          display.drawTextCentered(display.width() / 2, 43, tmp);
+        }
+        // If no connection and no BLE pin, nothing is displayed (blank area)
       }
     } else if (_page == HomePage::RECENT) {
       the_mesh.getRecentlyHeard(recent, UI_RECENT_LIST_SIZE);

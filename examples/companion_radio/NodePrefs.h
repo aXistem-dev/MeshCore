@@ -27,4 +27,7 @@ struct NodePrefs {  // persisted to file
   uint8_t  buzzer_quiet;
   uint8_t  gps_enabled;      // GPS enabled flag (0=disabled, 1=enabled)
   uint32_t gps_interval;     // GPS read interval in seconds
+  char wifi_ssid[32];       // WiFi SSID
+  char wifi_password[64];  // WiFi password
+  uint8_t wifi_enabled;    // WiFi enabled flag (0=off, 1=on)
 };

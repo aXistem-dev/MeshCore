@@ -624,6 +624,10 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.gps_interval = 0;
   _prefs.advert_loc_policy = ADVERT_LOC_PREFS;
 
+  // WiFi defaults
+  StrHelper::strncpy(_prefs.wifi_ssid, "", sizeof(_prefs.wifi_ssid));
+  StrHelper::strncpy(_prefs.wifi_password, "", sizeof(_prefs.wifi_password));
+
   next_post_idx = 0;
   next_client_idx = 0;
   next_push = 0;

@@ -14,6 +14,24 @@ static uint32_t _atoi(const char* sp) {
   return n;
 }
 
+// Strip leading and trailing quotes from a string (in-place)
+static void stripQuotes(char* str) {
+  if (!str || strlen(str) == 0) return;
+  
+  size_t len = strlen(str);
+  
+  // Strip leading quote
+  if (len > 0 && (str[0] == '"' || str[0] == '\'')) {
+    memmove(str, str + 1, len + 1);  // Move remaining string including null terminator
+    len--;
+  }
+  
+  // Strip trailing quote
+  if (len > 0 && (str[len - 1] == '"' || str[len - 1] == '\'')) {
+    str[len - 1] = '\0';
+  }
+}
+
 void CommonCLI::loadPrefs(FILESYSTEM* fs) {
   if (fs->exists("/com_prefs")) {
     loadPrefsInt(fs, "/com_prefs");   // new filename
@@ -71,7 +89,10 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *)&_prefs->advert_loc_policy, sizeof (_prefs->advert_loc_policy));          // 161
     file.read((uint8_t *)&_prefs->discovery_mod_timestamp, sizeof(_prefs->discovery_mod_timestamp)); // 162
     file.read((uint8_t *)&_prefs->adc_multiplier, sizeof(_prefs->adc_multiplier)); // 166
-    // 170
+    
+    // WiFi settings (stored in main prefs file)
+    file.read((uint8_t *)&_prefs->wifi_ssid, sizeof(_prefs->wifi_ssid)); // 170
+    file.read((uint8_t *)&_prefs->wifi_password, sizeof(_prefs->wifi_password)); // 202
 
     // sanitise bad pref values
     _prefs->rx_delay_base = constrain(_prefs->rx_delay_base, 0, 20.0f);
@@ -151,7 +172,10 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *)&_prefs->advert_loc_policy, sizeof(_prefs->advert_loc_policy));           // 161
     file.write((uint8_t *)&_prefs->discovery_mod_timestamp, sizeof(_prefs->discovery_mod_timestamp)); // 162
     file.write((uint8_t *)&_prefs->adc_multiplier, sizeof(_prefs->adc_multiplier));                 // 166
-    // 170
+    
+    // WiFi settings (stored in main prefs file)
+    file.write((uint8_t *)&_prefs->wifi_ssid, sizeof(_prefs->wifi_ssid));                           // 170
+    file.write((uint8_t *)&_prefs->wifi_password, sizeof(_prefs->wifi_password));                  // 202
 
     file.close();
   }
@@ -341,6 +365,10 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         } else {
           sprintf(reply, "> %.3f", adc_mult);
         }
+      } else if (memcmp(config, "wifi.ssid", 9) == 0) {
+        sprintf(reply, "> %s", _prefs->wifi_ssid);
+      } else if (memcmp(config, "wifi.pwd", 8) == 0) {
+        sprintf(reply, "> %s", _prefs->wifi_password);
       } else {
         sprintf(reply, "??: %s", config);
       }
@@ -546,6 +574,16 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
           _prefs->adc_multiplier = 0.0f;
           strcpy(reply, "Error: unsupported by this board");
         };
+      } else if (memcmp(config, "wifi.ssid ", 10) == 0) {
+        StrHelper::strncpy(_prefs->wifi_ssid, &config[10], sizeof(_prefs->wifi_ssid));
+        stripQuotes(_prefs->wifi_ssid);
+        savePrefs();
+        strcpy(reply, "OK");
+      } else if (memcmp(config, "wifi.pwd ", 9) == 0) {
+        StrHelper::strncpy(_prefs->wifi_password, &config[9], sizeof(_prefs->wifi_password));
+        stripQuotes(_prefs->wifi_password);
+        savePrefs();
+        strcpy(reply, "OK");
       } else {
         sprintf(reply, "unknown config: %s", config);
       }

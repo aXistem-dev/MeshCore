@@ -39,6 +39,7 @@ public:
   bool isSerialEnabled() const { return _serial->isEnabled(); }
   void enableSerial() { _serial->enable(); }
   void disableSerial() { _serial->disable(); }
+  void setSerialInterface(BaseSerialInterface* serial) { _serial = serial; }  // Allow updating interface at runtime
   virtual void msgRead(int msgcount) = 0;
   virtual void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) = 0;
   virtual void notify(UIEventType t = UIEventType::none) = 0;
