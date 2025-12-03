@@ -42,6 +42,9 @@ public:
     print(str);
   }
   
+  // Set display brightness (0-255, or 0=Dim, 1=Normal, 2=Bright for some displays)
+  virtual void setBrightness(uint8_t level) { }  // Default: no-op for displays that don't support it
+  
   // convert UTF-8 characters to displayable block characters for compatibility
   virtual void translateUTF8ToBlocks(char* dest, const char* src, size_t dest_size) {
     size_t j = 0;
