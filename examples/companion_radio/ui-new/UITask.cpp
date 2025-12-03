@@ -85,6 +85,7 @@ class HomeScreen : public UIScreen {
 #if UI_SENSORS_PAGE == 1
     SENSORS,
 #endif
+    SETTINGS,
     SHUTDOWN,
     Count    // keep as last
   };
@@ -155,6 +156,9 @@ public:
   HomeScreen(UITask* task, mesh::RTCClock* rtc, SensorManager* sensors, NodePrefs* node_prefs)
      : _task(task), _rtc(rtc), _sensors(sensors), _node_prefs(node_prefs), _page(0), 
        _shutdown_init(false), sensors_lpp(200) {  }
+  
+  uint8_t getCurrentPage() const { return _page; }
+  bool isOnSettingsPage() const { return _page == HomePage::SETTINGS; }
 
   void poll() override {
     if (_shutdown_init && !_task->isButtonPressed()) {  // must wait for USR button to be released
@@ -377,6 +381,11 @@ public:
         display.drawXbm((display.width() - 32) / 2, 18, power_icon, 32, 32);
         display.drawTextCentered(display.width() / 2, 64 - 11, "hibernate:" PRESS_LABEL);
       }
+    } else if (_page == HomePage::SETTINGS) {
+      display.setColor(DisplayDriver::GREEN);
+      display.setTextSize(1);
+      display.drawTextCentered(display.width() / 2, 20, "Settings");
+      display.drawTextCentered(display.width() / 2, 40, PRESS_LABEL " to enter");
     }
     return 5000;   // next render after 5000 ms
   }
@@ -425,6 +434,10 @@ public:
 #endif
     if (c == KEY_ENTER && _page == HomePage::SHUTDOWN) {
       _shutdown_init = true;  // need to wait for button to be released
+      return true;
+    }
+    if (c == KEY_ENTER && _page == HomePage::SETTINGS) {
+      _task->gotoSettingsScreen();
       return true;
     }
     return false;
@@ -524,6 +537,277 @@ public:
   }
 };
 
+class SettingsScreen : public UIScreen {
+  enum SettingItem {
+    SCREEN_ALWAYS_ON,
+    SCREEN_BRIGHTNESS,
+    SHARE_POS_IN_ADVERTS,
+    BACK,
+    Count
+  };
+
+  enum SubMenuState {
+    MAIN_MENU,
+    SCREEN_ALWAYS_ON_SUBMENU,
+    SCREEN_BRIGHTNESS_SUBMENU,
+    SHARE_POS_IN_ADVERTS_SUBMENU
+  };
+
+  enum BrightnessItem {
+    BRIGHTNESS_DIM,
+    BRIGHTNESS_LOW,
+    BRIGHTNESS_NORMAL,
+    BRIGHTNESS_BRIGHT,
+    BRIGHTNESS_BACK,
+    BRIGHTNESS_COUNT
+  };
+
+  UITask* _task;
+  NodePrefs* _node_prefs;
+  DisplayDriver* _display;
+  uint8_t _selected_item;
+  SubMenuState _state;
+  uint8_t _original_brightness;  // Store original brightness for restore on cancel
+  uint8_t _brightness_scroll_offset;  // Scroll offset for brightness submenu
+
+  void applyBrightness() {
+    if (_display == NULL) return;
+    _display->setBrightness(_node_prefs->screen_brightness);
+  }
+
+  void applyBrightnessPreview(uint8_t level) {
+    if (_display == NULL) return;
+    _display->setBrightness(level);
+  }
+
+public:
+  SettingsScreen(UITask* task, NodePrefs* node_prefs, DisplayDriver* display)
+     : _task(task), _node_prefs(node_prefs), _display(display), _selected_item(0), _state(MAIN_MENU), _original_brightness(2), _brightness_scroll_offset(0) { 
+       // Initialize brightness if not set (default to Normal = 2)
+       if (_node_prefs->screen_brightness > 3) {
+         _node_prefs->screen_brightness = 2;  // Normal
+       }
+     }
+
+  int render(DisplayDriver& display) override {
+    display.setTextSize(1);
+    
+    if (_state == MAIN_MENU) {
+      display.setColor(DisplayDriver::GREEN);
+      display.drawTextCentered(display.width() / 2, 0, "Settings");
+      display.drawRect(0, 10, display.width(), 1);  // separator line
+
+      int y = 18;
+      const char* items[] = {"Screen Always On", "Screen Brightness", "Share pos in adv.", "Back"};
+      
+      for (uint8_t i = 0; i < SettingItem::Count; i++, y += 12) {
+        if (i == _selected_item) {
+          display.setColor(DisplayDriver::YELLOW);
+          display.fillRect(0, y - 2, display.width(), 10);
+          display.setColor(DisplayDriver::DARK);
+        } else {
+          display.setColor(DisplayDriver::LIGHT);
+        }
+        display.setCursor(2, y);
+        if (i == SettingItem::SCREEN_ALWAYS_ON) {
+          // Print "Screen Always On: " and then the value
+          display.print(items[i]);
+          display.print(": ");
+          char value_str[4];
+          strcpy(value_str, _node_prefs->screen_always_on ? "ON" : "OFF");
+          int value_width = display.getTextWidth(value_str);
+          display.setCursor(display.width() - value_width - 2, y);
+          display.print(value_str);
+        } else if (i == SettingItem::SHARE_POS_IN_ADVERTS) {
+          // Print "Share pos in adverts: " and then the value
+          display.print(items[i]);
+          display.print(": ");
+          char value_str[4];
+          strcpy(value_str, (_node_prefs->advert_loc_policy == ADVERT_LOC_SHARE) ? "Yes" : "No");
+          int value_width = display.getTextWidth(value_str);
+          display.setCursor(display.width() - value_width - 2, y);
+          display.print(value_str);
+        } else {
+          display.print(items[i]);
+        }
+      }
+      
+    } else if (_state == SCREEN_ALWAYS_ON_SUBMENU) {
+      display.setColor(DisplayDriver::GREEN);
+      display.drawTextCentered(display.width() / 2, 0, "Screen Always On");
+      display.drawRect(0, 10, display.width(), 1);  // separator line
+
+      int y = 20;
+      const char* options[] = {"OFF", "ON"};
+      uint8_t current_option = _node_prefs->screen_always_on ? 1 : 0;
+      
+      for (uint8_t i = 0; i < 2; i++, y += 15) {
+        if (i == current_option) {
+          display.setColor(DisplayDriver::YELLOW);
+          display.fillRect(0, y - 2, display.width(), 13);
+          display.setColor(DisplayDriver::DARK);
+        } else {
+          display.setColor(DisplayDriver::LIGHT);
+        }
+      display.setCursor(display.width() / 2 - 10, y);
+      display.print(options[i]);
+    }
+    } else if (_state == SCREEN_BRIGHTNESS_SUBMENU) {
+      display.setColor(DisplayDriver::GREEN);
+      display.drawTextCentered(display.width() / 2, 0, "Screen Brightness");
+      display.drawRect(0, 10, display.width(), 1);  // separator line
+
+      // Calculate how many items can fit on screen
+      // Header takes ~12 pixels (title + separator), each item is 12 pixels
+      int header_height = 12;
+      int item_height = 12;
+      int available_height = display.height() - header_height;
+      int max_visible_items = available_height / item_height;
+      
+      // Adjust scroll offset to keep selected item visible
+      if (_selected_item < _brightness_scroll_offset) {
+        _brightness_scroll_offset = _selected_item;
+      } else if (_selected_item >= _brightness_scroll_offset + max_visible_items) {
+        _brightness_scroll_offset = _selected_item - max_visible_items + 1;
+      }
+      
+      int y = header_height + 6;  // Start below header
+      const char* options[] = {"Dim", "Low", "Normal", "Bright", "Back"};
+      
+      // Only render visible items
+      for (uint8_t i = _brightness_scroll_offset; i < BRIGHTNESS_COUNT && i < _brightness_scroll_offset + max_visible_items; i++, y += item_height) {
+        if (i == _selected_item) {
+          display.setColor(DisplayDriver::YELLOW);
+          display.fillRect(0, y - 2, display.width(), 10);
+          display.setColor(DisplayDriver::DARK);
+        } else {
+          display.setColor(DisplayDriver::LIGHT);
+        }
+        display.setCursor(2, y);
+        display.print(options[i]);
+      }
+    } else if (_state == SHARE_POS_IN_ADVERTS_SUBMENU) {
+      display.setColor(DisplayDriver::GREEN);
+      display.drawTextCentered(display.width() / 2, 0, "Share pos in adv.");
+      display.drawRect(0, 10, display.width(), 1);  // separator line
+
+      int y = 20;
+      const char* options[] = {"No", "Yes"};
+      uint8_t current_option = (_node_prefs->advert_loc_policy == ADVERT_LOC_SHARE) ? 1 : 0;
+      
+      for (uint8_t i = 0; i < 2; i++, y += 15) {
+        if (i == current_option) {
+          display.setColor(DisplayDriver::YELLOW);
+          display.fillRect(0, y - 2, display.width(), 13);
+          display.setColor(DisplayDriver::DARK);
+        } else {
+          display.setColor(DisplayDriver::LIGHT);
+        }
+        display.setCursor(display.width() / 2 - 10, y);
+        display.print(options[i]);
+      }
+    }
+    
+    return 1000;  // refresh every second
+  }
+
+  bool handleInput(char c) override {
+    if (_state == MAIN_MENU) {
+      if (c == KEY_NEXT || c == KEY_RIGHT) {
+        _selected_item = (_selected_item + 1) % SettingItem::Count;
+        return true;
+      }
+      if (c == KEY_PREV || c == KEY_LEFT) {
+        _selected_item = (_selected_item + SettingItem::Count - 1) % SettingItem::Count;
+        return true;
+      }
+      if (c == KEY_ENTER) {
+        if (_selected_item == SettingItem::SCREEN_ALWAYS_ON) {
+          _state = SCREEN_ALWAYS_ON_SUBMENU;
+          // Store original value for restore on cancel (though we don't have a back button here)
+          return true;
+        } else if (_selected_item == SettingItem::SCREEN_BRIGHTNESS) {
+          _state = SCREEN_BRIGHTNESS_SUBMENU;
+          _selected_item = _node_prefs->screen_brightness;  // Set to current brightness level
+          if (_selected_item > 3) _selected_item = 2;  // Default to Normal if invalid
+          // Store original brightness for restore on cancel
+          _original_brightness = _node_prefs->screen_brightness;
+          // Reset scroll offset when entering submenu
+          _brightness_scroll_offset = 0;
+          return true;
+        } else if (_selected_item == SettingItem::SHARE_POS_IN_ADVERTS) {
+          _state = SHARE_POS_IN_ADVERTS_SUBMENU;
+          return true;
+        } else if (_selected_item == SettingItem::BACK) {
+          _task->gotoHomeScreen();
+          return true;
+        }
+      }
+    } else if (_state == SCREEN_ALWAYS_ON_SUBMENU) {
+      if (c == KEY_NEXT || c == KEY_RIGHT || c == KEY_PREV || c == KEY_LEFT) {
+        // Cycle through ON/OFF (preview, don't save yet)
+        _node_prefs->screen_always_on = !_node_prefs->screen_always_on;
+        return true;
+      }
+      if (c == KEY_ENTER) {
+        // Select and save
+        the_mesh.savePrefs();
+        _state = MAIN_MENU;
+        return true;
+      }
+    } else if (_state == SHARE_POS_IN_ADVERTS_SUBMENU) {
+      if (c == KEY_NEXT || c == KEY_RIGHT || c == KEY_PREV || c == KEY_LEFT) {
+        // Cycle through No/Yes (preview, don't save yet)
+        _node_prefs->advert_loc_policy = (_node_prefs->advert_loc_policy == ADVERT_LOC_SHARE) ? ADVERT_LOC_NONE : ADVERT_LOC_SHARE;
+        return true;
+      }
+      if (c == KEY_ENTER) {
+        // Select and save
+        the_mesh.savePrefs();
+        _state = MAIN_MENU;
+        return true;
+      }
+    } else if (_state == SCREEN_BRIGHTNESS_SUBMENU) {
+      if (c == KEY_NEXT || c == KEY_RIGHT) {
+        // Cycle forward through Dim/Low/Normal/Bright/Back
+        _selected_item = (_selected_item + 1) % BRIGHTNESS_COUNT;
+        // Apply brightness preview (but don't save yet)
+        if (_selected_item < BRIGHTNESS_BACK) {
+          applyBrightnessPreview(_selected_item);
+        }
+        return true;
+      }
+      if (c == KEY_PREV || c == KEY_LEFT) {
+        // Cycle backward through Dim/Low/Normal/Bright/Back
+        _selected_item = (_selected_item + BRIGHTNESS_COUNT - 1) % BRIGHTNESS_COUNT;
+        // Apply brightness preview (but don't save yet)
+        if (_selected_item < BRIGHTNESS_BACK) {
+          applyBrightnessPreview(_selected_item);
+        }
+        return true;
+      }
+      if (c == KEY_ENTER) {
+        if (_selected_item == BRIGHTNESS_BACK) {
+          // Go back to main menu without saving
+          _state = MAIN_MENU;
+          // Restore original brightness
+          _node_prefs->screen_brightness = _original_brightness;
+          applyBrightness();
+          return true;
+        } else {
+          // Select brightness level and save
+          _node_prefs->screen_brightness = _selected_item;
+          applyBrightness();
+          the_mesh.savePrefs();
+          _state = MAIN_MENU;
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+};
+
 void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs) {
   _display = display;
   _sensors = sensors;
@@ -539,6 +823,9 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   _node_prefs = node_prefs;
   if (_display != NULL) {
     _display->turnOn();
+    // Apply saved brightness setting
+    if (_node_prefs->screen_brightness > 3) _node_prefs->screen_brightness = 2;  // Validate (default to Normal)
+    _display->setBrightness(_node_prefs->screen_brightness);
   }
 
 #ifdef PIN_BUZZER
@@ -556,6 +843,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   splash = new SplashScreen(this);
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
   msg_preview = new MsgPreviewScreen(this, &rtc_clock);
+  settings = new SettingsScreen(this, node_prefs, display);
   setCurrScreen(splash);
 }
 
@@ -608,7 +896,13 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
   setCurrScreen(msg_preview);
 
   if (_display != NULL) {
-    if (!_display->isOn()) _display->turnOn();
+    if (!_display->isOn()) {
+      _display->turnOn();
+      // Apply saved brightness setting when display turns on
+      if (_node_prefs && _node_prefs->screen_brightness <= 3) {
+        _display->setBrightness(_node_prefs->screen_brightness);
+      }
+    }
     _auto_off = millis() + AUTO_OFF_MILLIS;  // extend the auto-off timer
     _next_refresh = 100;  // trigger refresh
   }
@@ -773,7 +1067,7 @@ void UITask::loop() {
       _display->endFrame();
     }
 #if AUTO_OFF_MILLIS > 0
-    if (millis() > _auto_off) {
+    if (millis() > _auto_off && !(_node_prefs && _node_prefs->screen_always_on)) {
       _display->turnOff();
     }
 #endif
@@ -813,6 +1107,10 @@ char UITask::checkDisplayOn(char c) {
   if (_display != NULL) {
     if (!_display->isOn()) {
       _display->turnOn();   // turn display on and consume event
+      // Apply saved brightness setting when display turns on
+      if (_node_prefs && _node_prefs->screen_brightness <= 2) {
+        _display->setBrightness(_node_prefs->screen_brightness);
+      }
       c = 0;
     }
     _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
@@ -825,6 +1123,13 @@ char UITask::handleLongPress(char c) {
   if (millis() - ui_started_at < 8000) {   // long press in first 8 seconds since startup -> CLI/rescue
     the_mesh.enterCLIRescue();
     c = 0;   // consume event
+  } else if (curr == home) {
+    // Check if we're on SETTINGS page - if so, navigate to settings
+    HomeScreen* home_screen = static_cast<HomeScreen*>(home);
+    if (home_screen->isOnSettingsPage()) {
+      gotoSettingsScreen();
+      c = 0;   // consume event
+    }
   }
   return c;
 }

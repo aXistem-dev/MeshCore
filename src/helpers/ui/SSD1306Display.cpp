@@ -75,3 +75,23 @@ uint16_t SSD1306Display::getTextWidth(const char* str) {
 void SSD1306Display::endFrame() {
   display.display();
 }
+
+void SSD1306Display::setBrightness(uint8_t level) {
+  // level: 0=Dim, 1=Low, 2=Normal, 3=Bright
+  if (level == 0) {
+    display.dim(true);  // Dim mode
+  } else {
+    display.dim(false);  // Normal brightness
+    // For SSD1306, adjust contrast for different brightness levels
+    uint8_t contrast;
+    if (level == 1) {
+      contrast = 64;   // Low
+    } else if (level == 2) {
+      contrast = 128;  // Normal
+    } else {
+      contrast = 255;  // Bright
+    }
+    display.ssd1306_command(SSD1306_SETCONTRAST);
+    display.ssd1306_command(contrast);
+  }
+}

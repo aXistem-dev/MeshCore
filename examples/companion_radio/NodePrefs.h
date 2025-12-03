@@ -25,4 +25,6 @@ struct NodePrefs {  // persisted to file
   uint32_t ble_pin;
   uint8_t  advert_loc_policy;
   uint8_t  buzzer_quiet;
+  uint8_t  screen_always_on;
+  uint8_t  screen_brightness;  // 0=Dim, 1=Low, 2=Normal, 3=Bright
 };
