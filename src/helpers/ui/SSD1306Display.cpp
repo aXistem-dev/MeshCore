@@ -7,37 +7,20 @@ bool SSD1306Display::i2c_probe(TwoWire& wire, uint8_t addr) {
 }
 
 bool SSD1306Display::begin() {
-  if (!_isOn) {
-    if (_peripher_power) _peripher_power->claim();
-    
-    #ifdef DISPLAY_ROTATION
-    display.setRotation(DISPLAY_ROTATION);
-    #endif
-    bool success = display.begin(SSD1306_SWITCHCAPVCC, DISPLAY_ADDRESS, true, false) && i2c_probe(Wire, DISPLAY_ADDRESS);
-    if (success) {
-      _isOn = true;
-    } else {
-      if (_peripher_power) _peripher_power->release();
-    }
-    return success;
-  }
-  return true;
+  #ifdef DISPLAY_ROTATION
+  display.setRotation(DISPLAY_ROTATION);
+  #endif
+  return display.begin(SSD1306_SWITCHCAPVCC, DISPLAY_ADDRESS, true, false) && i2c_probe(Wire, DISPLAY_ADDRESS);
 }
 
 void SSD1306Display::turnOn() {
-  if (!_isOn) {
-    if (_peripher_power) _peripher_power->claim();
-    display.ssd1306_command(SSD1306_DISPLAYON);
-    _isOn = true;
-  }
+  display.ssd1306_command(SSD1306_DISPLAYON);
+  _isOn = true;
 }
 
 void SSD1306Display::turnOff() {
-  if (_isOn) {
-    display.ssd1306_command(SSD1306_DISPLAYOFF);
-    _isOn = false;
-    if (_peripher_power) _peripher_power->release();
-  }
+  display.ssd1306_command(SSD1306_DISPLAYOFF);
+  _isOn = false;
 }
 
 void SSD1306Display::clear() {
