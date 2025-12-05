@@ -27,4 +27,6 @@ struct NodePrefs {  // persisted to file
   uint8_t  buzzer_quiet;
   uint8_t  screen_always_on;
   uint8_t  screen_brightness;  // 0=Dim, 1=Low, 2=Normal, 3=Bright
+  uint8_t  screen_screensaver;  // 0=off, 1=on (only works if screen_always_on is enabled)
+  int16_t  timezone_offset_minutes;  // Timezone offset in minutes from UTC (e.g., +60 for UTC+1, -300 for UTC-5)
 };
