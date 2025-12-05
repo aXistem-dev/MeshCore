@@ -31,12 +31,27 @@ jobs:
         id: version
         run: |
           # Fetch all tags to ensure we have the latest
+          echo "Fetching all tags..."
           git fetch --tags --force 2>/dev/null || true
+
+          # Debug: List all tags
+          echo "All tags:"
+          git tag | head -20
+          echo ""
 
           # Extract version from all tags and find the highest version
           # Tags are in format: companion-v1.11.0, repeater-v1.11.0, room-server-v1.11.0, etc.
+          # Also handle tags like: v1.11.0, 1.11.0, etc.
           # We want to find the highest version number across all tags
-          HIGHEST_VERSION=$(git tag | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -1 | sed 's/^v//')
+          echo "Extracting versions from tags..."
+          ALL_VERSIONS=$(git tag | grep -oE '(v?[0-9]+\.[0-9]+\.[0-9]+)' | sed 's/^v//' | sort -V | uniq)
+          echo "Found versions:"
+          echo "$ALL_VERSIONS"
+          echo ""
+
+          HIGHEST_VERSION=$(echo "$ALL_VERSIONS" | tail -1)
+          echo "Highest version found: $HIGHEST_VERSION"
+          echo ""
 
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             # For manual dispatch, use input if provided, otherwise use tag-based or default
@@ -62,7 +77,7 @@ jobs:
             fi
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Using version: $VERSION"
+          echo "Final version: $VERSION"
 
       - name: Get Commit Hash
         id: commit
