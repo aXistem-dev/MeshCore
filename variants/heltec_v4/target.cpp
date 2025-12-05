@@ -24,7 +24,12 @@ AutoDiscoverRTCClock rtc_clock(fallback_clock);
 #endif
 
 #ifdef DISPLAY_CLASS
-  DISPLAY_CLASS display;
+  #ifdef HELTEC_LORA_V4
+    // Heltec v4 needs peripheral power for the display
+    DISPLAY_CLASS display(&board.periph_power);
+  #else
+    DISPLAY_CLASS display;
+  #endif
   MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
 #endif
 

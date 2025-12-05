@@ -91,64 +91,135 @@ jobs:
             local NEW_NAME=$2
             local EXT=$3
             
-            # Find any file in out/ that starts with TARGET and ends with EXT and contains COMMIT_HASH
-            # This handles various patterns like:
-            # - target-version-commithash.ext
-            # - target-companion-vversion-commithash.ext
-            # - target-*-commithash.ext
+            echo ""
+            echo "=== Renaming firmware: ${TARGET}${EXT} ==="
+            echo "Looking for files matching: out/${TARGET}*${COMMIT_HASH}${EXT}"
+            
+            # First, list all files in out/ to see what we have
+            echo "All files in out/ before rename:"
+            ls -1 out/ 2>/dev/null | grep -i "${TARGET}" || echo "  (none found)"
+            
             local FOUND=false
             
-            # List all files matching the target pattern
+            # Try multiple patterns to find the file
+            # Pattern 1: exact match with commit hash
             for file in out/${TARGET}*${COMMIT_HASH}${EXT}; do
               if [ -f "$file" ] && [[ "$file" != *"dev-settingsscreen"* ]]; then
                 NEW_FILE="out/${NEW_NAME}-${VERSION}-dev-settingsscreen-${COMMIT_HASH}${EXT}"
                 mv "$file" "$NEW_FILE"
-                echo "Renamed: $(basename $file) -> $(basename $NEW_FILE)"
+                echo "✓ Renamed: $(basename $file) -> $(basename $NEW_FILE)"
                 FOUND=true
+                break
               fi
             done
             
+            # Pattern 2: try case-insensitive match
             if [ "$FOUND" = false ]; then
-              echo "WARNING: Could not find file to rename for ${TARGET}${EXT}"
-              echo "Looking for files matching: out/${TARGET}*${COMMIT_HASH}${EXT}"
-              echo "Files in out/ matching ${TARGET}:"
-              ls -1 out/${TARGET}* 2>/dev/null || echo "  (none found)"
+              for file in out/*${COMMIT_HASH}${EXT}; do
+                if [ -f "$file" ] && [[ "$file" != *"dev-settingsscreen"* ]]; then
+                  # Check if filename contains TARGET (case-insensitive)
+                  if echo "$(basename $file)" | grep -qi "${TARGET}"; then
+                    NEW_FILE="out/${NEW_NAME}-${VERSION}-dev-settingsscreen-${COMMIT_HASH}${EXT}"
+                    mv "$file" "$NEW_FILE"
+                    echo "✓ Renamed (case-insensitive): $(basename $file) -> $(basename $NEW_FILE)"
+                    FOUND=true
+                    break
+                  fi
+                fi
+              done
+            fi
+            
+            # Pattern 3: find any file with the extension that hasn't been renamed yet
+            if [ "$FOUND" = false ]; then
+              # Try to find any file matching the pattern (case-insensitive, flexible)
+              for file in out/*${EXT}; do
+                if [ -f "$file" ] && [[ "$file" != *"dev-settingsscreen"* ]]; then
+                  FILENAME=$(basename "$file")
+                  # Check if filename contains TARGET (case-insensitive) and COMMIT_HASH
+                  if echo "$FILENAME" | grep -qi "${TARGET}" && echo "$FILENAME" | grep -q "${COMMIT_HASH}"; then
+                    NEW_FILE="out/${NEW_NAME}-${VERSION}-dev-settingsscreen-${COMMIT_HASH}${EXT}"
+                    mv "$file" "$NEW_FILE"
+                    echo "✓ Renamed (flexible match): $FILENAME -> $(basename $NEW_FILE)"
+                    FOUND=true
+                    break
+                  fi
+                fi
+              done
+            fi
+            
+            if [ "$FOUND" = false ]; then
+              echo "✗ WARNING: Could not find file to rename for ${TARGET}${EXT}"
+              echo "  Looking for files matching: out/${TARGET}*${COMMIT_HASH}${EXT}"
+              echo "  Files in out/ matching ${TARGET}:"
+              ls -1 out/*${TARGET}* 2>/dev/null | head -5 || echo "    (none found)"
+              echo "  All files in out/:"
+              ls -1 out/ 2>/dev/null | head -10 || echo "    (directory empty)"
             fi
           }
 
           # Build RAK_4631_companion_radio_ble (nRF52 - creates .zip and .uf2)
+          echo ""
+          echo "=========================================="
           echo "Building RAK_4631_companion_radio_ble..."
+          echo "=========================================="
           ./build.sh build-firmware RAK_4631_companion_radio_ble
+          echo "Files created:"
+          ls -lh out/RAK_4631_companion_radio_ble* 2>/dev/null || echo "  (none)"
           rename_firmware "RAK_4631_companion_radio_ble" "RAK_4631_companion_radio_ble" ".zip"
           rename_firmware "RAK_4631_companion_radio_ble" "RAK_4631_companion_radio_ble" ".uf2"
 
           # Build RAK_4631_companion_radio_usb (nRF52 - creates .zip and .uf2)
+          echo ""
+          echo "=========================================="
           echo "Building RAK_4631_companion_radio_usb..."
+          echo "=========================================="
           ./build.sh build-firmware RAK_4631_companion_radio_usb
+          echo "Files created:"
+          ls -lh out/RAK_4631_companion_radio_usb* 2>/dev/null || echo "  (none)"
           rename_firmware "RAK_4631_companion_radio_usb" "RAK_4631_companion_radio_usb" ".zip"
           rename_firmware "RAK_4631_companion_radio_usb" "RAK_4631_companion_radio_usb" ".uf2"
 
           # Build Heltec_v3_companion_radio_ble (ESP32 - creates .bin and -merged.bin)
+          echo ""
+          echo "=========================================="
           echo "Building Heltec_v3_companion_radio_ble..."
+          echo "=========================================="
           ./build.sh build-firmware Heltec_v3_companion_radio_ble
+          echo "Files created:"
+          ls -lh out/Heltec_v3_companion_radio_ble* 2>/dev/null || echo "  (none)"
           rename_firmware "Heltec_v3_companion_radio_ble" "heltec_v3_companion_radio_ble" ".bin"
           rename_firmware "Heltec_v3_companion_radio_ble" "heltec_v3_companion_radio_ble" "-merged.bin"
 
           # Build Heltec_v3_companion_radio_usb (ESP32 - creates .bin and -merged.bin)
+          echo ""
+          echo "=========================================="
           echo "Building Heltec_v3_companion_radio_usb..."
+          echo "=========================================="
           ./build.sh build-firmware Heltec_v3_companion_radio_usb
+          echo "Files created:"
+          ls -lh out/Heltec_v3_companion_radio_usb* 2>/dev/null || echo "  (none)"
           rename_firmware "Heltec_v3_companion_radio_usb" "heltec_v3_companion_radio_usb" ".bin"
           rename_firmware "Heltec_v3_companion_radio_usb" "heltec_v3_companion_radio_usb" "-merged.bin"
 
           # Build heltec_v4_companion_radio_ble (ESP32 - creates .bin and -merged.bin)
+          echo ""
+          echo "=========================================="
           echo "Building heltec_v4_companion_radio_ble..."
+          echo "=========================================="
           ./build.sh build-firmware heltec_v4_companion_radio_ble
+          echo "Files created:"
+          ls -lh out/heltec_v4_companion_radio_ble* 2>/dev/null || echo "  (none)"
           rename_firmware "heltec_v4_companion_radio_ble" "heltec_v4_companion_radio_ble" ".bin"
           rename_firmware "heltec_v4_companion_radio_ble" "heltec_v4_companion_radio_ble" "-merged.bin"
 
           # Build heltec_v4_companion_radio_usb (ESP32 - creates .bin and -merged.bin)
+          echo ""
+          echo "=========================================="
           echo "Building heltec_v4_companion_radio_usb..."
+          echo "=========================================="
           ./build.sh build-firmware heltec_v4_companion_radio_usb
+          echo "Files created:"
+          ls -lh out/heltec_v4_companion_radio_usb* 2>/dev/null || echo "  (none)"
           rename_firmware "heltec_v4_companion_radio_usb" "heltec_v4_companion_radio_usb" ".bin"
           rename_firmware "heltec_v4_companion_radio_usb" "heltec_v4_companion_radio_usb" "-merged.bin"
 

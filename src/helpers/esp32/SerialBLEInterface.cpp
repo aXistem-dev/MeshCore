@@ -35,7 +35,9 @@ void SerialBLEInterface::begin(const char* device_name, uint32_t pin_code) {
   pTxCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM);
   pTxCharacteristic->addDescriptor(new BLE2902());
 
-  BLECharacteristic * pRxCharacteristic = pService->createCharacteristic(CHARACTERISTIC_UUID_RX, BLECharacteristic::PROPERTY_WRITE);
+  // RX characteristic: Use PROPERTY_WRITE (with response) to ensure proper acknowledgment
+  // This helps prevent "GATT_WRITE_REQUEST_BUSY" errors on the client side
+  BLECharacteristic * pRxCharacteristic = pService->createCharacteristic(CHARACTERISTIC_UUID_RX, BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
   pRxCharacteristic->setAccessPermissions(ESP_GATT_PERM_WRITE_ENC_MITM);
   pRxCharacteristic->setCallbacks(this);
 
@@ -102,6 +104,8 @@ void SerialBLEInterface::onDisconnect(BLEServer* pServer) {
 // -------- BLECharacteristicCallbacks methods
 
 void SerialBLEInterface::onWrite(BLECharacteristic* pCharacteristic, esp_ble_gatts_cb_param_t* param) {
+  // Process write request quickly to avoid blocking the GATT stack
+  // The ESP32 BLE library will automatically send the write response after this callback returns
   uint8_t* rxValue = pCharacteristic->getData();
   int len = pCharacteristic->getLength();
 
@@ -113,7 +117,11 @@ void SerialBLEInterface::onWrite(BLECharacteristic* pCharacteristic, esp_ble_gat
     recv_queue[recv_queue_len].len = len;
     memcpy(recv_queue[recv_queue_len].buf, rxValue, len);
     recv_queue_len++;
+    BLE_DEBUG_PRINTLN("onWrite() queued %d bytes", len);
   }
+  
+  // Note: Write response is automatically sent by ESP32 BLE library after this callback returns
+  // For write without response, no response is sent (which is fine)
 }
 
 // ---------- public methods
