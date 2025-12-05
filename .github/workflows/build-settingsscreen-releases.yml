@@ -49,31 +49,58 @@ jobs:
           echo "$ALL_VERSIONS"
           echo ""
 
-          HIGHEST_VERSION=$(echo "$ALL_VERSIONS" | tail -1)
-          echo "Highest version found: $HIGHEST_VERSION"
+          HIGHEST_TAG_VERSION=$(echo "$ALL_VERSIONS" | tail -1)
+          echo "Highest tag version found: $HIGHEST_TAG_VERSION"
           echo ""
 
+          # Extract version from source code (from MyMesh.h files)
+          # Look for: #define FIRMWARE_VERSION "v1.11.0" or similar
+          echo "Extracting version from source code..."
+          SOURCE_VERSIONS=$(grep -r 'FIRMWARE_VERSION.*"v[0-9]' examples/ 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/^v//' | sort -V | uniq | tail -1 || echo "")
+
+          if [ -n "$SOURCE_VERSIONS" ]; then
+            echo "Source code version found: $SOURCE_VERSIONS"
+          else
+            echo "No version found in source code"
+          fi
+          echo ""
+
+          # Determine the actual version to use
+          # Priority: 1) Manual input, 2) Source code version, 3) Highest tag, 4) Default
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            # For manual dispatch, use input if provided, otherwise use tag-based or default
+            # For manual dispatch, use input if provided
             INPUT_VERSION="${{ github.event.inputs.version }}"
             if [ -n "$INPUT_VERSION" ] && [ "$INPUT_VERSION" != "" ]; then
               VERSION="$INPUT_VERSION"
               echo "Using manual input version: $VERSION"
-            elif [ -n "$HIGHEST_VERSION" ]; then
-              VERSION="$HIGHEST_VERSION"
+            elif [ -n "$SOURCE_VERSIONS" ]; then
+              VERSION="$SOURCE_VERSIONS"
+              echo "Using version from source code: $VERSION"
+            elif [ -n "$HIGHEST_TAG_VERSION" ]; then
+              VERSION="$HIGHEST_TAG_VERSION"
               echo "Using highest version from tags: $VERSION"
             else
               VERSION="1.11.0"
-              echo "No input or tags found, using default: $VERSION"
+              echo "No input, source, or tags found, using default: $VERSION"
             fi
           else
-            # For push events, use tag-based or default
-            if [ -z "$HIGHEST_VERSION" ]; then
-              VERSION="1.11.0"
-              echo "No version tags found, using default: $VERSION"
+            # For push events: use source code version if available, otherwise highest tag, otherwise default
+            if [ -n "$SOURCE_VERSIONS" ]; then
+              # If we have both source and tag versions, use the higher one
+              if [ -n "$HIGHEST_TAG_VERSION" ]; then
+                HIGHER_VERSION=$(printf '%s\n' "$SOURCE_VERSIONS" "$HIGHEST_TAG_VERSION" | sort -V | tail -1)
+                VERSION="$HIGHER_VERSION"
+                echo "Comparing source ($SOURCE_VERSIONS) vs tag ($HIGHEST_TAG_VERSION), using: $VERSION"
+              else
+                VERSION="$SOURCE_VERSIONS"
+                echo "Using version from source code: $VERSION"
+              fi
+            elif [ -n "$HIGHEST_TAG_VERSION" ]; then
+              VERSION="$HIGHEST_TAG_VERSION"
+              echo "Using highest version from tags: $VERSION"
             else
-              VERSION="$HIGHEST_VERSION"
-              echo "Found highest version from tags: $VERSION"
+              VERSION="1.11.0"
+              echo "No source or tags found, using default: $VERSION"
             fi
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
@@ -101,6 +128,16 @@ jobs:
           echo "Using version: ${VERSION}"
           echo "Using commit hash: ${COMMIT_HASH}"
           echo "FIRMWARE_VERSION env var: ${FIRMWARE_VERSION}"
+
+          # Create a wrapper function that calls build.sh but prevents it from cleaning out/
+          # build.sh has "rm -rf out" and "mkdir -p out" at lines 193-194 that run on every execution
+          build_firmware_safe() {
+            # Create a temporary build script without the cleanup lines
+            sed '/^rm -rf out$/,/^mkdir -p out$/d' build.sh > /tmp/build-safe.sh
+            chmod +x /tmp/build-safe.sh
+            /tmp/build-safe.sh "$@"
+            rm -f /tmp/build-safe.sh
+          }
 
           # Function to rename firmware files
           # build.sh creates files with pattern: target-version-commithash.ext
@@ -185,7 +222,7 @@ jobs:
           echo "=========================================="
           echo "Building RAK_4631_companion_radio_ble..."
           echo "=========================================="
-          ./build.sh build-firmware RAK_4631_companion_radio_ble
+          build_firmware_safe build-firmware RAK_4631_companion_radio_ble
           echo "Files created:"
           ls -lh out/RAK_4631_companion_radio_ble* 2>/dev/null || echo "  (none)"
           echo "All files in out/ after build:"
@@ -200,7 +237,7 @@ jobs:
           echo "=========================================="
           echo "Building RAK_4631_companion_radio_usb..."
           echo "=========================================="
-          ./build.sh build-firmware RAK_4631_companion_radio_usb
+          build_firmware_safe build-firmware RAK_4631_companion_radio_usb
           echo "Files created:"
           ls -lh out/RAK_4631_companion_radio_usb* 2>/dev/null || echo "  (none)"
           rename_firmware "RAK_4631_companion_radio_usb" "RAK_4631_companion_radio_usb" ".zip"
@@ -211,7 +248,7 @@ jobs:
           echo "=========================================="
           echo "Building Heltec_v3_companion_radio_ble..."
           echo "=========================================="
-          ./build.sh build-firmware Heltec_v3_companion_radio_ble
+          build_firmware_safe build-firmware Heltec_v3_companion_radio_ble
           echo "Files created:"
           ls -lh out/Heltec_v3_companion_radio_ble* 2>/dev/null || echo "  (none)"
           rename_firmware "Heltec_v3_companion_radio_ble" "heltec_v3_companion_radio_ble" ".bin"
@@ -222,7 +259,7 @@ jobs:
           echo "=========================================="
           echo "Building Heltec_v3_companion_radio_usb..."
           echo "=========================================="
-          ./build.sh build-firmware Heltec_v3_companion_radio_usb
+          build_firmware_safe build-firmware Heltec_v3_companion_radio_usb
           echo "Files created:"
           ls -lh out/Heltec_v3_companion_radio_usb* 2>/dev/null || echo "  (none)"
           rename_firmware "Heltec_v3_companion_radio_usb" "heltec_v3_companion_radio_usb" ".bin"
@@ -233,7 +270,7 @@ jobs:
           echo "=========================================="
           echo "Building heltec_v4_companion_radio_ble..."
           echo "=========================================="
-          ./build.sh build-firmware heltec_v4_companion_radio_ble
+          build_firmware_safe build-firmware heltec_v4_companion_radio_ble
           echo "Files created:"
           ls -lh out/heltec_v4_companion_radio_ble* 2>/dev/null || echo "  (none)"
           rename_firmware "heltec_v4_companion_radio_ble" "heltec_v4_companion_radio_ble" ".bin"
@@ -244,7 +281,7 @@ jobs:
           echo "=========================================="
           echo "Building heltec_v4_companion_radio_usb..."
           echo "=========================================="
-          ./build.sh build-firmware heltec_v4_companion_radio_usb
+          build_firmware_safe build-firmware heltec_v4_companion_radio_usb
           echo "Files created:"
           ls -lh out/heltec_v4_companion_radio_usb* 2>/dev/null || echo "  (none)"
           rename_firmware "heltec_v4_companion_radio_usb" "heltec_v4_companion_radio_usb" ".bin"
