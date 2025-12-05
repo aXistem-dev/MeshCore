@@ -1,193 +1,201 @@
-# Rebuild Workflow for dev-settingsscreen
+# Rebuild Workflow for dev-cnfi
 
 This document explains how to maintain and build your custom firmware with the settings screen changes on top of the latest upstream main branch.
 
 ## Overview
 
 The workflow ensures that:
-1. Your `dev-settingsscreen` branch always builds on top of the latest `main` from upstream
+1. Your `dev-cnfi` branch always builds on top of the latest `main` from upstream
 2. Upstream changes are automatically synced to `origin/main`
-3. Your feature branch is rebased onto the updated main
-4. Firmware is built with your custom changes
+3. Your customizations are merged into `dev-cnfi`
+4. GitHub Actions automatically builds all firmware targets on push
+
+## Current Workflow (Recommended)
+
+### Simple 2-Step Process
+
+```bash
+# Step 1: Update dev-cnfi with latest upstream
+./update-dev-cnfi.sh
+
+# Step 2: Push to trigger GitHub Actions build
+git push origin dev-cnfi
+```
+
+That's it! GitHub Actions will:
+- Detect version from source code
+- Build all 6 firmware targets
+- Create release with all files
 
 ## Scripts
 
-### 1. `rebuild-with-settings.sh` (Manual/Interactive)
+### 1. `update-dev-cnfi.sh` (Primary Script) ⭐
 
-Full-featured script for manual rebuilds with detailed output.
+**This is the main script you should use.**
 
 **Usage:**
 ```bash
-cd MeshCore
-./rebuild-with-settings.sh
+./update-dev-cnfi.sh
 ```
 
 **What it does:**
-1. Checks if upstream/main has new commits
+1. Fetches latest from origin and upstream
+2. Syncs upstream/main to origin/main (if needed)
+3. Updates local main branch
+4. Merges main into dev-cnfi
+5. Preserves your customizations on top of latest upstream
+
+**After running:**
+- Push manually: `git push origin dev-cnfi`
+- GitHub Actions automatically builds all firmwares
+
+### 2. `rebuild-with-settings.sh` (Alternative)
+
+Full-featured script that does sync + merge + optional push.
+
+**Usage:**
+```bash
+# Without auto-push
+./rebuild-with-settings.sh
+
+# With auto-push (triggers GitHub Actions)
+AUTO_PUSH=true ./rebuild-with-settings.sh
+```
+
+**What it does:**
+1. Checks if upstream has updates
 2. Updates origin/main from upstream
-3. Rebases dev-settingsscreen onto main
-4. Builds firmware for RAK_4631_companion_radio_ble
-5. Optionally pushes the rebased branch
+3. Merges main into dev-cnfi
+4. Optionally pushes to trigger GitHub Actions
 
-**Configuration:**
-Edit the script to change:
-- `BUILD_TARGET`: Change the firmware target to build
-- `AUTO_PUSH`: Set to `true` to automatically push after rebase
+### 3. `auto-rebuild-settings.sh` (For Automation)
 
-### 2. `auto-rebuild-settings.sh` (Automated)
-
-Lightweight script for automation (cron, CI/CD, etc.)
+Lightweight wrapper around `update-dev-cnfi.sh` for cron/CI.
 
 **Usage:**
 ```bash
 # Basic usage
 ./auto-rebuild-settings.sh
 
-# With auto-push enabled
+# With auto-push
 ./auto-rebuild-settings.sh --push
-
-# With custom build target
-./auto-rebuild-settings.sh --build-target Heltec_v3_companion_radio_ble
 ```
 
-**What it does:**
-1. Fetches from upstream
-2. Updates main if needed
-3. Rebases feature branch if needed
-4. Builds firmware
-5. Exits with appropriate status codes
-
-## Workflow Options
-
-### Option 1: Manual Rebuild (Recommended for testing)
-
-Run `rebuild-with-settings.sh` whenever you want to:
-- Test your changes against the latest upstream
-- Build firmware with latest upstream + your changes
-- Update your branch before pushing
-
-```bash
-cd MeshCore
-./rebuild-with-settings.sh
-```
-
-### Option 2: Automated Rebuild (Cron/CI)
-
-Set up a cron job or CI pipeline to automatically rebuild when upstream updates.
-
-**Cron example (daily at 2 AM):**
-```bash
-0 2 * * * cd /path/to/MeshCore && ./auto-rebuild-settings.sh --push >> /var/log/meshcore-rebuild.log 2>&1
-```
-
-**GitHub Actions example:**
-```yaml
-name: Auto Rebuild Settings Screen
-on:
-  schedule:
-    - cron: '0 2 * * *'  # Daily at 2 AM
-  workflow_dispatch:  # Manual trigger
-
-jobs:
-  rebuild:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Setup PlatformIO
-        uses: platformio/setup-platformio@v1
-      - name: Rebuild with settings
-        run: ./auto-rebuild-settings.sh --push
-```
-
-### Option 3: Integration with sync-all-repos.sh
-
-Modify your `sync-all-repos.sh` to automatically rebuild after syncing MeshCore:
-
-```bash
-# At the end of sync_repo function, after syncing MeshCore:
-if [ "$repo_dir" = "MeshCore" ] && [ "$was_updated" = true ]; then
-    echo -e "  ${YELLOW}Triggering rebuild with settings screen...${NC}"
-    cd "$repo_path"
-    ./auto-rebuild-settings.sh --push
-fi
-```
-
-## Git Workflow
-
-### Branch Structure
+## Branch Strategy
 
 ```
 upstream/main  ──────────────┐
                               │
 origin/main    ───────────────┼───┐
                               │   │
-                              │   └───> dev-settingsscreen (your changes)
+                              │   └───> dev-cnfi (your customizations)
+                              │           ↓ (push triggers)
+                              │       GitHub Actions (auto-builds)
                               │
-                              └───> (other branches)
+                              └───> dev-settingsscreen (historical, don't modify)
 ```
 
-### Rebase vs Merge
+### Branch Purposes
 
-This workflow uses **rebase** to keep a clean, linear history:
-- ✅ Clean history (no merge commits)
-- ✅ Easier to see your changes
-- ✅ Easier to maintain
+- **`main`**: Always synced with upstream (no customizations)
+- **`dev-settingsscreen`**: Historical reference (v1.10.0 based, preserved)
+- **`dev-cnfi`**: Working branch (latest main + your customizations)
+  - This is what gets built
+  - This is what you work on
+  - This is what gets deployed
+
+## Workflow Options
+
+### Option 1: Manual Update (Recommended)
+
+```bash
+# 1. Update dev-cnfi
+./update-dev-cnfi.sh
+
+# 2. Review changes (if any conflicts, resolve them)
+git log --oneline -5
+
+# 3. Push to trigger build
+git push origin dev-cnfi
+```
+
+### Option 2: Automated Update (Cron/CI)
+
+Set up a cron job to automatically update and rebuild:
+
+```bash
+# Cron example (daily at 2 AM)
+0 2 * * * cd /path/to/MeshCore && ./auto-rebuild-settings.sh --push >> /var/log/meshcore-update.log 2>&1
+```
+
+### Option 3: Integration with sync-all-repos.sh
+
+Modify your `sync-all-repos.sh` to automatically update dev-cnfi after syncing:
+
+```bash
+# After syncing MeshCore, update dev-cnfi
+if [ "$repo_dir" = "MeshCore" ] && [ "$was_updated" = true ]; then
+    echo -e "\n${BLUE}🔄 Updating dev-cnfi with settings screen...${NC}"
+    cd "$repo_path"
+    ./update-dev-cnfi.sh
+    git push origin dev-cnfi  # Triggers GitHub Actions
+    cd "$BASE_DIR"
+fi
+```
+
+## Merge vs Rebase
+
+This workflow uses **merge** (not rebase) to preserve history:
+- ✅ Preserves commit history
+- ✅ Easier to track what came from where
+- ✅ Less risk of losing work
+- ✅ Can see the "merge point" clearly
 
 **If conflicts occur:**
 1. Resolve conflicts manually
 2. `git add <resolved-files>`
-3. `git rebase --continue`
-4. Re-run the build script
+3. `git commit -m "Resolve conflicts with upstream vX.X.X"`
+4. Push: `git push origin dev-cnfi`
 
-## Configuration
+## What Gets Built
 
-### Change Build Target
+When you push to `dev-cnfi`, GitHub Actions automatically:
 
-Edit the `BUILD_TARGET` variable in either script:
-```bash
-BUILD_TARGET="RAK_4631_companion_radio_ble"  # Change this
-```
+1. **Detects version** from source code (e.g., `#define FIRMWARE_VERSION "v1.12.0"`)
+2. **Builds 6 firmware targets**:
+   - RAK_4631_companion_radio_ble (creates .zip, .uf2)
+   - RAK_4631_companion_radio_usb (creates .zip, .uf2)
+   - Heltec_v3_companion_radio_ble (creates .bin, -merged.bin)
+   - Heltec_v3_companion_radio_usb (creates .bin, -merged.bin)
+   - Heltec_v4_companion_radio_ble (creates .bin, -merged.bin)
+   - Heltec_v4_companion_radio_usb (creates .bin, -merged.bin)
+3. **Creates release** with all 12 files
+4. **Names files** as: `device-version-dev-settingsscreen-commithash.ext`
 
-### Enable Auto-Push
+## Version Detection
 
-In `rebuild-with-settings.sh`:
-```bash
-AUTO_PUSH=true  # Change from false
-```
-
-Or use `--push` flag with `auto-rebuild-settings.sh`:
-```bash
-./auto-rebuild-settings.sh --push
-```
-
-### Multiple Build Targets
-
-Modify the build step to build multiple targets:
-```bash
-# In rebuild-with-settings.sh, replace the build step with:
-for target in "RAK_4631_companion_radio_ble" "Heltec_v3_companion_radio_ble"; do
-    echo -e "\n${YELLOW}Building $target...${NC}"
-    ./build.sh build-firmware "$target"
-done
-```
+The workflow automatically:
+- Extracts version from source code (`FIRMWARE_VERSION` in `MyMesh.h` files)
+- Compares with git tags
+- Uses the **higher** version
+- **Future-proof**: When main moves to 1.12.0, it automatically uses 1.12.0
 
 ## Troubleshooting
 
-### Rebase Conflicts
+### Merge Conflicts
 
-If rebase fails with conflicts:
+If merge fails with conflicts:
 1. Resolve conflicts in the affected files
 2. `git add <resolved-files>`
-3. `git rebase --continue`
-4. Re-run the build script
+3. `git commit -m "Resolve conflicts with upstream vX.X.X"`
+4. Push: `git push origin dev-cnfi`
 
 ### Build Failures
 
-If build fails:
-1. Check PlatformIO environment configuration
-2. Verify all dependencies are installed
-3. Check for compilation errors in the output
-4. Ensure you're on the correct branch
+If GitHub Actions build fails:
+- Check GitHub Actions logs: https://github.com/axistem-dev/MeshCore/actions
+- Verify version detection (should show in logs)
+- Check that all files are being built (debug output shows this)
 
 ### Upstream Sync Issues
 
@@ -198,42 +206,36 @@ If upstream sync fails:
 
 ## Best Practices
 
-1. **Always test locally** before pushing
-2. **Review changes** after rebase to ensure nothing broke
-3. **Keep commits clean** - use `git rebase -i` to clean up if needed
-4. **Tag releases** - tag your built firmware versions
+1. **Always review changes** after merge to ensure nothing broke
+2. **Test locally** before pushing (optional, GitHub Actions will build)
+3. **Keep commits clean** - your customizations are preserved
+4. **Monitor GitHub Actions** - builds happen automatically on push
 5. **Document changes** - keep notes on what your branch adds/modifies
 
 ## Example Workflow
 
 ```bash
-# 1. Daily sync (runs automatically via cron)
-./sync-all-repos.sh
+# 1. Sync upstream (if not done automatically)
+git fetch upstream
+git checkout main
+git merge upstream/main
+git push origin main
 
-# 2. Manual rebuild when needed
-cd MeshCore
-./rebuild-with-settings.sh
+# 2. Update dev-cnfi with customizations
+./update-dev-cnfi.sh
 
-# 3. Test the firmware
-# Flash to device and test
+# 3. Push to trigger build
+git push origin dev-cnfi
 
-# 4. If everything works, push (if AUTO_PUSH=false)
-git push origin dev-settingsscreen --force-with-lease
+# 4. Check build status
+# Visit: https://github.com/axistem-dev/MeshCore/actions
 ```
 
-## Integration with Existing Sync Script
+## Quick Reference
 
-To integrate with your existing `sync-all-repos.sh`, add this at the end of the `sync_repo` function:
-
-```bash
-# After syncing MeshCore, rebuild with settings screen
-if [ "$repo_dir" = "MeshCore" ] && [ "$was_updated" = true ]; then
-    echo -e "\n${BLUE}🔄 Triggering rebuild with settings screen...${NC}"
-    if [ -f "$repo_path/auto-rebuild-settings.sh" ]; then
-        cd "$repo_path"
-        ./auto-rebuild-settings.sh --push
-        cd "$BASE_DIR"
-    fi
-fi
-```
-
+| Action | Command |
+|--------|---------|
+| Update dev-cnfi | `./update-dev-cnfi.sh` |
+| Push to build | `git push origin dev-cnfi` |
+| Check builds | https://github.com/axistem-dev/MeshCore/actions |
+| Sync upstream | `git fetch upstream && git checkout main && git merge upstream/main && git push origin main` |
