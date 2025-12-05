@@ -11,8 +11,9 @@ on:
     inputs:
       version:
         description: "Firmware version (e.g., 1.11.0)"
-        required: true
+        required: false
         default: "1.11.0"
+        type: string
 
 jobs:
   build:
@@ -29,19 +30,30 @@ jobs:
       - name: Get Version
         id: version
         run: |
+          # Fetch all tags to ensure we have the latest
+          git fetch --tags --force 2>/dev/null || true
+
+          # Extract version from all tags and find the highest version
+          # Tags are in format: companion-v1.11.0, repeater-v1.11.0, room-server-v1.11.0, etc.
+          # We want to find the highest version number across all tags
+          HIGHEST_VERSION=$(git tag | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -1 | sed 's/^v//')
+
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
+            # For manual dispatch, use input if provided, otherwise use tag-based or default
+            INPUT_VERSION="${{ github.event.inputs.version }}"
+            if [ -n "$INPUT_VERSION" ] && [ "$INPUT_VERSION" != "" ]; then
+              VERSION="$INPUT_VERSION"
+              echo "Using manual input version: $VERSION"
+            elif [ -n "$HIGHEST_VERSION" ]; then
+              VERSION="$HIGHEST_VERSION"
+              echo "Using highest version from tags: $VERSION"
+            else
+              VERSION="1.11.0"
+              echo "No input or tags found, using default: $VERSION"
+            fi
           else
-            # Fetch all tags to ensure we have the latest
-            git fetch --tags --force 2>/dev/null || true
-            
-            # Extract version from all tags and find the highest version
-            # Tags are in format: companion-v1.11.0, repeater-v1.11.0, room-server-v1.11.0, etc.
-            # We want to find the highest version number across all tags
-            HIGHEST_VERSION=$(git tag | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -1 | sed 's/^v//')
-            
+            # For push events, use tag-based or default
             if [ -z "$HIGHEST_VERSION" ]; then
-              # Fallback to default if no tags found
               VERSION="1.11.0"
               echo "No version tags found, using default: $VERSION"
             else
