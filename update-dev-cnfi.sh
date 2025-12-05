@@ -25,9 +25,27 @@ echo "1. Fetching latest from origin and upstream..."
 git fetch origin
 git fetch upstream 2>/dev/null || echo "   (upstream remote not found, using origin only)"
 
+# Update main from upstream first (if upstream exists)
+if git remote | grep -q upstream; then
+    echo ""
+    echo "1b. Syncing upstream/main to origin/main..."
+    git checkout main
+    UPSTREAM_COMMIT=$(git rev-parse upstream/main 2>/dev/null || echo "")
+    ORIGIN_COMMIT=$(git rev-parse origin/main 2>/dev/null || echo "")
+    
+    if [ -n "$UPSTREAM_COMMIT" ] && [ "$UPSTREAM_COMMIT" != "$ORIGIN_COMMIT" ]; then
+        echo "   Upstream has new commits, updating origin/main..."
+        git merge upstream/main
+        git push origin main
+        echo "   ✓ origin/main synced with upstream"
+    else
+        echo "   ✓ origin/main is already up-to-date with upstream"
+    fi
+fi
+
 # Update main
 echo ""
-echo "2. Updating main branch..."
+echo "2. Updating local main branch..."
 git checkout main
 git pull origin main
 
