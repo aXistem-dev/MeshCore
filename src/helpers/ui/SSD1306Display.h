@@ -5,6 +5,8 @@
 #include <Adafruit_GFX.h>
 #define SSD1306_NO_SPLASH
 #include <Adafruit_SSD1306.h>
+#include <Fonts/FreeMono18pt7b.h>
+#include <Fonts/FreeMono24pt7b.h>
 
 #ifndef PIN_OLED_RESET
   #define PIN_OLED_RESET        21 // Reset pin # (or -1 if sharing Arduino reset pin)
@@ -30,6 +32,8 @@ public:
   void clear() override;
   void startFrame(Color bkg = DARK) override;
   void setTextSize(int sz) override;
+  void setCustomFont(void* font) override;  // Override to support custom fonts
+  void setFont(const GFXfont *f = nullptr);  // Internal method to set font
   void setColor(Color c) override;
   void setCursor(int x, int y) override;
   void print(const char* str) override;
@@ -37,6 +41,7 @@ public:
   void drawRect(int x, int y, int w, int h) override;
   void drawXbm(int x, int y, const uint8_t* bits, int w, int h) override;
   uint16_t getTextWidth(const char* str) override;
+  void getTextBounds(const char* str, int16_t* x1, int16_t* y1, uint16_t* w, uint16_t* h) override;
   void endFrame() override;
   void setBrightness(uint8_t level) override;
 };

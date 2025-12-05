@@ -2,6 +2,8 @@
 #include <helpers/TxtDataHelpers.h>
 #include "../MyMesh.h"
 #include "target.h"
+#include <RTClib.h>
+#include <Fonts/FreeMonoBold18pt7b.h>
 
 #ifndef AUTO_OFF_MILLIS
   #define AUTO_OFF_MILLIS     15000   // 15 seconds
@@ -537,10 +539,97 @@ public:
   }
 };
 
+// Timezone data - defined before SettingsScreen class
+static const int16_t TIMEZONE_OFFSETS[] = {
+  -720,   // UTC-12:00
+  -660,   // UTC-11:00
+  -600,   // UTC-10:00
+  -570,   // UTC-09:30
+  -540,   // UTC-09:00
+  -480,   // UTC-08:00
+  -420,   // UTC-07:00
+  -360,   // UTC-06:00
+  -300,   // UTC-05:00
+  -240,   // UTC-04:00
+  -210,   // UTC-03:30
+  -180,   // UTC-03:00
+  -120,   // UTC-02:00
+  -60,    // UTC-01:00
+  0,      // UTC+00:00
+  60,     // UTC+01:00
+  120,    // UTC+02:00
+  180,    // UTC+03:00
+  210,    // UTC+03:30
+  240,    // UTC+04:00
+  270,    // UTC+04:30
+  300,    // UTC+05:00
+  330,    // UTC+05:30
+  345,    // UTC+05:45
+  360,    // UTC+06:00
+  390,    // UTC+06:30
+  420,    // UTC+07:00
+  480,    // UTC+08:00
+  525,    // UTC+08:45
+  540,    // UTC+09:00
+  570,    // UTC+09:30
+  600,    // UTC+10:00
+  630,    // UTC+10:30
+  660,    // UTC+11:00
+  720,    // UTC+12:00
+  765,    // UTC+12:45
+  780,    // UTC+13:00
+  840     // UTC+14:00
+};
+
+static const char* TIMEZONE_LABELS[] = {
+  "UTC-12:00",
+  "UTC-11:00",
+  "UTC-10:00",
+  "UTC-09:30",
+  "UTC-09:00",
+  "UTC-08:00",
+  "UTC-07:00",
+  "UTC-06:00",
+  "UTC-05:00",
+  "UTC-04:00",
+  "UTC-03:30",
+  "UTC-03:00",
+  "UTC-02:00",
+  "UTC-01:00",
+  "UTC+00:00",
+  "UTC+01:00",
+  "UTC+02:00",
+  "UTC+03:00",
+  "UTC+03:30",
+  "UTC+04:00",
+  "UTC+04:30",
+  "UTC+05:00",
+  "UTC+05:30",
+  "UTC+05:45",
+  "UTC+06:00",
+  "UTC+06:30",
+  "UTC+07:00",
+  "UTC+08:00",
+  "UTC+08:45",
+  "UTC+09:00",
+  "UTC+09:30",
+  "UTC+10:00",
+  "UTC+10:30",
+  "UTC+11:00",
+  "UTC+12:00",
+  "UTC+12:45",
+  "UTC+13:00",
+  "UTC+14:00"
+};
+
+static const uint8_t TIMEZONE_COUNT = sizeof(TIMEZONE_OFFSETS) / sizeof(TIMEZONE_OFFSETS[0]);
+
 class SettingsScreen : public UIScreen {
   enum SettingItem {
     SCREEN_ALWAYS_ON,
+    SCREEN_SCREENSAVER,
     SCREEN_BRIGHTNESS,
+    TIMEZONE,
     SHARE_POS_IN_ADVERTS,
     BACK,
     Count
@@ -549,7 +638,9 @@ class SettingsScreen : public UIScreen {
   enum SubMenuState {
     MAIN_MENU,
     SCREEN_ALWAYS_ON_SUBMENU,
+    SCREEN_SCREENSAVER_SUBMENU,
     SCREEN_BRIGHTNESS_SUBMENU,
+    TIMEZONE_SUBMENU,
     SHARE_POS_IN_ADVERTS_SUBMENU
   };
 
@@ -569,6 +660,32 @@ class SettingsScreen : public UIScreen {
   SubMenuState _state;
   uint8_t _original_brightness;  // Store original brightness for restore on cancel
   uint8_t _brightness_scroll_offset;  // Scroll offset for brightness submenu
+  uint8_t _main_menu_scroll_offset;  // Scroll offset for main settings menu
+  uint8_t _timezone_scroll_offset;  // Scroll offset for timezone submenu
+  int16_t _original_timezone;  // Store original timezone for restore on cancel
+  
+  // Helper to find timezone index from offset
+  uint8_t findTimezoneIndex(int16_t offset_minutes) {
+    for (uint8_t i = 0; i < TIMEZONE_COUNT; i++) {
+      if (TIMEZONE_OFFSETS[i] == offset_minutes) {
+        return i;
+      }
+    }
+    return TIMEZONE_COUNT / 2;  // Default to UTC+0 if not found
+  }
+  
+  // Helper to format timezone offset for display
+  void formatTimezoneDisplay(char* buf, int16_t offset_minutes) {
+    int hours = offset_minutes / 60;
+    int minutes = offset_minutes % 60;
+    if (minutes == 0) {
+      sprintf(buf, "UTC%+d:00", hours);
+    } else if (minutes == 30) {
+      sprintf(buf, "UTC%+d:30", hours);
+    } else {
+      sprintf(buf, "UTC%+d:%02d", hours, minutes < 0 ? -minutes : minutes);
+    }
+  }
 
   void applyBrightness() {
     if (_display == NULL) return;
@@ -582,7 +699,7 @@ class SettingsScreen : public UIScreen {
 
 public:
   SettingsScreen(UITask* task, NodePrefs* node_prefs, DisplayDriver* display)
-     : _task(task), _node_prefs(node_prefs), _display(display), _selected_item(0), _state(MAIN_MENU), _original_brightness(2), _brightness_scroll_offset(0) { 
+     : _task(task), _node_prefs(node_prefs), _display(display), _selected_item(0), _state(MAIN_MENU), _original_brightness(2), _brightness_scroll_offset(0), _main_menu_scroll_offset(0), _timezone_scroll_offset(0), _original_timezone(0) { 
        // Initialize brightness if not set (default to Normal = 2)
        if (_node_prefs->screen_brightness > 3) {
          _node_prefs->screen_brightness = 2;  // Normal
@@ -598,37 +715,101 @@ public:
       display.drawRect(0, 10, display.width(), 1);  // separator line
 
       int y = 18;
-      const char* items[] = {"Screen Always On", "Screen Brightness", "Share pos in adv.", "Back"};
+      // Build menu items dynamically - screensaver only shown if screen_always_on is enabled
+      uint8_t visible_count = 0;
+      uint8_t visible_items[SettingItem::Count];
+      const char* item_names[] = {"Screen Always On", "Screensaver", "Screen Brightness", "Timezone", "Share pos in adv.", "Back"};
       
-      for (uint8_t i = 0; i < SettingItem::Count; i++, y += 12) {
-        if (i == _selected_item) {
+      // Build list of visible items
+      for (uint8_t i = 0; i < SettingItem::Count; i++) {
+        if (i == SettingItem::SCREEN_SCREENSAVER && !_node_prefs->screen_always_on) {
+          continue;  // Skip screensaver if screen_always_on is disabled
+        }
+        visible_items[visible_count++] = i;
+      }
+      
+      // Find which visible item corresponds to _selected_item
+      uint8_t visible_idx = 0;
+      for (uint8_t i = 0; i < visible_count; i++) {
+        if (visible_items[i] == _selected_item) {
+          visible_idx = i;
+          break;
+        }
+      }
+      
+      // Calculate how many items can fit on screen
+      int header_height = 12;  // Title + separator
+      int item_height = 12;
+      int available_height = display.height() - header_height;
+      int max_visible_items = available_height / item_height;
+      
+      // Adjust scroll offset to keep selected item visible
+      if (visible_idx < _main_menu_scroll_offset) {
+        _main_menu_scroll_offset = visible_idx;
+      } else if (visible_idx >= _main_menu_scroll_offset + max_visible_items) {
+        _main_menu_scroll_offset = visible_idx - max_visible_items + 1;
+      }
+      
+      // Render visible items (only those that fit on screen)
+      int start_y = header_height + 6;
+      for (uint8_t i = _main_menu_scroll_offset; i < visible_count && i < _main_menu_scroll_offset + max_visible_items; i++) {
+        uint8_t item = visible_items[i];
+        int item_y = start_y + (i - _main_menu_scroll_offset) * item_height;
+        if (visible_items[i] == _selected_item) {
           display.setColor(DisplayDriver::YELLOW);
-          display.fillRect(0, y - 2, display.width(), 10);
+          display.fillRect(0, item_y - 2, display.width(), 10);
           display.setColor(DisplayDriver::DARK);
         } else {
           display.setColor(DisplayDriver::LIGHT);
         }
-        display.setCursor(2, y);
-        if (i == SettingItem::SCREEN_ALWAYS_ON) {
+        display.setCursor(2, item_y);
+        if (item == SettingItem::SCREEN_ALWAYS_ON) {
           // Print "Screen Always On: " and then the value
-          display.print(items[i]);
+          display.print(item_names[item]);
           display.print(": ");
           char value_str[4];
           strcpy(value_str, _node_prefs->screen_always_on ? "ON" : "OFF");
           int value_width = display.getTextWidth(value_str);
-          display.setCursor(display.width() - value_width - 2, y);
+          display.setCursor(display.width() - value_width - 2, item_y);
           display.print(value_str);
-        } else if (i == SettingItem::SHARE_POS_IN_ADVERTS) {
+        } else if (item == SettingItem::SCREEN_SCREENSAVER) {
+          // Print "Screensaver: " and then the value
+          display.print(item_names[item]);
+          display.print(": ");
+          char value_str[4];
+          strcpy(value_str, _node_prefs->screen_screensaver ? "ON" : "OFF");
+          int value_width = display.getTextWidth(value_str);
+          display.setCursor(display.width() - value_width - 2, item_y);
+          display.print(value_str);
+        } else if (item == SettingItem::TIMEZONE) {
+          // Print "Timezone: " and then the value
+          display.print(item_names[item]);
+          display.print(": ");
+          char tz_str[10];
+          int16_t tz_offset = _node_prefs->timezone_offset_minutes;
+          int hours = tz_offset / 60;
+          int minutes = tz_offset % 60;
+          if (minutes == 0) {
+            sprintf(tz_str, "UTC%+d", hours);
+          } else if (minutes == 30) {
+            sprintf(tz_str, "UTC%+d:30", hours);
+          } else {
+            sprintf(tz_str, "UTC%+d:%02d", hours, minutes < 0 ? -minutes : minutes);
+          }
+          int value_width = display.getTextWidth(tz_str);
+          display.setCursor(display.width() - value_width - 2, item_y);
+          display.print(tz_str);
+        } else if (item == SettingItem::SHARE_POS_IN_ADVERTS) {
           // Print "Share pos in adverts: " and then the value
-          display.print(items[i]);
+          display.print(item_names[item]);
           display.print(": ");
           char value_str[4];
           strcpy(value_str, (_node_prefs->advert_loc_policy == ADVERT_LOC_SHARE) ? "Yes" : "No");
           int value_width = display.getTextWidth(value_str);
-          display.setCursor(display.width() - value_width - 2, y);
+          display.setCursor(display.width() - value_width - 2, item_y);
           display.print(value_str);
         } else {
-          display.print(items[i]);
+          display.print(item_names[item]);
         }
       }
       
@@ -652,6 +833,63 @@ public:
       display.setCursor(display.width() / 2 - 10, y);
       display.print(options[i]);
     }
+    } else if (_state == SCREEN_SCREENSAVER_SUBMENU) {
+      display.setColor(DisplayDriver::GREEN);
+      display.drawTextCentered(display.width() / 2, 0, "Screensaver");
+      display.drawRect(0, 10, display.width(), 1);  // separator line
+
+      int y = 20;
+      const char* options[] = {"OFF", "ON"};
+      uint8_t current_option = _node_prefs->screen_screensaver ? 1 : 0;
+      
+      for (uint8_t i = 0; i < 2; i++, y += 15) {
+        if (i == current_option) {
+          display.setColor(DisplayDriver::YELLOW);
+          display.fillRect(0, y - 2, display.width(), 13);
+          display.setColor(DisplayDriver::DARK);
+        } else {
+          display.setColor(DisplayDriver::LIGHT);
+        }
+        display.setCursor(display.width() / 2 - 10, y);
+        display.print(options[i]);
+      }
+    } else if (_state == TIMEZONE_SUBMENU) {
+      display.setColor(DisplayDriver::GREEN);
+      display.drawTextCentered(display.width() / 2, 0, "Timezone");
+      display.drawRect(0, 10, display.width(), 1);  // separator line
+
+      // Calculate how many items can fit on screen
+      int header_height = 12;
+      int item_height = 12;
+      int available_height = display.height() - header_height;
+      int max_visible_items = available_height / item_height;
+      
+      // Calculate total items including Back button
+      uint8_t total_items = TIMEZONE_COUNT + 1;  // All timezones + Back
+      
+      // Adjust scroll offset to keep selected item visible
+      if (_selected_item < _timezone_scroll_offset) {
+        _timezone_scroll_offset = _selected_item;
+      } else if (_selected_item >= _timezone_scroll_offset + max_visible_items) {
+        _timezone_scroll_offset = _selected_item - max_visible_items + 1;
+      }
+      
+      int y = header_height + 6;
+      for (uint8_t i = _timezone_scroll_offset; i < total_items && i < _timezone_scroll_offset + max_visible_items; i++, y += item_height) {
+        if (i == _selected_item) {
+          display.setColor(DisplayDriver::YELLOW);
+          display.fillRect(0, y - 2, display.width(), 10);
+          display.setColor(DisplayDriver::DARK);
+        } else {
+          display.setColor(DisplayDriver::LIGHT);
+        }
+        display.setCursor(2, y);
+        if (i < TIMEZONE_COUNT) {
+          display.print(TIMEZONE_LABELS[i]);
+        } else {
+          display.print("Back");
+        }
+      }
     } else if (_state == SCREEN_BRIGHTNESS_SUBMENU) {
       display.setColor(DisplayDriver::GREEN);
       display.drawTextCentered(display.width() / 2, 0, "Screen Brightness");
@@ -713,18 +951,42 @@ public:
 
   bool handleInput(char c) override {
     if (_state == MAIN_MENU) {
+      // Build list of visible items (screensaver only if screen_always_on is enabled)
+      uint8_t visible_count = 0;
+      uint8_t visible_items[SettingItem::Count];
+      for (uint8_t i = 0; i < SettingItem::Count; i++) {
+        if (i == SettingItem::SCREEN_SCREENSAVER && !_node_prefs->screen_always_on) {
+          continue;  // Skip screensaver if screen_always_on is disabled
+        }
+        visible_items[visible_count++] = i;
+      }
+      
+      // Find current visible index
+      uint8_t visible_idx = 0;
+      for (uint8_t i = 0; i < visible_count; i++) {
+        if (visible_items[i] == _selected_item) {
+          visible_idx = i;
+          break;
+        }
+      }
+      
       if (c == KEY_NEXT || c == KEY_RIGHT) {
-        _selected_item = (_selected_item + 1) % SettingItem::Count;
+        visible_idx = (visible_idx + 1) % visible_count;
+        _selected_item = visible_items[visible_idx];
         return true;
       }
       if (c == KEY_PREV || c == KEY_LEFT) {
-        _selected_item = (_selected_item + SettingItem::Count - 1) % SettingItem::Count;
+        visible_idx = (visible_idx + visible_count - 1) % visible_count;
+        _selected_item = visible_items[visible_idx];
         return true;
       }
       if (c == KEY_ENTER) {
         if (_selected_item == SettingItem::SCREEN_ALWAYS_ON) {
           _state = SCREEN_ALWAYS_ON_SUBMENU;
           // Store original value for restore on cancel (though we don't have a back button here)
+          return true;
+        } else if (_selected_item == SettingItem::SCREEN_SCREENSAVER) {
+          _state = SCREEN_SCREENSAVER_SUBMENU;
           return true;
         } else if (_selected_item == SettingItem::SCREEN_BRIGHTNESS) {
           _state = SCREEN_BRIGHTNESS_SUBMENU;
@@ -734,6 +996,14 @@ public:
           _original_brightness = _node_prefs->screen_brightness;
           // Reset scroll offset when entering submenu
           _brightness_scroll_offset = 0;
+          return true;
+        } else if (_selected_item == SettingItem::TIMEZONE) {
+          _state = TIMEZONE_SUBMENU;
+          _selected_item = findTimezoneIndex(_node_prefs->timezone_offset_minutes);
+          // Store original timezone for restore on cancel
+          _original_timezone = _node_prefs->timezone_offset_minutes;
+          // Reset scroll offset when entering submenu
+          _timezone_scroll_offset = 0;
           return true;
         } else if (_selected_item == SettingItem::SHARE_POS_IN_ADVERTS) {
           _state = SHARE_POS_IN_ADVERTS_SUBMENU;
@@ -747,6 +1017,22 @@ public:
       if (c == KEY_NEXT || c == KEY_RIGHT || c == KEY_PREV || c == KEY_LEFT) {
         // Cycle through ON/OFF (preview, don't save yet)
         _node_prefs->screen_always_on = !_node_prefs->screen_always_on;
+        return true;
+      }
+      if (c == KEY_ENTER) {
+        // Select and save
+        the_mesh.savePrefs();
+        // If screen_always_on was turned off, disable screensaver too
+        if (!_node_prefs->screen_always_on) {
+          _node_prefs->screen_screensaver = 0;
+        }
+        _state = MAIN_MENU;
+        return true;
+      }
+    } else if (_state == SCREEN_SCREENSAVER_SUBMENU) {
+      if (c == KEY_NEXT || c == KEY_RIGHT || c == KEY_PREV || c == KEY_LEFT) {
+        // Cycle through OFF/ON (preview, don't save yet)
+        _node_prefs->screen_screensaver = !_node_prefs->screen_screensaver;
         return true;
       }
       if (c == KEY_ENTER) {
@@ -766,6 +1052,42 @@ public:
         the_mesh.savePrefs();
         _state = MAIN_MENU;
         return true;
+      }
+    } else if (_state == TIMEZONE_SUBMENU) {
+      uint8_t total_items = TIMEZONE_COUNT + 1;  // All timezones + Back
+      
+      if (c == KEY_NEXT || c == KEY_RIGHT) {
+        // Cycle forward through timezones and Back
+        _selected_item = (_selected_item + 1) % total_items;
+        // Apply timezone preview (but don't save yet) - only if not Back
+        if (_selected_item < TIMEZONE_COUNT) {
+          _node_prefs->timezone_offset_minutes = TIMEZONE_OFFSETS[_selected_item];
+        }
+        return true;
+      }
+      if (c == KEY_PREV || c == KEY_LEFT) {
+        // Cycle backward through timezones and Back
+        _selected_item = (_selected_item + total_items - 1) % total_items;
+        // Apply timezone preview (but don't save yet) - only if not Back
+        if (_selected_item < TIMEZONE_COUNT) {
+          _node_prefs->timezone_offset_minutes = TIMEZONE_OFFSETS[_selected_item];
+        }
+        return true;
+      }
+      if (c == KEY_ENTER) {
+        if (_selected_item == TIMEZONE_COUNT) {
+          // Back button selected - go back to main menu without saving
+          _state = MAIN_MENU;
+          // Restore original timezone
+          _node_prefs->timezone_offset_minutes = _original_timezone;
+          return true;
+        } else {
+          // Select timezone and save
+          _node_prefs->timezone_offset_minutes = TIMEZONE_OFFSETS[_selected_item];
+          the_mesh.savePrefs();
+          _state = MAIN_MENU;
+          return true;
+        }
       }
     } else if (_state == SCREEN_BRIGHTNESS_SUBMENU) {
       if (c == KEY_NEXT || c == KEY_RIGHT) {
@@ -808,6 +1130,62 @@ public:
   }
 };
 
+class ScreensaverScreen : public UIScreen {
+  UITask* _task;
+  mesh::RTCClock* _rtc;
+
+public:
+  ScreensaverScreen(UITask* task, mesh::RTCClock* rtc) : _task(task), _rtc(rtc) { }
+
+  int render(DisplayDriver& display) override {
+    // Full screen clock display
+    display.setColor(DisplayDriver::LIGHT);
+    
+    // Use FreeMonoBold18pt7b font for clock (bold monospace is perfect for time display)
+    extern const GFXfont FreeMonoBold18pt7b;
+    display.setCustomFont((void*)&FreeMonoBold18pt7b);
+    
+    // Get current time and format as HH:MM
+    uint32_t now = _rtc->getCurrentTime();
+    DateTime dt = DateTime(now);
+    
+    // Apply timezone offset (stored in minutes)
+    int16_t tz_offset_minutes = 0;
+    NodePrefs* prefs = _task->getNodePrefs();
+    if (prefs) {
+      tz_offset_minutes = prefs->timezone_offset_minutes;
+    }
+    // Add timezone offset to current time
+    now += (tz_offset_minutes * 60);  // Convert minutes to seconds
+    dt = DateTime(now);
+    
+    char time_str[6];
+    sprintf(time_str, "%02d:%02d", dt.hour(), dt.minute());
+    
+    // Center the clock on screen (both horizontally and vertically)
+    // Get actual text bounds to calculate proper vertical centering
+    int16_t x1, y1;
+    uint16_t w, h;
+    display.getTextBounds(time_str, &x1, &y1, &w, &h);
+    // y1 is typically negative (baseline offset from top when measured at y=0), h is the text height
+    // For custom fonts, the Y coordinate is the baseline
+    // To center vertically: middle of screen - half text height - baseline offset
+    int y = (display.height() / 2) - (h / 2) - y1;
+    display.drawTextCentered(display.width() / 2, y, time_str);
+    
+    return 1000;  // Update every second
+  }
+
+  bool handleInput(char c) override {
+    // Any button press exits screensaver
+    if (c != 0) {
+      _task->gotoHomeScreen();
+      return true;
+    }
+    return false;
+  }
+};
+
 void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs) {
   _display = display;
   _sensors = sensors;
@@ -844,6 +1222,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
   msg_preview = new MsgPreviewScreen(this, &rtc_clock);
   settings = new SettingsScreen(this, node_prefs, display);
+  screensaver = new ScreensaverScreen(this, &rtc_clock);
   setCurrScreen(splash);
 }
 
@@ -1034,6 +1413,10 @@ void UITask::loop() {
 #endif
 
   if (c != 0 && curr) {
+    // If screensaver is active, exit it first
+    if (curr == screensaver) {
+      gotoHomeScreen();
+    }
     curr->handleInput(c);
     _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
     _next_refresh = 100;  // trigger refresh
@@ -1067,7 +1450,14 @@ void UITask::loop() {
       _display->endFrame();
     }
 #if AUTO_OFF_MILLIS > 0
-    if (millis() > _auto_off && !(_node_prefs && _node_prefs->screen_always_on)) {
+    // Check if screensaver should activate (only if screen_always_on and screensaver are both enabled)
+    if (millis() > _auto_off && _node_prefs && _node_prefs->screen_always_on && _node_prefs->screen_screensaver) {
+      // Activate screensaver if not already active and not on splash screen
+      if (curr != screensaver && curr != splash) {
+        setCurrScreen(screensaver);
+        _next_refresh = 0;  // Trigger immediate refresh
+      }
+    } else if (millis() > _auto_off && !(_node_prefs && _node_prefs->screen_always_on)) {
       _display->turnOff();
     }
 #endif
