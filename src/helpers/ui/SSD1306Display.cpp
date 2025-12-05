@@ -37,7 +37,22 @@ void SSD1306Display::startFrame(Color bkg) {
 }
 
 void SSD1306Display::setTextSize(int sz) {
+  // Reset to default font when using setTextSize
+  display.setFont();
   display.setTextSize(sz);
+}
+
+void SSD1306Display::setCustomFont(void* font) {
+  if (font) {
+    display.setFont((const GFXfont*)font);
+    display.setTextSize(1);  // Custom fonts use size 1
+  } else {
+    display.setFont();  // Reset to default font
+  }
+}
+
+void SSD1306Display::setFont(const GFXfont *f) {
+  setCustomFont((void*)f);
 }
 
 void SSD1306Display::setColor(Color c) {
@@ -70,6 +85,10 @@ uint16_t SSD1306Display::getTextWidth(const char* str) {
   uint16_t w, h;
   display.getTextBounds(str, 0, 0, &x1, &y1, &w, &h);
   return w;
+}
+
+void SSD1306Display::getTextBounds(const char* str, int16_t* x1, int16_t* y1, uint16_t* w, uint16_t* h) {
+  display.getTextBounds(str, 0, 0, x1, y1, w, h);
 }
 
 void SSD1306Display::endFrame() {

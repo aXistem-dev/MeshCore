@@ -48,6 +48,7 @@ class UITask : public AbstractUITask {
   UIScreen* home;
   UIScreen* msg_preview;
   UIScreen* settings;
+  UIScreen* screensaver;
   UIScreen* curr;
 
   void userLedHandler();
@@ -71,6 +72,7 @@ public:
 
   void gotoHomeScreen() { setCurrScreen(home); }
   void gotoSettingsScreen() { setCurrScreen(settings); }
+  NodePrefs* getNodePrefs() { return _node_prefs; }  // Allow screensaver to access prefs
   void showAlert(const char* text, int duration_millis);
   int  getMsgCount() const { return _msgcount; }
   bool hasDisplay() const { return _display != NULL; }
