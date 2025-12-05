@@ -1,0 +1,173 @@
+name: Build Settings Screen Releases
+
+permissions:
+    contents: write
+
+on:
+    push:
+        branches:
+            - dev-settingsscreen
+    workflow_dispatch:
+        inputs:
+            version:
+                description: "Firmware version (e.g., 1.11.0)"
+                required: true
+                default: "1.11.0"
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Clone Repo
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0 # Fetch full history for commit hash
+
+            - name: Setup Build Environment
+              uses: ./.github/actions/setup-build-environment
+
+            - name: Get Version
+              id: version
+              run: |
+                  if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+                    VERSION="${{ github.event.inputs.version }}"
+                  else
+                    # Extract version from latest tag or use default
+                    LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.11.0")
+                    VERSION=$(echo $LATEST_TAG | sed 's/^v//')
+                  fi
+                  echo "version=$VERSION" >> $GITHUB_OUTPUT
+                  echo "Using version: $VERSION"
+
+            - name: Get Commit Hash
+              id: commit
+              run: |
+                  COMMIT_HASH=$(git rev-parse --short HEAD)
+                  echo "commit_hash=$COMMIT_HASH" >> $GITHUB_OUTPUT
+                  echo "Commit hash: $COMMIT_HASH"
+
+            - name: Clean Output Directory
+              run: |
+                  rm -rf out
+                  mkdir -p out
+
+            - name: Build All Firmwares
+              env:
+                  FIRMWARE_VERSION: ${{ steps.version.outputs.version }}
+              run: |
+                  COMMIT_HASH="${{ steps.commit.outputs.commit_hash }}"
+                  VERSION="${{ steps.version.outputs.version }}"
+
+                  # Function to rename firmware files
+                  # build.sh creates: target-version-commithash.ext
+                  # We want: target-version-dev-settingsscreen-commithash.ext
+                  rename_firmware() {
+                    local TARGET=$1
+                    local NEW_NAME=$2
+                    local EXT=$3
+                    
+                    # Find files matching: target-version-commithash.ext
+                    # Rename to: newname-version-dev-settingsscreen-commithash.ext
+                    for file in out/${TARGET}-${VERSION}-${COMMIT_HASH}${EXT}; do
+                      if [ -f "$file" ]; then
+                        NEW_FILE="out/${NEW_NAME}-${VERSION}-dev-settingsscreen-${COMMIT_HASH}${EXT}"
+                        mv "$file" "$NEW_FILE"
+                        echo "Renamed: $(basename $file) -> $(basename $NEW_FILE)"
+                      fi
+                    done
+                  }
+
+                  # Build RAK_4631_companion_radio_ble (nRF52 - creates .zip and .uf2)
+                  echo "Building RAK_4631_companion_radio_ble..."
+                  ./build.sh build-firmware RAK_4631_companion_radio_ble
+                  rename_firmware "RAK_4631_companion_radio_ble" "RAK_4631_companion_radio_ble" ".zip"
+                  rename_firmware "RAK_4631_companion_radio_ble" "RAK_4631_companion_radio_ble" ".uf2"
+
+                  # Build RAK_4631_companion_radio_usb (nRF52 - creates .zip and .uf2)
+                  echo "Building RAK_4631_companion_radio_usb..."
+                  ./build.sh build-firmware RAK_4631_companion_radio_usb
+                  rename_firmware "RAK_4631_companion_radio_usb" "RAK_4631_companion_radio_usb" ".zip"
+                  rename_firmware "RAK_4631_companion_radio_usb" "RAK_4631_companion_radio_usb" ".uf2"
+
+                  # Build Heltec_v3_companion_radio_ble (ESP32 - creates .bin and -merged.bin)
+                  echo "Building Heltec_v3_companion_radio_ble..."
+                  ./build.sh build-firmware Heltec_v3_companion_radio_ble
+                  rename_firmware "Heltec_v3_companion_radio_ble" "heltec_v3_companion_radio_ble" ".bin"
+                  rename_firmware "Heltec_v3_companion_radio_ble" "heltec_v3_companion_radio_ble" "-merged.bin"
+
+                  # Build Heltec_v3_companion_radio_usb (ESP32 - creates .bin and -merged.bin)
+                  echo "Building Heltec_v3_companion_radio_usb..."
+                  ./build.sh build-firmware Heltec_v3_companion_radio_usb
+                  rename_firmware "Heltec_v3_companion_radio_usb" "heltec_v3_companion_radio_usb" ".bin"
+                  rename_firmware "Heltec_v3_companion_radio_usb" "heltec_v3_companion_radio_usb" "-merged.bin"
+
+                  # Build heltec_v4_companion_radio_ble (ESP32 - creates .bin and -merged.bin)
+                  echo "Building heltec_v4_companion_radio_ble..."
+                  ./build.sh build-firmware heltec_v4_companion_radio_ble
+                  rename_firmware "heltec_v4_companion_radio_ble" "heltec_v4_companion_radio_ble" ".bin"
+                  rename_firmware "heltec_v4_companion_radio_ble" "heltec_v4_companion_radio_ble" "-merged.bin"
+
+                  # Build heltec_v4_companion_radio_usb (ESP32 - creates .bin and -merged.bin)
+                  echo "Building heltec_v4_companion_radio_usb..."
+                  ./build.sh build-firmware heltec_v4_companion_radio_usb
+                  rename_firmware "heltec_v4_companion_radio_usb" "heltec_v4_companion_radio_usb" ".bin"
+                  rename_firmware "heltec_v4_companion_radio_usb" "heltec_v4_companion_radio_usb" "-merged.bin"
+
+            - name: List Built Files
+              run: |
+                  echo "Built firmware files:"
+                  ls -lh out/ || echo "No files found in out/"
+
+            - name: Check Build Success
+              id: check_build
+              run: |
+                  FILE_COUNT=$(ls -1 out/*.zip out/*.bin out/*.uf2 2>/dev/null | wc -l || echo "0")
+                  echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
+                  if [ "$FILE_COUNT" -eq 0 ]; then
+                    echo "ERROR: No firmware files were built!"
+                    exit 1
+                  fi
+                  echo "Successfully built $FILE_COUNT firmware file(s)"
+
+            - name: Upload Workflow Artifacts
+              uses: actions/upload-artifact@v4
+              with:
+                  name: settingsscreen-firmwares
+                  path: out/*
+                  retention-days: 30
+
+            - name: Create or Update Release
+              if: steps.check_build.outputs.file_count > 0
+              uses: softprops/action-gh-release@v2
+              with:
+                  tag_name: "dev-settingsscreen-${{ steps.commit.outputs.commit_hash }}"
+                  name: "Settings Screen Build - ${{ steps.version.outputs.version }}"
+                  body: |
+                      ## Settings Screen Firmware Build
+
+                      **Version:** ${{ steps.version.outputs.version }}
+                      **Commit:** ${{ steps.commit.outputs.commit_hash }}
+                      **Branch:** dev-settingsscreen
+
+                      ### Built Firmwares
+
+                      - RAK_4631_companion_radio_ble
+                      - RAK_4631_companion_radio_usb
+                      - Heltec_v3_companion_radio_ble
+                      - Heltec_v3_companion_radio_usb
+                      - Heltec_v4_companion_radio_ble
+                      - Heltec_v4_companion_radio_usb
+
+                      ### Features
+
+                      - Screen Always On setting
+                      - Screen Brightness control (Dim, Low, Normal, Bright)
+                      - Share position in adverts toggle
+                      - Screensaver with clock
+                      - Timezone selection
+
+                      **Note:** This is an automated build from the dev-settingsscreen branch.
+                  draft: false
+                  prerelease: true
+                  files: out/*
+                  fail_on_unmatched_files: false
