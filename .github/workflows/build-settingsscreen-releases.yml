@@ -6,7 +6,7 @@ permissions:
 on:
   push:
     branches:
-      - dev-settingsscreen
+      - dev-cnfi
   workflow_dispatch:
     inputs:
       version:
@@ -319,14 +319,14 @@ jobs:
         if: steps.check_build.outputs.file_count > 0
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "dev-settingsscreen-${{ steps.commit.outputs.commit_hash }}"
+          tag_name: "dev-cnfi-${{ steps.commit.outputs.commit_hash }}"
           name: "Settings Screen Build - ${{ steps.version.outputs.version }}"
           body: |
             ## Settings Screen Firmware Build
 
             **Version:** ${{ steps.version.outputs.version }}
             **Commit:** ${{ steps.commit.outputs.commit_hash }}
-            **Branch:** dev-settingsscreen
+            **Branch:** dev-cnfi
 
             ### Built Firmwares
 
@@ -345,7 +345,7 @@ jobs:
             - Screensaver with clock
             - Timezone selection
 
-            **Note:** This is an automated build from the dev-settingsscreen branch.
+            **Note:** This is an automated build from the dev-cnfi branch (customizations on top of latest main).
           draft: false
           prerelease: true
           files: out/*
