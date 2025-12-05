@@ -98,6 +98,10 @@ jobs:
           COMMIT_HASH="${{ steps.commit.outputs.commit_hash }}"
           VERSION="${{ steps.version.outputs.version }}"
 
+          echo "Using version: ${VERSION}"
+          echo "Using commit hash: ${COMMIT_HASH}"
+          echo "FIRMWARE_VERSION env var: ${FIRMWARE_VERSION}"
+
           # Function to rename firmware files
           # build.sh creates files with pattern: target-version-commithash.ext
           # We want: newname-version-dev-settingsscreen-commithash.ext
@@ -108,7 +112,7 @@ jobs:
             
             echo ""
             echo "=== Renaming firmware: ${TARGET}${EXT} ==="
-            echo "Looking for files matching: out/${TARGET}*${COMMIT_HASH}${EXT}"
+            echo "Looking for files matching: out/${TARGET}*${EXT}"
             
             # First, list all files in out/ to see what we have
             echo "All files in out/ before rename:"
@@ -117,44 +121,48 @@ jobs:
             local FOUND=false
             
             # Try multiple patterns to find the file
-            # Pattern 1: exact match with commit hash
-            for file in out/${TARGET}*${COMMIT_HASH}${EXT}; do
+            # Pattern 1: Look for any file matching the target name (case-insensitive)
+            # build.sh creates: target-version-commithash.ext
+            # We extract the actual version/commit from the filename and use workflow VERSION for final name
+            for file in out/${TARGET}*${EXT}; do
               if [ -f "$file" ] && [[ "$file" != *"dev-settingsscreen"* ]]; then
-                NEW_FILE="out/${NEW_NAME}-${VERSION}-dev-settingsscreen-${COMMIT_HASH}${EXT}"
+                FILENAME=$(basename "$file")
+                
+                # Extract version from filename (format: target-version-commithash.ext)
+                ACTUAL_VERSION=$(echo "$FILENAME" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
+                # Extract commit hash (7 hex chars, usually at the end before extension)
+                ACTUAL_COMMIT=$(echo "$FILENAME" | grep -oE '[a-f0-9]{7}' | tail -1 || echo "")
+                
+                # Use workflow VERSION (which should be 1.11.0) but keep the actual commit from filename
+                if [ -z "$ACTUAL_COMMIT" ]; then
+                  ACTUAL_COMMIT="${COMMIT_HASH}"  # Fallback to workflow commit
+                fi
+                
+                # Always use VERSION from workflow (1.11.0) for final filename, not the extracted one
+                NEW_FILE="out/${NEW_NAME}-${VERSION}-dev-settingsscreen-${ACTUAL_COMMIT}${EXT}"
                 mv "$file" "$NEW_FILE"
-                echo "✓ Renamed: $(basename $file) -> $(basename $NEW_FILE)"
+                echo "✓ Renamed: $FILENAME -> $(basename $NEW_FILE)"
+                if [ -n "$ACTUAL_VERSION" ] && [ "$ACTUAL_VERSION" != "$VERSION" ]; then
+                  echo "  Note: File had version ${ACTUAL_VERSION}, using workflow version ${VERSION}"
+                fi
                 FOUND=true
                 break
               fi
             done
             
-            # Pattern 2: try case-insensitive match
+            # Pattern 2: Try case-insensitive match (for Heltec vs heltec)
             if [ "$FOUND" = false ]; then
-              for file in out/*${COMMIT_HASH}${EXT}; do
-                if [ -f "$file" ] && [[ "$file" != *"dev-settingsscreen"* ]]; then
-                  # Check if filename contains TARGET (case-insensitive)
-                  if echo "$(basename $file)" | grep -qi "${TARGET}"; then
-                    NEW_FILE="out/${NEW_NAME}-${VERSION}-dev-settingsscreen-${COMMIT_HASH}${EXT}"
-                    mv "$file" "$NEW_FILE"
-                    echo "✓ Renamed (case-insensitive): $(basename $file) -> $(basename $NEW_FILE)"
-                    FOUND=true
-                    break
-                  fi
-                fi
-              done
-            fi
-            
-            # Pattern 3: find any file with the extension that hasn't been renamed yet
-            if [ "$FOUND" = false ]; then
-              # Try to find any file matching the pattern (case-insensitive, flexible)
+              echo "Trying case-insensitive match..."
               for file in out/*${EXT}; do
                 if [ -f "$file" ] && [[ "$file" != *"dev-settingsscreen"* ]]; then
                   FILENAME=$(basename "$file")
-                  # Check if filename contains TARGET (case-insensitive) and COMMIT_HASH
-                  if echo "$FILENAME" | grep -qi "${TARGET}" && echo "$FILENAME" | grep -q "${COMMIT_HASH}"; then
-                    NEW_FILE="out/${NEW_NAME}-${VERSION}-dev-settingsscreen-${COMMIT_HASH}${EXT}"
+                  # Check if filename contains TARGET (case-insensitive)
+                  if echo "$FILENAME" | grep -qi "${TARGET}"; then
+                    # Extract commit hash
+                    ACTUAL_COMMIT=$(echo "$FILENAME" | grep -oE '[a-f0-9]{7}' | tail -1 || echo "${COMMIT_HASH}")
+                    NEW_FILE="out/${NEW_NAME}-${VERSION}-dev-settingsscreen-${ACTUAL_COMMIT}${EXT}"
                     mv "$file" "$NEW_FILE"
-                    echo "✓ Renamed (flexible match): $FILENAME -> $(basename $NEW_FILE)"
+                    echo "✓ Renamed (case-insensitive): $FILENAME -> $(basename $NEW_FILE)"
                     FOUND=true
                     break
                   fi
@@ -180,8 +188,12 @@ jobs:
           ./build.sh build-firmware RAK_4631_companion_radio_ble
           echo "Files created:"
           ls -lh out/RAK_4631_companion_radio_ble* 2>/dev/null || echo "  (none)"
+          echo "All files in out/ after build:"
+          ls -lh out/ 2>/dev/null || echo "  (directory empty)"
           rename_firmware "RAK_4631_companion_radio_ble" "RAK_4631_companion_radio_ble" ".zip"
           rename_firmware "RAK_4631_companion_radio_ble" "RAK_4631_companion_radio_ble" ".uf2"
+          echo "All files in out/ after rename:"
+          ls -lh out/ 2>/dev/null || echo "  (directory empty)"
 
           # Build RAK_4631_companion_radio_usb (nRF52 - creates .zip and .uf2)
           echo ""
@@ -237,6 +249,13 @@ jobs:
           ls -lh out/heltec_v4_companion_radio_usb* 2>/dev/null || echo "  (none)"
           rename_firmware "heltec_v4_companion_radio_usb" "heltec_v4_companion_radio_usb" ".bin"
           rename_firmware "heltec_v4_companion_radio_usb" "heltec_v4_companion_radio_usb" "-merged.bin"
+
+          # Final summary of all files
+          echo ""
+          echo "=== Final Summary: All files in out/ ==="
+          echo "Total files: $(find out -type f | wc -l)"
+          find out -type f | sort
+          echo ""
 
           # Verify all expected files are present
           echo ""
