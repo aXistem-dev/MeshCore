@@ -205,88 +205,51 @@ void DataStore::loadPrefs(NodePrefs& prefs, double& node_lat, double& node_lon) 
 void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& node_lat, double& node_lon) {
   File file = openRead(_fs, filename);
   if (file) {
-    // Check file size to ensure it's not corrupted (minimum size for old format)
-    size_t fileSize = file.size();
-    size_t minExpectedSize = 85;  // Size of old format (before new fields)
-    if (fileSize < minExpectedSize) {
-      MESH_DEBUG_PRINTLN("WARNING: Preferences file %s is too small (%d bytes), using defaults", filename, fileSize);
-      file.close();
-      // Set defaults for new fields
-      _prefs.screen_always_on = 0;
-      _prefs.screen_brightness = 2;
-      _prefs.screen_screensaver = 0;
-      _prefs.timezone_offset_minutes = 0;
-      return;
-    }
-
     uint8_t pad[8];
-    bool readSuccess = true;
 
-    // Read all required fields, checking for read errors
-    readSuccess = readSuccess && (file.read((uint8_t *)&_prefs.airtime_factor, sizeof(float)) == sizeof(float));                           // 0
-    readSuccess = readSuccess && (file.read((uint8_t *)_prefs.node_name, sizeof(_prefs.node_name)) == sizeof(_prefs.node_name));          // 4
-    readSuccess = readSuccess && (file.read(pad, 4) == 4);                                                                                 // 36
-    readSuccess = readSuccess && (file.read((uint8_t *)&node_lat, sizeof(node_lat)) == sizeof(node_lat));                                 // 40
-    readSuccess = readSuccess && (file.read((uint8_t *)&node_lon, sizeof(node_lon)) == sizeof(node_lon));                                 // 48
-    readSuccess = readSuccess && (file.read((uint8_t *)&_prefs.freq, sizeof(_prefs.freq)) == sizeof(_prefs.freq));                       // 56
-    readSuccess = readSuccess && (file.read((uint8_t *)&_prefs.sf, sizeof(_prefs.sf)) == sizeof(_prefs.sf));                             // 60
-    readSuccess = readSuccess && (file.read((uint8_t *)&_prefs.cr, sizeof(_prefs.cr)) == sizeof(_prefs.cr));                             // 61
-    readSuccess = readSuccess && (file.read(pad, 1) == 1);                                                                               // 62
-    readSuccess = readSuccess && (file.read((uint8_t *)&_prefs.manual_add_contacts, sizeof(_prefs.manual_add_contacts)) == sizeof(_prefs.manual_add_contacts)); // 63
-    readSuccess = readSuccess && (file.read((uint8_t *)&_prefs.bw, sizeof(_prefs.bw)) == sizeof(_prefs.bw));                             // 64
-    readSuccess = readSuccess && (file.read((uint8_t *)&_prefs.tx_power_dbm, sizeof(_prefs.tx_power_dbm)) == sizeof(_prefs.tx_power_dbm)); // 68
-    readSuccess = readSuccess && (file.read((uint8_t *)&_prefs.telemetry_mode_base, sizeof(_prefs.telemetry_mode_base)) == sizeof(_prefs.telemetry_mode_base)); // 69
-    readSuccess = readSuccess && (file.read((uint8_t *)&_prefs.telemetry_mode_loc, sizeof(_prefs.telemetry_mode_loc)) == sizeof(_prefs.telemetry_mode_loc));   // 70
-    readSuccess = readSuccess && (file.read((uint8_t *)&_prefs.telemetry_mode_env, sizeof(_prefs.telemetry_mode_env)) == sizeof(_prefs.telemetry_mode_env));   // 71
-    readSuccess = readSuccess && (file.read((uint8_t *)&_prefs.rx_delay_base, sizeof(_prefs.rx_delay_base)) == sizeof(_prefs.rx_delay_base));                 // 72
-    readSuccess = readSuccess && (file.read((uint8_t *)&_prefs.advert_loc_policy, sizeof(_prefs.advert_loc_policy)) == sizeof(_prefs.advert_loc_policy));     // 76
-    readSuccess = readSuccess && (file.read((uint8_t *)&_prefs.multi_acks, sizeof(_prefs.multi_acks)) == sizeof(_prefs.multi_acks));                           // 77
-    readSuccess = readSuccess && (file.read(pad, 2) == 2);                                                                               // 78
-    readSuccess = readSuccess && (file.read((uint8_t *)&_prefs.ble_pin, sizeof(_prefs.ble_pin)) == sizeof(_prefs.ble_pin));                                     // 80
-    readSuccess = readSuccess && (file.read((uint8_t *)&_prefs.buzzer_quiet, sizeof(_prefs.buzzer_quiet)) == sizeof(_prefs.buzzer_quiet));                     // 84
-
-    if (!readSuccess) {
-      MESH_DEBUG_PRINTLN("ERROR: Failed to read preferences file %s, using defaults", filename);
-      file.close();
-      // Set defaults for new fields
-      _prefs.screen_always_on = 0;
-      _prefs.screen_brightness = 2;
-      _prefs.screen_screensaver = 0;
-      _prefs.timezone_offset_minutes = 0;
-      return;
-    }
-
+    file.read((uint8_t *)&_prefs.airtime_factor, sizeof(float));                           // 0
+    file.read((uint8_t *)_prefs.node_name, sizeof(_prefs.node_name));                      // 4
+    file.read(pad, 4);                                                                     // 36
+    file.read((uint8_t *)&node_lat, sizeof(node_lat));                                     // 40
+    file.read((uint8_t *)&node_lon, sizeof(node_lon));                                     // 48
+    file.read((uint8_t *)&_prefs.freq, sizeof(_prefs.freq));                               // 56
+    file.read((uint8_t *)&_prefs.sf, sizeof(_prefs.sf));                                   // 60
+    file.read((uint8_t *)&_prefs.cr, sizeof(_prefs.cr));                                   // 61
+    file.read(pad, 1);                                                                     // 62
+    file.read((uint8_t *)&_prefs.manual_add_contacts, sizeof(_prefs.manual_add_contacts)); // 63
+    file.read((uint8_t *)&_prefs.bw, sizeof(_prefs.bw));                                   // 64
+    file.read((uint8_t *)&_prefs.tx_power_dbm, sizeof(_prefs.tx_power_dbm));               // 68
+    file.read((uint8_t *)&_prefs.telemetry_mode_base, sizeof(_prefs.telemetry_mode_base)); // 69
+    file.read((uint8_t *)&_prefs.telemetry_mode_loc, sizeof(_prefs.telemetry_mode_loc));   // 70
+    file.read((uint8_t *)&_prefs.telemetry_mode_env, sizeof(_prefs.telemetry_mode_env));   // 71
+    file.read((uint8_t *)&_prefs.rx_delay_base, sizeof(_prefs.rx_delay_base));             // 72
+    file.read((uint8_t *)&_prefs.advert_loc_policy, sizeof(_prefs.advert_loc_policy));     // 76
+    file.read((uint8_t *)&_prefs.multi_acks, sizeof(_prefs.multi_acks));                   // 77
+    file.read(pad, 2);                                                                     // 78
+    file.read((uint8_t *)&_prefs.ble_pin, sizeof(_prefs.ble_pin));                         // 80
+    file.read((uint8_t *)&_prefs.buzzer_quiet, sizeof(_prefs.buzzer_quiet));               // 84
     // screen_always_on is a new field - read it if available, otherwise default to 0
     if (file.available() >= sizeof(_prefs.screen_always_on)) {
-      if (file.read((uint8_t *)&_prefs.screen_always_on, sizeof(_prefs.screen_always_on)) != sizeof(_prefs.screen_always_on)) {
-        _prefs.screen_always_on = 0;  // default on read error
-      }
+      file.read((uint8_t *)&_prefs.screen_always_on, sizeof(_prefs.screen_always_on));      // 85
     } else {
       _prefs.screen_always_on = 0;  // default to off for old preference files
     }
     // screen_brightness is a new field - read it if available, otherwise default to 2 (Normal)
     if (file.available() >= sizeof(_prefs.screen_brightness)) {
-      if (file.read((uint8_t *)&_prefs.screen_brightness, sizeof(_prefs.screen_brightness)) == sizeof(_prefs.screen_brightness)) {
-        if (_prefs.screen_brightness > 3) _prefs.screen_brightness = 2;  // Validate range (0-3)
-      } else {
-        _prefs.screen_brightness = 2;  // default on read error
-      }
+      file.read((uint8_t *)&_prefs.screen_brightness, sizeof(_prefs.screen_brightness));    // 86
+      if (_prefs.screen_brightness > 3) _prefs.screen_brightness = 2;  // Validate range (0-3)
     } else {
       _prefs.screen_brightness = 2;  // default to Normal for old preference files
     }
     // screen_screensaver is a new field - read it if available, otherwise default to 0 (off)
     if (file.available() >= sizeof(_prefs.screen_screensaver)) {
-      if (file.read((uint8_t *)&_prefs.screen_screensaver, sizeof(_prefs.screen_screensaver)) != sizeof(_prefs.screen_screensaver)) {
-        _prefs.screen_screensaver = 0;  // default on read error
-      }
+      file.read((uint8_t *)&_prefs.screen_screensaver, sizeof(_prefs.screen_screensaver));    // 87
     } else {
       _prefs.screen_screensaver = 0;  // default to off for old preference files
     }
     // timezone_offset_minutes is a new field - read it if available, otherwise default to 0 (UTC)
     if (file.available() >= sizeof(_prefs.timezone_offset_minutes)) {
-      if (file.read((uint8_t *)&_prefs.timezone_offset_minutes, sizeof(_prefs.timezone_offset_minutes)) != sizeof(_prefs.timezone_offset_minutes)) {
-        _prefs.timezone_offset_minutes = 0;  // default on read error
-      }
+      file.read((uint8_t *)&_prefs.timezone_offset_minutes, sizeof(_prefs.timezone_offset_minutes));    // 88-89
     } else {
       _prefs.timezone_offset_minutes = 0;  // default to UTC for old preference files
     }
