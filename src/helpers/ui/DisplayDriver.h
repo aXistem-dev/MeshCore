@@ -19,6 +19,7 @@ public:
   virtual void clear() = 0;
   virtual void startFrame(Color bkg = DARK) = 0;
   virtual void setTextSize(int sz) = 0;
+  virtual void setCustomFont(void* font) { }  // Optional: allow custom fonts (override in specific drivers)
   virtual void setColor(Color c) = 0;
   virtual void setCursor(int x, int y) = 0;
   virtual void print(const char* str) = 0;
@@ -27,6 +28,14 @@ public:
   virtual void drawRect(int x, int y, int w, int h) = 0;
   virtual void drawXbm(int x, int y, const uint8_t* bits, int w, int h) = 0;
   virtual uint16_t getTextWidth(const char* str) = 0;
+  // Get text bounds (x1, y1 = top-left corner, w = width, h = height)
+  virtual void getTextBounds(const char* str, int16_t* x1, int16_t* y1, uint16_t* w, uint16_t* h) {
+    // Default implementation: approximate based on width
+    *x1 = 0;
+    *y1 = 0;
+    *w = getTextWidth(str);
+    *h = 8;  // Default height approximation
+  }
   virtual void drawTextCentered(int mid_x, int y, const char* str) {   // helper method (override to optimise)
     int w = getTextWidth(str);
     setCursor(mid_x - w/2, y);
@@ -41,6 +50,9 @@ public:
     setCursor(x_anch, y);
     print(str);
   }
+  
+  // Set display brightness (0-255, or 0=Dim, 1=Normal, 2=Bright for some displays)
+  virtual void setBrightness(uint8_t level) { }  // Default: no-op for displays that don't support it
   
   // convert UTF-8 characters to displayable block characters for compatibility
   virtual void translateUTF8ToBlocks(char* dest, const char* src, size_t dest_size) {
