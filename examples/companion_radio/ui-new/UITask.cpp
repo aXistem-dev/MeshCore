@@ -49,10 +49,10 @@ public:
   }
 
   int render(DisplayDriver& display) override {
-    // meshcore logo
+    // slunsecore logo
     display.setColor(DisplayDriver::BLUE);
     int logoWidth = 128;
-    display.drawXbm((display.width() - logoWidth) / 2, 3, meshcore_logo, logoWidth, 13);
+    display.drawXbm((display.width() - logoWidth) / 2, 3, slunsecore_logo, logoWidth, 13);
 
     // version info
     display.setColor(DisplayDriver::LIGHT);
