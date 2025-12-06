@@ -6,15 +6,15 @@ permissions:
 on:
   workflow_dispatch:
   push:
+    branches:
+      - slunsecore
     tags:
-      - 'room-server-*'
+      - "slunsecore-room-server-*"
 
 jobs:
-
   build:
     runs-on: ubuntu-latest
     steps:
-
       - name: Clone Repo
         uses: actions/checkout@v4
 
@@ -23,7 +23,7 @@ jobs:
 
       - name: Build Firmwares
         env:
-          FIRMWARE_VERSION: ${{ env.GIT_TAG_VERSION }}
+          FIRMWARE_VERSION: ${{ env.GIT_TAG_VERSION || env.GIT_COMMIT_VERSION }}
         run: /usr/bin/env bash build.sh build-room-server-firmwares
 
       - name: Upload Workflow Artifacts
@@ -36,7 +36,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          name: Room Server Firmware ${{ env.GIT_TAG_VERSION }}
+          name: Slunsecore Room Server Firmware ${{ env.GIT_TAG_VERSION }}
           body: ""
           draft: true
           files: out/*

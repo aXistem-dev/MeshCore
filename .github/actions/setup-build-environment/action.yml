@@ -2,7 +2,6 @@ name: Setup Build Environment
 runs:
   using: "composite"
   steps:
-
     - name: Init Cache
       uses: actions/cache@v4
       with:
@@ -14,7 +13,7 @@ runs:
     - name: Install Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11'
+        python-version: "3.11"
 
     - name: Install PlatformIO
       shell: bash
@@ -25,5 +24,18 @@ runs:
     - name: Extract Version from Git Tag
       shell: bash
       run: |
-        GIT_TAG_NAME="${GITHUB_REF#refs/tags/}"
-        echo "GIT_TAG_VERSION=${GIT_TAG_NAME##*-}" >> $GITHUB_ENV
+        if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+          GIT_TAG_NAME="${GITHUB_REF#refs/tags/}"
+          echo "GIT_TAG_VERSION=${GIT_TAG_NAME##*-}" >> $GITHUB_ENV
+        fi
+
+    # For branch pushes, use commit SHA for version (or date-based version)
+    - name: Extract Version from Branch/Commit
+      shell: bash
+      if: startsWith(github.ref, 'refs/heads/')
+      run: |
+        # Use short commit SHA for version when building from branch
+        GIT_COMMIT_SHORT="${GITHUB_SHA:0:7}"
+        # Format: YYYYMMDD-HHMMSS-commitSHA
+        BUILD_DATE=$(date +%Y%m%d-%H%M%S)
+        echo "GIT_COMMIT_VERSION=${BUILD_DATE}-${GIT_COMMIT_SHORT}" >> $GITHUB_ENV
