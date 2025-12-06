@@ -37,7 +37,22 @@ void SSD1306Display::startFrame(Color bkg) {
 }
 
 void SSD1306Display::setTextSize(int sz) {
+  // Reset to default font when using setTextSize
+  display.setFont();
   display.setTextSize(sz);
+}
+
+void SSD1306Display::setCustomFont(void* font) {
+  if (font) {
+    display.setFont((const GFXfont*)font);
+    display.setTextSize(1);  // Custom fonts use size 1
+  } else {
+    display.setFont();  // Reset to default font
+  }
+}
+
+void SSD1306Display::setFont(const GFXfont *f) {
+  setCustomFont((void*)f);
 }
 
 void SSD1306Display::setColor(Color c) {
@@ -72,6 +87,30 @@ uint16_t SSD1306Display::getTextWidth(const char* str) {
   return w;
 }
 
+void SSD1306Display::getTextBounds(const char* str, int16_t* x1, int16_t* y1, uint16_t* w, uint16_t* h) {
+  display.getTextBounds(str, 0, 0, x1, y1, w, h);
+}
+
 void SSD1306Display::endFrame() {
   display.display();
+}
+
+void SSD1306Display::setBrightness(uint8_t level) {
+  // level: 0=Dim, 1=Low, 2=Normal, 3=Bright
+  if (level == 0) {
+    display.dim(true);  // Dim mode
+  } else {
+    display.dim(false);  // Normal brightness
+    // For SSD1306, adjust contrast for different brightness levels
+    uint8_t contrast;
+    if (level == 1) {
+      contrast = 64;   // Low
+    } else if (level == 2) {
+      contrast = 128;  // Normal
+    } else {
+      contrast = 255;  // Bright
+    }
+    display.ssd1306_command(SSD1306_SETCONTRAST);
+    display.ssd1306_command(contrast);
+  }
 }

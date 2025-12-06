@@ -193,6 +193,12 @@ void DataStore::loadPrefs(NodePrefs& prefs, double& node_lat, double& node_lon) 
     loadPrefsInt("/node_prefs", prefs, node_lat, node_lon);
     savePrefs(prefs, node_lat, node_lon);                // save to new filename
     _fs->remove("/node_prefs"); // remove old
+  } else {
+    // No preferences file exists - set defaults for new fields
+    prefs.screen_always_on = 0;  // default to OFF
+    prefs.screen_brightness = 2;  // default to Normal
+    prefs.screen_screensaver = 0;  // default to OFF
+    prefs.timezone_offset_minutes = 0;  // default to UTC
   }
 }
 
@@ -222,6 +228,31 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& no
     file.read(pad, 2);                                                                     // 78
     file.read((uint8_t *)&_prefs.ble_pin, sizeof(_prefs.ble_pin));                         // 80
     file.read((uint8_t *)&_prefs.buzzer_quiet, sizeof(_prefs.buzzer_quiet));               // 84
+    // screen_always_on is a new field - read it if available, otherwise default to 0
+    if (file.available() >= sizeof(_prefs.screen_always_on)) {
+      file.read((uint8_t *)&_prefs.screen_always_on, sizeof(_prefs.screen_always_on));      // 85
+    } else {
+      _prefs.screen_always_on = 0;  // default to off for old preference files
+    }
+    // screen_brightness is a new field - read it if available, otherwise default to 2 (Normal)
+    if (file.available() >= sizeof(_prefs.screen_brightness)) {
+      file.read((uint8_t *)&_prefs.screen_brightness, sizeof(_prefs.screen_brightness));    // 86
+      if (_prefs.screen_brightness > 3) _prefs.screen_brightness = 2;  // Validate range (0-3)
+    } else {
+      _prefs.screen_brightness = 2;  // default to Normal for old preference files
+    }
+    // screen_screensaver is a new field - read it if available, otherwise default to 0 (off)
+    if (file.available() >= sizeof(_prefs.screen_screensaver)) {
+      file.read((uint8_t *)&_prefs.screen_screensaver, sizeof(_prefs.screen_screensaver));    // 87
+    } else {
+      _prefs.screen_screensaver = 0;  // default to off for old preference files
+    }
+    // timezone_offset_minutes is a new field - read it if available, otherwise default to 0 (UTC)
+    if (file.available() >= sizeof(_prefs.timezone_offset_minutes)) {
+      file.read((uint8_t *)&_prefs.timezone_offset_minutes, sizeof(_prefs.timezone_offset_minutes));    // 88-89
+    } else {
+      _prefs.timezone_offset_minutes = 0;  // default to UTC for old preference files
+    }
 
     file.close();
   }
@@ -254,6 +285,10 @@ void DataStore::savePrefs(const NodePrefs& _prefs, double node_lat, double node_
     file.write(pad, 2);                                                                     // 78
     file.write((uint8_t *)&_prefs.ble_pin, sizeof(_prefs.ble_pin));                         // 80
     file.write((uint8_t *)&_prefs.buzzer_quiet, sizeof(_prefs.buzzer_quiet));               // 84
+    file.write((uint8_t *)&_prefs.screen_always_on, sizeof(_prefs.screen_always_on));        // 85
+    file.write((uint8_t *)&_prefs.screen_brightness, sizeof(_prefs.screen_brightness));       // 86
+    file.write((uint8_t *)&_prefs.screen_screensaver, sizeof(_prefs.screen_screensaver));       // 87
+    file.write((uint8_t *)&_prefs.timezone_offset_minutes, sizeof(_prefs.timezone_offset_minutes));       // 88-89
 
     file.close();
   }
