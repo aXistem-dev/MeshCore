@@ -5,6 +5,15 @@ permissions:
 
 on:
   workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to build from"
+        required: true
+        default: "dev-slunsecore"
+        type: choice
+        options:
+          - dev-slunsecore
+          - slunsecore
   push:
     branches:
       - slunsecore
@@ -17,6 +26,8 @@ jobs:
     steps:
       - name: Clone Repo
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref }}
 
       - name: Setup Build Environment
         uses: ./.github/actions/setup-build-environment
@@ -24,6 +35,7 @@ jobs:
       - name: Build Firmwares
         env:
           FIRMWARE_VERSION: ${{ env.GIT_TAG_VERSION || env.GIT_COMMIT_VERSION }}
+          BUILD_BRANCH: ${{ github.event.inputs.branch || github.ref_name }}
         run: /usr/bin/env bash build.sh build-room-server-firmwares
 
       - name: Upload Workflow Artifacts

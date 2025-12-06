@@ -2,20 +2,40 @@
 
 GitHub Actions is set up to automatically build and release Slunsecore firmware.
 
-## Automatic Builds
+## Build Types
 
-Firmware is automatically built in two scenarios:
+Firmware can be built in three ways:
 
-### 1. Branch Pushes
+### 1. Automatic Branch Pushes
 
 When code is pushed to the `slunsecore` branch, all firmware types are automatically built:
 - Companion firmwares
 - Repeater firmwares
 - Room server firmwares
 
-**Note**: These builds create artifacts but do NOT create GitHub Releases. Use this for testing builds.
+**Note**: 
+- These builds create artifacts but do NOT create GitHub Releases
+- Builds from `slunsecore` branch use standard filenames (no `nightly-` prefix)
+- Use this for testing builds before creating release tags
 
-### 2. Tag-Based Releases
+### 2. Manual Nightly Builds
+
+You can manually trigger builds from any branch (typically `dev-slunsecore`) for nightly/testing builds:
+
+1. Go to **Actions** tab in GitHub
+2. Select the workflow you want to run (e.g., "Build Companion Firmwares")
+3. Click **Run workflow**
+4. Select the branch (defaults to `dev-slunsecore`)
+5. Click **Run workflow**
+
+**Note**: 
+- Manual builds create artifacts but do NOT create GitHub Releases
+- Perfect for testing builds from `dev-slunsecore` before merging to `slunsecore`
+- Available branches: `dev-slunsecore`, `slunsecore`
+- **Nightly builds from `dev-slunsecore` have `nightly-` prefix in filenames** to distinguish from official releases
+  - Example: `nightly-RAK_4631_companion_radio_usb-slunse-v1.2.3-8f637c1.bin`
+
+### 3. Tag-Based Releases
 
 When you push a release tag, the corresponding firmware type is built and a draft GitHub Release is created.
 
