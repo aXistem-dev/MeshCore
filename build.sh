@@ -132,12 +132,12 @@ build_firmware() {
     exit 1
   fi
 
-  # set firmware version string
-  # e.g: v1.0.0-abcdef
-  FIRMWARE_VERSION_STRING="${FIRMWARE_VERSION}-${COMMIT_HASH}"
+  # set firmware version string with slunsecore identifier (abbreviated to avoid double prefix in filename)
+  # e.g: sc-v1.0.0-abcdef
+  FIRMWARE_VERSION_STRING="slunse-${FIRMWARE_VERSION}-${COMMIT_HASH}"
 
-  # craft filename
-  # e.g: RAK_4631_Repeater-v1.0.0-SHA
+  # craft filename with slunsecore prefix
+  # e.g: slunsecore_RAK_4631_Repeater-v1.0.0-SHA
   FIRMWARE_FILENAME="$1-${FIRMWARE_VERSION_STRING}"
 
   # add firmware version info to end of existing platformio build flags in environment vars
@@ -163,11 +163,9 @@ build_firmware() {
     cp .pio/build/$1/firmware.zip out/${FIRMWARE_FILENAME}.zip 2>/dev/null || true
   fi
 
-  # for stm32, copy .bin and .hex to out folder
-  if [ "$ENV_PLATFORM" == "STM32_PLATFORM" ]; then
-    cp .pio/build/$1/firmware.bin out/${FIRMWARE_FILENAME}.bin 2>/dev/null || true
-    cp .pio/build/$1/firmware.hex out/${FIRMWARE_FILENAME}.hex 2>/dev/null || true
-  fi
+  # copy .bin, .uf2, and .zip to out folder
+  # e.g: slunsecore_Heltec_v3_room_server-v1.0.0-SHA.bin
+  # e.g: slunsecore_RAK_4631_Repeater-v1.0.0-SHA.uf2
 
   # for rp2040, copy .bin and .uf2 to out folder
   if [ "$ENV_PLATFORM" == "RP2040_PLATFORM" ]; then
