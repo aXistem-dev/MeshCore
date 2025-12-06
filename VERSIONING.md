@@ -33,19 +33,37 @@ The version string is embedded in the firmware binary at compile time and appear
 
 ## Filename Convention
 
-Built firmware files follow this naming pattern:
+Built firmware files follow different naming patterns depending on the build type:
 
-### Format
+### Official Release Builds
 
+Built from `slunsecore` branch (automatic pushes or tag-based releases):
+
+**Format:**
 ```
 {TARGET}-slunse-{VERSION}-{COMMIT_HASH}.{ext}
 ```
 
-### Examples
-
+**Examples:**
 - `RAK_4631_companion_radio_usb-slunse-v1.2.3-8f637c1.bin`
 - `Heltec_v3_repeater-slunse-v1.2.3-8f637c1.uf2`
 - `RAK_4631_room_server-slunse-v1.2.3-8f637c1.zip`
+
+### Nightly Builds
+
+Built from `dev-slunsecore` branch (manual triggers):
+
+**Format:**
+```
+nightly-{TARGET}-slunse-{VERSION}-{COMMIT_HASH}.{ext}
+```
+
+**Examples:**
+- `nightly-RAK_4631_companion_radio_usb-slunse-v1.2.3-8f637c1.bin`
+- `nightly-Heltec_v3_repeater-slunse-v1.2.3-8f637c1.uf2`
+- `nightly-RAK_4631_room_server-slunse-v1.2.3-8f637c1.zip`
+
+The `nightly-` prefix clearly distinguishes development/nightly builds from official release builds.
 
 ### File Extensions
 

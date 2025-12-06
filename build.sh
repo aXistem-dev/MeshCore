@@ -84,12 +84,18 @@ build_firmware() {
   fi
 
   # set firmware version string with slunsecore identifier (abbreviated to avoid double prefix in filename)
-  # e.g: sc-v1.0.0-abcdef
+  # e.g: slunse-v1.0.0-abcdef
   FIRMWARE_VERSION_STRING="slunse-${FIRMWARE_VERSION}-${COMMIT_HASH}"
 
-  # craft filename with slunsecore prefix
-  # e.g: slunsecore_RAK_4631_Repeater-v1.0.0-SHA
-  FIRMWARE_FILENAME="$1-${FIRMWARE_VERSION_STRING}"
+  # detect if building from dev-slunsecore branch (nightly build)
+  CURRENT_BRANCH="${BUILD_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
+  if [ "$CURRENT_BRANCH" = "dev-slunsecore" ]; then
+    # add nightly prefix to distinguish from official releases
+    FIRMWARE_FILENAME="nightly-$1-${FIRMWARE_VERSION_STRING}"
+  else
+    # official release build
+    FIRMWARE_FILENAME="$1-${FIRMWARE_VERSION_STRING}"
+  fi
 
   # add firmware version info to end of existing platformio build flags in environment vars
   export PLATFORMIO_BUILD_FLAGS="${PLATFORMIO_BUILD_FLAGS} -DFIRMWARE_BUILD_DATE='\"${FIRMWARE_BUILD_DATE}\"' -DFIRMWARE_VERSION='\"${FIRMWARE_VERSION_STRING}\"'"
@@ -108,8 +114,8 @@ build_firmware() {
   fi
 
   # copy .bin, .uf2, and .zip to out folder
-  # e.g: slunsecore_Heltec_v3_room_server-v1.0.0-SHA.bin
-  # e.g: slunsecore_RAK_4631_Repeater-v1.0.0-SHA.uf2
+  # Official releases: RAK_4631_Repeater-slunse-v1.0.0-SHA.uf2
+  # Nightly builds: nightly-RAK_4631_Repeater-slunse-v1.0.0-SHA.uf2
 
   # copy .bin for esp32 boards
   cp .pio/build/$1/firmware.bin out/${FIRMWARE_FILENAME}.bin 2>/dev/null || true
