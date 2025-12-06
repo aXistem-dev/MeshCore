@@ -109,22 +109,24 @@ class HomeScreen : public UIScreen {
     if (batteryPercentage < 0) batteryPercentage = 0; // Clamp to 0%
     if (batteryPercentage > 100) batteryPercentage = 100; // Clamp to 100%
 
-    // battery icon
-    int iconWidth = 24;
-    int iconHeight = 10;
-    int iconX = display.width() - iconWidth - 5; // Position the icon near the top-right corner
-    int iconY = 0;
-    display.setColor(DisplayDriver::GREEN);
-
-    // battery outline
-    display.drawRect(iconX, iconY, iconWidth, iconHeight);
-
-    // battery "cap"
-    display.fillRect(iconX + iconWidth, iconY + (iconHeight / 4), 3, iconHeight / 2);
-
-    // fill the battery based on the percentage
-    int fillWidth = (batteryPercentage * (iconWidth - 4)) / 100;
-    display.fillRect(iconX + 2, iconY + 2, fillWidth, iconHeight - 4);
+    // Display battery percentage as text in top-right corner
+    char battStr[6];
+    sprintf(battStr, "%d%%", batteryPercentage);
+    int textWidth = display.getTextWidth(battStr);
+    int textX = display.width() - textWidth - 2; // Position near top-right corner
+    int textY = 0;
+    
+    // Choose color based on battery level
+    if (batteryPercentage > 50) {
+      display.setColor(DisplayDriver::GREEN);
+    } else if (batteryPercentage > 20) {
+      display.setColor(DisplayDriver::YELLOW);
+    } else {
+      display.setColor(DisplayDriver::RED);
+    }
+    
+    display.setCursor(textX, textY);
+    display.print(battStr);
   }
 
   CayenneLPP sensors_lpp;
