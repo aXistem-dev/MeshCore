@@ -33,7 +33,7 @@ You can manually trigger builds from any branch (typically `dev-slunsecore`) for
 - Perfect for testing builds from `dev-slunsecore` before merging to `slunsecore`
 - Available branches: `dev-slunsecore`, `slunsecore`
 - **Nightly builds from `dev-slunsecore` have `nightly-` prefix in filenames** to distinguish from official releases
-  - Example: `nightly-RAK_4631_companion_radio_usb-slunse-v1.2.3-8f637c1.bin`
+  - Example: `nightly-RAK_4631_companion_radio_usb-sc-v1.2.3-dev-a1b2c3d.bin`
 
 ### 3. Tag-Based Releases
 
@@ -43,9 +43,9 @@ When you push a release tag, the corresponding firmware type is built and a draf
 
 Use the following tag formats for releases:
 
-- `slunsecore-companion-v1.0.0` - Builds all companion firmwares
-- `slunsecore-repeater-v1.0.0` - Builds all repeater firmwares
-- `slunsecore-room-server-v1.0.0` - Builds all room server firmwares
+- `sc-companion-v1.0.0` - Builds all companion firmwares
+- `sc-repeater-v1.0.0` - Builds all repeater firmwares
+- `sc-room-server-v1.0.0` - Builds all room server firmwares
 
 > **NOTE**: Replace `v1.0.0` with the version you want to release. For detailed tag format specification, see [VERSIONING.md](VERSIONING.md#tag-naming-convention).
 
@@ -53,8 +53,8 @@ Use the following tag formats for releases:
 
 1. **Create and push the tag**:
    ```bash
-   git tag slunsecore-companion-v1.2.3
-   git push origin slunsecore-companion-v1.2.3
+   git tag sc-companion-v1.2.3
+   git push origin sc-companion-v1.2.3
    ```
 
 2. **GitHub Actions automatically**:
@@ -73,9 +73,9 @@ Use the following tag formats for releases:
 
 You can push multiple tags on the same commit, and they will all build separately:
 ```bash
-git tag slunsecore-companion-v1.2.3
-git tag slunsecore-repeater-v1.2.3
-git tag slunsecore-room-server-v1.2.3
+git tag sc-companion-v1.2.3
+git tag sc-repeater-v1.2.3
+git tag sc-room-server-v1.2.3
 git push origin --tags
 ```
 

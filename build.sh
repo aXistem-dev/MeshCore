@@ -83,9 +83,24 @@ build_firmware() {
     exit 1
   fi
 
-  # set firmware version string with slunsecore identifier (abbreviated to avoid double prefix in filename)
-  # e.g: slunse-v1.0.0-abcdef
-  FIRMWARE_VERSION_STRING="slunse-${FIRMWARE_VERSION}-${COMMIT_HASH}"
+  # set firmware version string with sc (slunsecore) identifier
+  # Check if we're building from a tag (tag builds) or branch (branch builds)
+  # Tag builds: version only, no commit hash (e.g., sc-v1.2.3)
+  # Branch builds: version with dev- prefix before commit hash (e.g., sc-v1.2.3-dev-a1b2c3d)
+  
+  # Check if current HEAD is a tag
+  IS_TAG_BUILD=false
+  if git describe --exact-match --tags HEAD >/dev/null 2>&1; then
+    IS_TAG_BUILD=true
+  fi
+  
+  if [ "$IS_TAG_BUILD" = true ]; then
+    # Tag build - version only, no commit hash
+    FIRMWARE_VERSION_STRING="sc-${FIRMWARE_VERSION}"
+  else
+    # Branch build - version with dev- prefix before commit hash
+    FIRMWARE_VERSION_STRING="sc-${FIRMWARE_VERSION}-dev-${COMMIT_HASH}"
+  fi
 
   # detect if building from dev-slunsecore branch (nightly build)
   CURRENT_BRANCH="${BUILD_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
@@ -114,8 +129,8 @@ build_firmware() {
   fi
 
   # copy .bin, .uf2, and .zip to out folder
-  # Official releases: RAK_4631_Repeater-slunse-v1.0.0-SHA.uf2
-  # Nightly builds: nightly-RAK_4631_Repeater-slunse-v1.0.0-SHA.uf2
+  # Official releases: RAK_4631_Repeater-sc-v1.0.0.uf2
+  # Nightly builds: nightly-RAK_4631_Repeater-sc-v1.0.0-dev-SHA.uf2
 
   # copy .bin for esp32 boards
   cp .pio/build/$1/firmware.bin out/${FIRMWARE_FILENAME}.bin 2>/dev/null || true
