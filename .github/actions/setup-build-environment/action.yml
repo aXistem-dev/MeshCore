@@ -20,7 +20,7 @@ runs:
       run: |
         pip install --upgrade platformio
 
-    # a git tag of "room-server-v1.2.3" should set "v1.2.3" as GIT_TAG_VERSION
+    # a git tag of "sc-companion-v1.2.3" should set "v1.2.3" as GIT_TAG_VERSION
     - name: Extract Version from Git Tag
       shell: bash
       run: |
@@ -29,13 +29,23 @@ runs:
           echo "GIT_TAG_VERSION=${GIT_TAG_NAME##*-}" >> $GITHUB_ENV
         fi
 
-    # For branch pushes, use commit SHA for version (or date-based version)
+    # For branch pushes, get version from latest tag
     - name: Extract Version from Branch/Commit
       shell: bash
       if: startsWith(github.ref, 'refs/heads/')
       run: |
-        # Use short commit SHA for version when building from branch
-        GIT_COMMIT_SHORT="${GITHUB_SHA:0:7}"
-        # Format: YYYYMMDD-HHMMSS-commitSHA
-        BUILD_DATE=$(date +%Y%m%d-%H%M%S)
-        echo "GIT_COMMIT_VERSION=${BUILD_DATE}-${GIT_COMMIT_SHORT}" >> $GITHUB_ENV
+        # Get the latest version tag (e.g., sc-companion-v1.2.3 -> v1.2.3)
+        # Fetch all tags first to ensure we have them
+        git fetch --tags --force
+
+        # Get latest tag matching sc-*-v* pattern
+        LATEST_TAG=$(git describe --tags --match "sc-*-v*" --abbrev=0 2>/dev/null || echo "")
+
+        if [ -n "$LATEST_TAG" ]; then
+          # Extract version from tag (everything after last dash)
+          VERSION="${LATEST_TAG##*-}"
+          echo "GIT_COMMIT_VERSION=${VERSION}" >> $GITHUB_ENV
+        else
+          # Fallback: if no tags found, use a default version
+          echo "GIT_COMMIT_VERSION=v0.0.0" >> $GITHUB_ENV
+        fi
