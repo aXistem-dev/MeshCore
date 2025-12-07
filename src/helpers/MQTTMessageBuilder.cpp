@@ -23,7 +23,8 @@ int MQTTMessageBuilder::buildStatusMessage(
   int tx_air_secs,
   int rx_air_secs
 ) {
-  DynamicJsonDocument doc(768);  // Increased size to accommodate stats
+  // Use StaticJsonDocument to avoid heap fragmentation (fixed-size stack allocation)
+  StaticJsonDocument<768> doc;  // Increased size to accommodate stats
   JsonObject root = doc.to<JsonObject>();
   
   root["status"] = status;
@@ -86,16 +87,24 @@ int MQTTMessageBuilder::buildPacketMessage(
   char* buffer,
   size_t buffer_size
 ) {
-  // Size-adaptive JSON document: estimate needed size based on raw hex string length
+  // Use StaticJsonDocument with fixed maximum size to avoid heap fragmentation
   // Base JSON overhead ~200 bytes, raw hex can be up to 510 chars (255 bytes packet)
-  // Use minimum needed to reduce memory fragmentation
-  size_t raw_len = raw ? strlen(raw) : 0;
-  size_t doc_size = 256 + raw_len + 128; // Base + raw + overhead, but cap at buffer_size
-  if (doc_size > buffer_size) doc_size = buffer_size;
-  if (doc_size < 512) doc_size = 512;   // Minimum for small packets
-  if (doc_size > 2048) doc_size = 2048; // Maximum cap
-  DynamicJsonDocument doc(doc_size);
+  // Use maximum size (2048) to handle all packet sizes without heap allocation
+  StaticJsonDocument<2048> doc;
   JsonObject root = doc.to<JsonObject>();
+  
+  // Format numeric values as strings to avoid String object allocations
+  char len_str[16];
+  char packet_type_str[16];
+  char payload_len_str[16];
+  char snr_str[16];
+  char rssi_str[16];
+  
+  snprintf(len_str, sizeof(len_str), "%d", len);
+  snprintf(packet_type_str, sizeof(packet_type_str), "%d", packet_type);
+  snprintf(payload_len_str, sizeof(payload_len_str), "%d", payload_len);
+  snprintf(snr_str, sizeof(snr_str), "%.1f", snr);
+  snprintf(rssi_str, sizeof(rssi_str), "%d", rssi);
   
   root["origin"] = origin;
   root["origin_id"] = origin_id;
@@ -104,13 +113,13 @@ int MQTTMessageBuilder::buildPacketMessage(
   root["direction"] = direction;
   root["time"] = time;
   root["date"] = date;
-  root["len"] = String(len);
-  root["packet_type"] = String(packet_type);
+  root["len"] = len_str;
+  root["packet_type"] = packet_type_str;
   root["route"] = route;
-  root["payload_len"] = String(payload_len);
+  root["payload_len"] = payload_len_str;
   root["raw"] = raw;
-  root["SNR"] = String(snr, 1);
-  root["RSSI"] = String(rssi);
+  root["SNR"] = snr_str;
+  root["RSSI"] = rssi_str;
   root["hash"] = hash;
   
   if (path && strlen(path) > 0) {
@@ -129,7 +138,8 @@ int MQTTMessageBuilder::buildRawMessage(
   char* buffer,
   size_t buffer_size
 ) {
-  DynamicJsonDocument doc(512);
+  // Use StaticJsonDocument to avoid heap fragmentation (fixed-size stack allocation)
+  StaticJsonDocument<512> doc;
   JsonObject root = doc.to<JsonObject>();
   
   root["origin"] = origin;

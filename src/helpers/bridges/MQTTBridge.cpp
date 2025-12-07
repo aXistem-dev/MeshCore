@@ -1482,12 +1482,20 @@ void MQTTBridge::maintainAnalyzerConnections() {
   // Check and renew US server token if needed
   if (_analyzer_us_enabled && _analyzer_us_client) {
     // Check if token is expired or will expire soon
-    // If time wasn't synced when token was created, expiration time will be invalid, so renew
-    bool token_needs_renewal = (_token_us_expires_at == 0) || 
-                               !time_synced ||
-                               !(_token_us_expires_at >= 1000000000) || // Expiration time invalid
-                               (time_synced && current_time >= _token_us_expires_at) ||
-                               (time_synced && current_time >= (_token_us_expires_at - RENEWAL_BUFFER));
+    // Only check expiration if time is synced - if time isn't synced, we can't validate expiration
+    // If time wasn't synced when token was created, expiration time will be invalid (< 1000000000), so renew when time syncs
+    bool token_needs_renewal = false;
+    if (!time_synced) {
+      // Time not synced yet - only renew if token is missing (expires_at == 0)
+      // Don't renew if token exists but expiration is invalid - wait for time sync
+      token_needs_renewal = (_token_us_expires_at == 0);
+    } else {
+      // Time is synced - check if token needs renewal
+      token_needs_renewal = (_token_us_expires_at == 0) || 
+                           !(_token_us_expires_at >= 1000000000) || // Expiration time invalid (created before time sync)
+                           (current_time >= _token_us_expires_at) ||
+                           (current_time >= (_token_us_expires_at - RENEWAL_BUFFER));
+    }
     
     // Throttle renewal attempts - don't try more than once per minute to avoid blocking
     bool can_attempt_renewal = (now_millis - _last_token_renewal_attempt_us) >= RENEWAL_THROTTLE_MS;
@@ -1529,8 +1537,14 @@ void MQTTBridge::maintainAnalyzerConnections() {
           0, 86400, _auth_token_us, sizeof(_auth_token_us),
           owner_key, client_version, email)) {
         unsigned long expires_in = 86400; // 24 hours
-        _token_us_expires_at = current_time + expires_in;
-        MQTT_DEBUG_PRINTLN("US token renewed, new expiration: %lu", _token_us_expires_at);
+        // Only set expiration time if time is synced - otherwise set to 0 to indicate it needs to be set later
+        if (time_synced) {
+          _token_us_expires_at = current_time + expires_in;
+          MQTT_DEBUG_PRINTLN("US token renewed, new expiration: %lu", _token_us_expires_at);
+        } else {
+          _token_us_expires_at = 0; // Will be set properly after time sync
+          MQTT_DEBUG_PRINTLN("US token renewed, expiration will be set after time sync");
+        }
         
         // Update client credentials with new token
         _analyzer_us_client->setCredentials(_analyzer_username, _auth_token_us);
@@ -1573,12 +1587,20 @@ void MQTTBridge::maintainAnalyzerConnections() {
   // Check and renew EU server token if needed
   if (_analyzer_eu_enabled && _analyzer_eu_client) {
     // Check if token is expired or will expire soon
-    // If time wasn't synced when token was created, expiration time will be invalid, so renew
-    bool token_needs_renewal = (_token_eu_expires_at == 0) || 
-                               !time_synced ||
-                               !(_token_eu_expires_at >= 1000000000) || // Expiration time invalid
-                               (time_synced && current_time >= _token_eu_expires_at) ||
-                               (time_synced && current_time >= (_token_eu_expires_at - RENEWAL_BUFFER));
+    // Only check expiration if time is synced - if time isn't synced, we can't validate expiration
+    // If time wasn't synced when token was created, expiration time will be invalid (< 1000000000), so renew when time syncs
+    bool token_needs_renewal = false;
+    if (!time_synced) {
+      // Time not synced yet - only renew if token is missing (expires_at == 0)
+      // Don't renew if token exists but expiration is invalid - wait for time sync
+      token_needs_renewal = (_token_eu_expires_at == 0);
+    } else {
+      // Time is synced - check if token needs renewal
+      token_needs_renewal = (_token_eu_expires_at == 0) || 
+                           !(_token_eu_expires_at >= 1000000000) || // Expiration time invalid (created before time sync)
+                           (current_time >= _token_eu_expires_at) ||
+                           (current_time >= (_token_eu_expires_at - RENEWAL_BUFFER));
+    }
     
     // Throttle renewal attempts - don't try more than once per minute to avoid blocking
     bool can_attempt_renewal = (now_millis - _last_token_renewal_attempt_eu) >= RENEWAL_THROTTLE_MS;
@@ -1620,8 +1642,14 @@ void MQTTBridge::maintainAnalyzerConnections() {
           0, 86400, _auth_token_eu, sizeof(_auth_token_eu),
           owner_key, client_version, email)) {
         unsigned long expires_in = 86400; // 24 hours
-        _token_eu_expires_at = current_time + expires_in;
-        MQTT_DEBUG_PRINTLN("EU token renewed, new expiration: %lu", _token_eu_expires_at);
+        // Only set expiration time if time is synced - otherwise set to 0 to indicate it needs to be set later
+        if (time_synced) {
+          _token_eu_expires_at = current_time + expires_in;
+          MQTT_DEBUG_PRINTLN("EU token renewed, new expiration: %lu", _token_eu_expires_at);
+        } else {
+          _token_eu_expires_at = 0; // Will be set properly after time sync
+          MQTT_DEBUG_PRINTLN("EU token renewed, expiration will be set after time sync");
+        }
         
         // Update client credentials with new token
         _analyzer_eu_client->setCredentials(_analyzer_username, _auth_token_eu);
