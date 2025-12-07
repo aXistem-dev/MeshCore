@@ -34,9 +34,10 @@ class SplashScreen : public UIScreen {
   UITask* _task;
   unsigned long dismiss_after;
   char _version_info[24];
+  bool _is_dev_build;
 
 public:
-  SplashScreen(UITask* task) : _task(task) {
+  SplashScreen(UITask* task) : _task(task), _is_dev_build(false) {
     // Official builds: v1.2.3-sc-commithash -> v1.2.3
     // Dev builds: v1.2.3-scdev-commithash -> v1.2.3-dev
     const char *ver = FIRMWARE_VERSION;
@@ -46,6 +47,7 @@ public:
       // Check if it's a dev build (scdev) or official (sc)
       if (strncmp(sc_pos, "-scdev-", 7) == 0) {
         // Dev build: keep version and add -dev
+        _is_dev_build = true;
         int len = sc_pos - ver;
         if (len >= sizeof(_version_info) - 4) len = sizeof(_version_info) - 5;
         memcpy(_version_info, ver, len);
@@ -81,9 +83,9 @@ public:
     int logoWidth = 128;
     display.drawXbm((display.width() - logoWidth) / 2, 3, slunsecore_logo, logoWidth, 13);
 
-    // version info
+    // version info - use smaller font for dev builds
     display.setColor(DisplayDriver::LIGHT);
-    display.setTextSize(2);
+    display.setTextSize(_is_dev_build ? 1 : 2);
     display.drawTextCentered(display.width()/2, 20, _version_info);
 
     // build date
