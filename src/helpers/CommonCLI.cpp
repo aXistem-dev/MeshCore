@@ -39,6 +39,9 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
     loadPrefsInt(fs, "/node_prefs");
     savePrefs(fs);  // save to new filename
     fs->remove("/node_prefs");  // remove old
+  } else {
+    // File doesn't exist - set default bridge settings for fresh installs
+    _prefs->bridge_pkt_src = 1;  // Default to RX (logRx) for new installs
   }
 #ifdef WITH_MQTT_BRIDGE
   // Load MQTT preferences from separate file
