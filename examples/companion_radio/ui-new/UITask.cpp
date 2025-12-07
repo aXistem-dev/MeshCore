@@ -106,27 +106,42 @@ class HomeScreen : public UIScreen {
 
 
   void renderBatteryIndicator(DisplayDriver& display, uint16_t batteryMilliVolts) {
-    // Convert millivolts to percentage
-    const int minMilliVolts = 3000; // Minimum voltage (e.g., 3.0V)
-    const int maxMilliVolts = 4200; // Maximum voltage (e.g., 4.2V)
-    int batteryPercentage = ((batteryMilliVolts - minMilliVolts) * 100) / (maxMilliVolts - minMilliVolts);
-    if (batteryPercentage < 0) batteryPercentage = 0; // Clamp to 0%
-    if (batteryPercentage > 100) batteryPercentage = 100; // Clamp to 100%
-
-    // Display battery percentage as text in top-right corner
+    // Check if charging (USB connected) - voltage >= 4.4V
+    const int chargingThreshold = 4400; // 4.4V in millivolts
+    bool isCharging = batteryMilliVolts >= chargingThreshold;
+    
     char battStr[6];
-    sprintf(battStr, "%d%%", batteryPercentage);
-    int textWidth = display.getTextWidth(battStr);
-    int textX = display.width() - textWidth - 2; // Position near top-right corner
+    int textWidth;
+    int textX;
     int textY = 0;
     
-    // Choose color based on battery level
-    if (batteryPercentage > 50) {
+    if (isCharging) {
+      // Show charging indicator
+      strcpy(battStr, "CHG");
+      textWidth = display.getTextWidth(battStr);
+      textX = display.width() - textWidth - 2; // Position near top-right corner
       display.setColor(DisplayDriver::GREEN);
-    } else if (batteryPercentage > 20) {
-      display.setColor(DisplayDriver::YELLOW);
     } else {
-      display.setColor(DisplayDriver::RED);
+      // Convert millivolts to percentage
+      const int minMilliVolts = 3000; // Minimum voltage (e.g., 3.0V)
+      const int maxMilliVolts = 4200; // Maximum voltage (e.g., 4.2V)
+      int batteryPercentage = ((batteryMilliVolts - minMilliVolts) * 100) / (maxMilliVolts - minMilliVolts);
+      if (batteryPercentage < 0) batteryPercentage = 0; // Clamp to 0%
+      if (batteryPercentage > 100) batteryPercentage = 100; // Clamp to 100%
+
+      // Display battery percentage as text in top-right corner
+      sprintf(battStr, "%d%%", batteryPercentage);
+      textWidth = display.getTextWidth(battStr);
+      textX = display.width() - textWidth - 2; // Position near top-right corner
+      
+      // Choose color based on battery level
+      if (batteryPercentage > 50) {
+        display.setColor(DisplayDriver::GREEN);
+      } else if (batteryPercentage > 20) {
+        display.setColor(DisplayDriver::YELLOW);
+      } else {
+        display.setColor(DisplayDriver::RED);
+      }
     }
     
     display.setCursor(textX, textY);
