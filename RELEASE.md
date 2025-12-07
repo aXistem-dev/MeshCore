@@ -33,7 +33,7 @@ You can manually trigger builds from any branch (typically `dev-slunsecore`) for
 - Perfect for testing builds from `dev-slunsecore` before merging to `slunsecore`
 - Available branches: `dev-slunsecore`, `slunsecore`
 - **Nightly builds from `dev-slunsecore` have `nightly-` prefix in filenames** to distinguish from official releases
-  - Example: `nightly-RAK_4631_companion_radio_usb-sc-v1.2.3-dev-a1b2c3d.bin`
+  - Example: `nightly-RAK_4631_companion_radio_usb-v1.2.3-scdev-a1b2c3d.bin`
 
 ### 3. Tag-Based Releases
 
