@@ -264,9 +264,17 @@ void setup() {
         #endif
         
         // WiFi.begin() is non-blocking - connection happens in background
-        // Check connection status briefly (500ms max) to see if it connects quickly
+        // Wait longer for WiFi to connect (up to 10 seconds) if WiFi is explicitly enabled
+        // This gives WiFi a fair chance to connect before falling back to BLE
         unsigned long wifi_start = millis();
-        while (WiFi.status() != WL_CONNECTED && (millis() - wifi_start) < 500) {
+        // Use longer timeout if WiFi is enabled via prefs OR if compile-time WIFI_SSID is set
+        bool wifi_explicitly_enabled = (prefs && prefs->wifi_enabled) || 
+                                       #ifdef WIFI_SSID
+                                       (strlen(WIFI_SSID) > 0) ||
+                                       #endif
+                                       false;
+        unsigned long wifi_timeout = wifi_explicitly_enabled ? 10000 : 500; // 10s if enabled, 500ms otherwise
+        while (WiFi.status() != WL_CONNECTED && (millis() - wifi_start) < wifi_timeout) {
           delay(50);
         }
         wifi_connected = (WiFi.status() == WL_CONNECTED);
@@ -281,21 +289,51 @@ void setup() {
         // BLE not initialized when WiFi is connected (pin still available via getBLEPin())
       } else {
         // WiFi not connected or no credentials - use BLE
-        g_wifi_sta_connected = false;
-        // Ensure WiFi is fully disabled before initializing BLE
-        if (WiFi.getMode() != WIFI_OFF) {
-          WiFi.disconnect(true);
-          delay(200); // Give time for disconnect
+        // Only disable WiFi if it's explicitly disabled or no credentials
+        bool should_disable_wifi = true;
+        // Check if WiFi should keep trying: either enabled in prefs OR compile-time WIFI_SSID is set
+        bool wifi_should_try = false;
+        if (prefs && prefs->wifi_enabled && strlen(prefs->wifi_ssid) > 0) {
+          wifi_should_try = true;
         }
-        WiFi.mode(WIFI_OFF);
-        delay(500); // Longer delay to ensure WiFi is fully off before BLE init
+        #ifdef WIFI_SSID
+          if (!wifi_should_try && strlen(WIFI_SSID) > 0) {
+            // Compile-time WiFi SSID is set - treat as enabled
+            wifi_should_try = true;
+          }
+        #endif
         
-        // Initialize BLE (this can hang if WiFi isn't fully off)
-        if (pin != 0) {
-          ble_interface.begin(dev_name, pin);
-          serial_interface_ptr = &ble_interface;
+        if (wifi_should_try) {
+          // WiFi is enabled (via prefs or compile-time) but didn't connect yet - keep it trying in background
+          // Note: On ESP32, we can't run BLE and WiFi simultaneously, so we must choose one
+          // If WiFi is enabled, we'll keep trying WiFi and not use BLE
+          // This means if WiFi doesn't connect, the device won't have any interface until WiFi connects
+          should_disable_wifi = false;
+        }
+        
+        if (should_disable_wifi) {
+          g_wifi_sta_connected = false;
+          // Ensure WiFi is fully disabled before initializing BLE
+          if (WiFi.getMode() != WIFI_OFF) {
+            WiFi.disconnect(true);
+            delay(200); // Give time for disconnect
+          }
+          WiFi.mode(WIFI_OFF);
+          delay(500); // Longer delay to ensure WiFi is fully off before BLE init
+          
+          // Initialize BLE (this can hang if WiFi isn't fully off)
+          if (pin != 0) {
+            ble_interface.begin(dev_name, pin);
+            serial_interface_ptr = &ble_interface;
+          } else {
+            // BLE pin not set, fall back to WiFi
+            wifi_interface.begin(TCP_PORT);
+            serial_interface_ptr = &wifi_interface;
+          }
         } else {
-          // BLE pin not set, fall back to WiFi
+          // WiFi is enabled but not connected yet - keep WiFi trying and use WiFi interface
+          // The interface will work once WiFi connects
+          g_wifi_sta_connected = false; // Not connected yet, but trying
           wifi_interface.begin(TCP_PORT);
           serial_interface_ptr = &wifi_interface;
         }
@@ -360,6 +398,38 @@ void setup() {
 }
 
 void loop() {
+  // Periodically check WiFi connection status if WiFi is enabled
+  #if defined(ESP32) && (defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE))
+    static unsigned long last_wifi_check = 0;
+    if (millis() - last_wifi_check > 1000) { // Check every second
+      last_wifi_check = millis();
+      NodePrefs* prefs = the_mesh.getNodePrefs();
+      bool wifi_should_try = false;
+      if (prefs && prefs->wifi_enabled && strlen(prefs->wifi_ssid) > 0) {
+        wifi_should_try = true;
+      }
+      #ifdef WIFI_SSID
+        if (!wifi_should_try && strlen(WIFI_SSID) > 0) {
+          // Compile-time WiFi SSID is set - treat as enabled
+          wifi_should_try = true;
+        }
+      #endif
+      
+      if (wifi_should_try) {
+        // WiFi is enabled - check if it has connected
+        if (WiFi.status() == WL_CONNECTED) {
+          if (!g_wifi_sta_connected) {
+            // WiFi just connected - update status
+            g_wifi_sta_connected = true;
+          }
+        } else {
+          // WiFi not connected yet, but keep trying
+          g_wifi_sta_connected = false;
+        }
+      }
+    }
+  #endif
+  
   the_mesh.loop();
   sensors.loop();
 #ifdef DISPLAY_CLASS

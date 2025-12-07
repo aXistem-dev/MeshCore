@@ -2,7 +2,7 @@
 #include <helpers/TxtDataHelpers.h>
 #include "../MyMesh.h"
 #include "target.h"
-#ifdef WIFI_SSID
+#if defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE)
   #include <WiFi.h>
 #endif
 
@@ -201,11 +201,17 @@ public:
       sprintf(tmp, "MSG: %d", _task->getMsgCount());
       display.drawTextCentered(display.width() / 2, 20, tmp);
 
-      #ifdef WIFI_SSID
-        IPAddress ip = WiFi.localIP();
-        snprintf(tmp, sizeof(tmp), "IP: %d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
-        display.setTextSize(1);
-        display.drawTextCentered(display.width() / 2, 54, tmp); 
+      #if defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE)
+        // Only show IP if WiFi is connected and has a valid IP address
+        if (g_wifi_sta_connected && WiFi.status() == WL_CONNECTED) {
+          IPAddress ip = WiFi.localIP();
+          // Check if IP is valid (not 0.0.0.0)
+          if (ip[0] != 0 || ip[1] != 0 || ip[2] != 0 || ip[3] != 0) {
+            snprintf(tmp, sizeof(tmp), "IP: %d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+            display.setTextSize(1);
+            display.drawTextCentered(display.width() / 2, 54, tmp);
+          }
+        }
       #endif
       if (_task->hasConnection()) {
         display.setColor(DisplayDriver::GREEN);
