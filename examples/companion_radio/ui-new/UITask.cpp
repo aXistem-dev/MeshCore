@@ -33,7 +33,7 @@
 class SplashScreen : public UIScreen {
   UITask* _task;
   unsigned long dismiss_after;
-  char _version_info[12];
+  char _version_info[24];
 
 public:
   SplashScreen(UITask* task) : _task(task) {
@@ -59,10 +59,14 @@ public:
     // version info
     display.setColor(DisplayDriver::LIGHT);
     display.setTextSize(2);
-    display.drawTextCentered(display.width()/2, 22, _version_info);
+    display.drawTextCentered(display.width()/2, 20, _version_info);
 
+    // build date
     display.setTextSize(1);
-    display.drawTextCentered(display.width()/2, 42, FIRMWARE_BUILD_DATE);
+    display.drawTextCentered(display.width()/2, 38, FIRMWARE_BUILD_DATE);
+
+    // "Powered by MeshCore"
+    display.drawTextCentered(display.width()/2, 52, "Powered by MeshCore");
 
     return 1000;
   }
