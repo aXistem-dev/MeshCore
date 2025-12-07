@@ -6,32 +6,34 @@ This document describes how versioning works in Slunsecore, including version st
 
 ## Version String Format
 
-Slunsecore firmware versions are identified with a "sc-" prefix (short for slunsecore) to distinguish them from standard MeshCore builds.
+Slunsecore firmware versions use a simplified format that distinguishes between official and development builds.
 
 ### Format
 
-- **Tag builds**: `sc-v1.2.3` (no commit hash)
-- **Branch builds**: `sc-v1.2.3-dev-a1b2c3d` (version with dev- prefix before commit hash)
+- **Official builds** (tag or `slunsecore` branch): `v1.2.3-sc-commithash`
+- **Dev builds** (`dev-slunsecore` branch): `v1.2.3-scdev-commithash`
 
 ### Components
 
-1. **Prefix**: `sc-` - Identifies this as a Slunsecore build
-2. **Version**: The semantic version (e.g., `v1.2.3`)
-3. **Dev identifier**: For branch builds, `-dev-` prefix before commit hash
-4. **Commit Hash**: Short git commit SHA (7 characters) for traceability (branch builds only)
+1. **Version**: The semantic version (e.g., `v1.2.3`)
+2. **Build identifier**: 
+   - `-sc-` for official builds (tag or `slunsecore` branch)
+   - `-scdev-` for development builds (`dev-slunsecore` branch)
+3. **Commit Hash**: Short git commit SHA (7 characters) for traceability
 
 ### Where Version Appears
 
 The version string is embedded in the firmware binary at compile time and appears in:
 
-- **Boot screen**: Version displayed
-  - Tag builds: `sc-v1.2.3`
-  - Branch builds: `sc-v1.2.3-dev-a1b2c3d`
+- **Boot screen**: Simplified version displayed
+  - Official builds: `v1.2.3` (commit hash stripped)
+  - Dev builds: `v1.2.3-dev` (commit hash stripped, `-dev` suffix added)
+- **Companion firmware app/device info**: Full version with commit hash
+  - Official builds: `v1.2.3-sc-commithash`
+  - Dev builds: `v1.2.3-scdev-commithash`
 - **Serial/BLE "ver" command**: Full version with build date
-  - Tag builds: `sc-v1.2.3 (Build: 15-Jan-2024)`
-  - Branch builds: `sc-v1.2.3-dev-a1b2c3d (Build: 15-Jan-2024)`
-- **Device info packets**: Sent to connected apps
-  - Contains full version string as shown above
+  - Official builds: `v1.2.3-sc-commithash (Build: 15-Jan-2024)`
+  - Dev builds: `v1.2.3-scdev-commithash (Build: 15-Jan-2024)`
 
 ## Filename Convention
 
@@ -43,13 +45,13 @@ Built from `slunsecore` branch (automatic pushes or tag-based releases):
 
 **Format:**
 ```
-{TARGET}-sc-{VERSION}.{ext}
+{TARGET}-{VERSION}-sc-{COMMIT_HASH}.{ext}
 ```
 
 **Examples:**
-- `RAK_4631_companion_radio_usb-sc-v1.2.3.bin`
-- `Heltec_v3_repeater-sc-v1.2.3.uf2`
-- `RAK_4631_room_server-sc-v1.2.3.zip`
+- `RAK_4631_companion_radio_usb-v1.2.3-sc-a1b2c3d.bin`
+- `Heltec_v3_repeater-v1.2.3-sc-a1b2c3d.uf2`
+- `RAK_4631_room_server-v1.2.3-sc-a1b2c3d.zip`
 
 ### Nightly Builds
 
@@ -57,13 +59,13 @@ Built from `dev-slunsecore` branch (manual triggers):
 
 **Format:**
 ```
-nightly-{TARGET}-sc-{VERSION}-dev-{COMMIT_HASH}.{ext}
+nightly-{TARGET}-{VERSION}-scdev-{COMMIT_HASH}.{ext}
 ```
 
 **Examples:**
-- `nightly-RAK_4631_companion_radio_usb-sc-v1.2.3-dev-a1b2c3d.bin`
-- `nightly-Heltec_v3_repeater-sc-v1.2.3-dev-a1b2c3d.uf2`
-- `nightly-RAK_4631_room_server-sc-v1.2.3-dev-a1b2c3d.zip`
+- `nightly-RAK_4631_companion_radio_usb-v1.2.3-scdev-a1b2c3d.bin`
+- `nightly-Heltec_v3_repeater-v1.2.3-scdev-a1b2c3d.uf2`
+- `nightly-RAK_4631_room_server-v1.2.3-scdev-a1b2c3d.zip`
 
 The `nightly-` prefix clearly distinguishes development/nightly builds from official release builds.
 
@@ -100,7 +102,7 @@ sc-{TYPE}-v{VERSION}
 
 1. Tag is created: `sc-companion-v1.2.3`
 2. GitHub Actions extracts version: `v1.2.3` (everything after last dash)
-3. Build script adds prefix: `sc-v1.2.3` (no commit hash for tag builds)
+3. Build script creates version string: `v1.2.3-sc-commithash` (includes commit hash for traceability)
 4. Firmware files are built with version embedded
 
 ## Build Date
@@ -133,8 +135,11 @@ For branch pushes (non-tagged builds), the version is extracted from the latest 
 LATEST_TAG=$(git describe --tags --match "sc-*-v*" --abbrev=0)
 # Extract version: v1.2.3 (everything after last dash)
 GIT_COMMIT_VERSION="${LATEST_TAG##*-}"
-# Build script adds: sc-${VERSION}-dev-${COMMIT_HASH}
-# Example: sc-v1.2.3-dev-a1b2c3d
+# Build script creates version string based on branch:
+# - slunsecore branch: ${VERSION}-sc-${COMMIT_HASH}
+#   Example: v1.2.3-sc-a1b2c3d
+# - dev-slunsecore branch: ${VERSION}-scdev-${COMMIT_HASH}
+#   Example: v1.2.3-scdev-a1b2c3d
 ```
 
 ## Version Storage
@@ -148,7 +153,8 @@ The firmware version is **NOT** stored in device memory (EEPROM/NVS/flash). Inst
 ## Compatibility
 
 - Version format is compatible with MeshCore's version handling
-- The "sc-" prefix is added transparently in the build process
-- Apps and tools that parse versions will see the full string including prefix
-- Version extraction in GitHub Actions is independent of the prefix
+- The build identifier (`-sc-` or `-scdev-`) is added transparently in the build process
+- Apps and tools that parse versions will see the full string including build identifier and commit hash
+- Version extraction in GitHub Actions is independent of the build identifier
 - Branch builds use the latest version tag to ensure consistency with release versions
+- Boot screen displays simplified version for better readability

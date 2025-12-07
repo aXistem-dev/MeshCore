@@ -37,15 +37,40 @@ class SplashScreen : public UIScreen {
 
 public:
   SplashScreen(UITask* task) : _task(task) {
-    // strip off dash and commit hash by changing dash to null terminator
-    // e.g: v1.2.3-abcdef -> v1.2.3
+    // Official builds: v1.2.3-sc-commithash -> v1.2.3
+    // Dev builds: v1.2.3-scdev-commithash -> v1.2.3-dev
     const char *ver = FIRMWARE_VERSION;
-    const char *dash = strchr(ver, '-');
-
-    int len = dash ? dash - ver : strlen(ver);
-    if (len >= sizeof(_version_info)) len = sizeof(_version_info) - 1;
-    memcpy(_version_info, ver, len);
-    _version_info[len] = 0;
+    const char *sc_pos = strstr(ver, "-sc");
+    
+    if (sc_pos) {
+      // Check if it's a dev build (scdev) or official (sc)
+      if (strncmp(sc_pos, "-scdev-", 7) == 0) {
+        // Dev build: keep version and add -dev
+        int len = sc_pos - ver;
+        if (len >= sizeof(_version_info) - 4) len = sizeof(_version_info) - 5;
+        memcpy(_version_info, ver, len);
+        _version_info[len] = 0;
+        strcat(_version_info, "-dev");
+      } else if (strncmp(sc_pos, "-sc-", 4) == 0) {
+        // Official build: just the version
+        int len = sc_pos - ver;
+        if (len >= sizeof(_version_info)) len = sizeof(_version_info) - 1;
+        memcpy(_version_info, ver, len);
+        _version_info[len] = 0;
+      } else {
+        // Fallback: just copy what we have
+        int len = strlen(ver);
+        if (len >= sizeof(_version_info)) len = sizeof(_version_info) - 1;
+        memcpy(_version_info, ver, len);
+        _version_info[len] = 0;
+      }
+    } else {
+      // No -sc found, use as-is
+      int len = strlen(ver);
+      if (len >= sizeof(_version_info)) len = sizeof(_version_info) - 1;
+      memcpy(_version_info, ver, len);
+      _version_info[len] = 0;
+    }
 
     dismiss_after = millis() + BOOT_SCREEN_MILLIS;
   }
