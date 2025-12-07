@@ -28,16 +28,26 @@ void UITask::begin(NodePrefs* node_prefs, const char* build_date, const char* fi
   _node_prefs = node_prefs;
   _display->turnOn();
 
-  // strip off dash and commit hash by changing dash to null terminator
-  // e.g: v1.2.3-abcdef -> v1.2.3
+  // Official builds: v1.2.3-sc-commithash -> v1.2.3
+  // Dev builds: v1.2.3-scdev-commithash -> v1.2.3-dev
   char *version = strdup(firmware_version);
-  char *dash = strchr(version, '-');
-  if(dash){
-    *dash = 0;
+  char *sc_pos = strstr(version, "-sc");
+  
+  if (sc_pos) {
+    // Check if it's a dev build (scdev) or official (sc)
+    if (strncmp(sc_pos, "-scdev-", 7) == 0) {
+      // Dev build: keep version and add -dev
+      *sc_pos = 0;
+      strcat(version, "-dev");
+    } else if (strncmp(sc_pos, "-sc-", 4) == 0) {
+      // Official build: just the version
+      *sc_pos = 0;
+    }
   }
 
-  // v1.2.3 (1 Jan 2025)
+  // v1.2.3 (1 Jan 2025) or v1.2.3-dev (1 Jan 2025)
   sprintf(_version_info, "%s (%s)", version, build_date);
+  free(version);
 }
 
 void UITask::renderCurrScreen() {

@@ -83,10 +83,9 @@ build_firmware() {
     exit 1
   fi
 
-  # set firmware version string with sc (slunsecore) identifier
-  # Check if we're building from a tag (tag builds) or branch (branch builds)
-  # Tag builds: version only, no commit hash (e.g., sc-v1.2.3)
-  # Branch builds: version with dev- prefix before commit hash (e.g., sc-v1.2.3-dev-a1b2c3d)
+  # set firmware version string with new format
+  # Official builds (tag or slunsecore branch): v1.2.3-sc-commithash
+  # Dev builds (dev-slunsecore branch): v1.2.3-scdev-commithash
   
   # Check if current HEAD is a tag
   IS_TAG_BUILD=false
@@ -94,20 +93,17 @@ build_firmware() {
     IS_TAG_BUILD=true
   fi
   
-  if [ "$IS_TAG_BUILD" = true ]; then
-    # Tag build - version only, no commit hash
-    FIRMWARE_VERSION_STRING="sc-${FIRMWARE_VERSION}"
-  else
-    # Branch build - version with dev- prefix before commit hash
-    FIRMWARE_VERSION_STRING="sc-${FIRMWARE_VERSION}-dev-${COMMIT_HASH}"
-  fi
-
   # detect if building from dev-slunsecore branch (nightly build)
   CURRENT_BRANCH="${BUILD_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
+  
   if [ "$CURRENT_BRANCH" = "dev-slunsecore" ]; then
+    # Dev build: v1.2.3-scdev-commithash
+    FIRMWARE_VERSION_STRING="${FIRMWARE_VERSION}-scdev-${COMMIT_HASH}"
     # add nightly prefix to distinguish from official releases
     FIRMWARE_FILENAME="nightly-$1-${FIRMWARE_VERSION_STRING}"
   else
+    # Official build (tag or slunsecore branch): v1.2.3-sc-commithash
+    FIRMWARE_VERSION_STRING="${FIRMWARE_VERSION}-sc-${COMMIT_HASH}"
     # official release build
     FIRMWARE_FILENAME="$1-${FIRMWARE_VERSION_STRING}"
   fi
@@ -129,8 +125,8 @@ build_firmware() {
   fi
 
   # copy .bin, .uf2, and .zip to out folder
-  # Official releases: RAK_4631_Repeater-sc-v1.0.0.uf2
-  # Nightly builds: nightly-RAK_4631_Repeater-sc-v1.0.0-dev-SHA.uf2
+  # Official releases: RAK_4631_Repeater-v1.0.0-sc-commithash.uf2
+  # Nightly builds: nightly-RAK_4631_Repeater-v1.0.0-scdev-commithash.uf2
 
   # copy .bin for esp32 boards
   cp .pio/build/$1/firmware.bin out/${FIRMWARE_FILENAME}.bin 2>/dev/null || true
