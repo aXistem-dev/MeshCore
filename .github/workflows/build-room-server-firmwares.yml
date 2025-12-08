@@ -15,8 +15,6 @@ on:
           - dev-slunsecore
           - slunsecore
   push:
-    branches:
-      - slunsecore
     tags:
       - "sc-room-server-*"
 
