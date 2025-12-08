@@ -427,10 +427,34 @@ void loop() {
         // WiFi is enabled - check if it has connected
         if (WiFi.status() == WL_CONNECTED) {
           if (!g_wifi_sta_connected) {
-            // WiFi just connected - update status and clear timeout
+            // WiFi just connected - switch from BLE to WiFi interface
             g_wifi_sta_connected = true;
             g_wifi_attempt_start = 0; // Clear timeout
             g_wifi_fallback_to_ble = false;
+            
+            // If currently using BLE, switch to WiFi
+            if (serial_interface_ptr == &ble_interface) {
+              // Disable BLE first
+              ble_interface.disable();
+              
+              // Ensure WiFi is in STA mode
+              WiFi.mode(WIFI_STA);
+              
+              // Start WiFi interface
+              wifi_interface.begin(TCP_PORT);
+              serial_interface_ptr = &wifi_interface;
+              
+              // Restart mesh interface with WiFi
+              the_mesh.startInterface(*serial_interface_ptr);
+              
+              // Update UI to use WiFi interface
+              #ifdef DISPLAY_CLASS
+                ui_task.setSerialInterface(serial_interface_ptr);
+              #endif
+            } else if (serial_interface_ptr == &wifi_interface) {
+              // Already using WiFi interface, ensure it's started (begin() is safe to call multiple times)
+              wifi_interface.begin(TCP_PORT);
+            }
           }
         } else {
           // WiFi not connected yet
