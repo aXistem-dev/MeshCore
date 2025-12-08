@@ -424,7 +424,7 @@ void loop() {
       #endif
       
       if (wifi_should_try) {
-        // WiFi is enabled - check if it has connected
+        // WiFi is enabled with valid credentials - check if it has connected
         if (WiFi.status() == WL_CONNECTED) {
           if (!g_wifi_sta_connected) {
             // WiFi just connected - switch from BLE to WiFi interface
@@ -483,8 +483,43 @@ void loop() {
                 ble_interface.begin(dev_name, pin);
                 serial_interface_ptr = &ble_interface;
                 the_mesh.startInterface(*serial_interface_ptr);
+                
+                // Update UI to use BLE interface
+                #ifdef DISPLAY_CLASS
+                  ui_task.setSerialInterface(serial_interface_ptr);
+                #endif
               }
             }
+          }
+        }
+      } else {
+        // WiFi is enabled but has no valid credentials - ensure BLE is initialized
+        // This handles the case where wifi_enabled=1 but SSID is empty/invalid
+        if (serial_interface_ptr == &wifi_interface && !g_wifi_fallback_to_ble) {
+          // We're using WiFi interface but WiFi shouldn't be trying - switch to BLE
+          g_wifi_fallback_to_ble = true;
+          
+          // Disable WiFi
+          if (WiFi.getMode() != WIFI_OFF) {
+            WiFi.disconnect(true);
+            delay(200);
+          }
+          WiFi.mode(WIFI_OFF);
+          delay(500);
+          
+          // Initialize BLE
+          char dev_name[32+16];
+          sprintf(dev_name, "%s%s", BLE_NAME_PREFIX, the_mesh.getNodeName());
+          uint32_t pin = the_mesh.getBLEPin();
+          if (pin != 0) {
+            ble_interface.begin(dev_name, pin);
+            serial_interface_ptr = &ble_interface;
+            the_mesh.startInterface(*serial_interface_ptr);
+            
+            // Update UI to use BLE interface
+            #ifdef DISPLAY_CLASS
+              ui_task.setSerialInterface(serial_interface_ptr);
+            #endif
           }
         }
       }
