@@ -1,6 +1,6 @@
-# Releasing Slunsecore Firmware
+# Releasing SlunseCore Firmware
 
-GitHub Actions is set up to automatically build and release Slunsecore firmware.
+GitHub Actions is set up to automatically build and release SlunseCore firmware.
 
 ## Build Types
 
