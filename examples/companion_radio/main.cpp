@@ -38,6 +38,9 @@ static uint32_t _atoi(const char* sp) {
   #include <WiFi.h>
   #if defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE)
     bool g_wifi_sta_connected = false;  // shared with UI so it can hide the BLE PIN when WiFi is online
+    unsigned long g_wifi_attempt_start = 0;  // Track when WiFi connection attempt started
+    bool g_wifi_fallback_to_ble = false;  // Flag to indicate we should fall back to BLE
+    #define WIFI_CONNECTION_TIMEOUT_MS 60000  // 60 seconds timeout before falling back to BLE
   #endif
   // Runtime interface selection: WiFi preferred, BLE as fallback
   // Both interfaces are created if both compile-time flags are set
@@ -286,6 +289,8 @@ void setup() {
         wifi_interface.begin(TCP_PORT);
         serial_interface_ptr = &wifi_interface;
         g_wifi_sta_connected = true;
+        g_wifi_attempt_start = 0; // Clear timeout - WiFi connected successfully
+        g_wifi_fallback_to_ble = false;
         // BLE not initialized when WiFi is connected (pin still available via getBLEPin())
       } else {
         // WiFi not connected or no credentials - use BLE
@@ -333,7 +338,10 @@ void setup() {
         } else {
           // WiFi is enabled but not connected yet - keep WiFi trying and use WiFi interface
           // The interface will work once WiFi connects
+          // Start timeout timer for fallback to BLE
           g_wifi_sta_connected = false; // Not connected yet, but trying
+          g_wifi_attempt_start = millis(); // Track when we started trying
+          g_wifi_fallback_to_ble = false;
           wifi_interface.begin(TCP_PORT);
           serial_interface_ptr = &wifi_interface;
         }
@@ -399,7 +407,7 @@ void setup() {
 
 void loop() {
   // Periodically check WiFi connection status if WiFi is enabled
-  #if defined(ESP32) && (defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE))
+  #if defined(ESP32) && (defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE)) && defined(BLE_PIN_CODE)
     static unsigned long last_wifi_check = 0;
     if (millis() - last_wifi_check > 1000) { // Check every second
       last_wifi_check = millis();
@@ -419,12 +427,41 @@ void loop() {
         // WiFi is enabled - check if it has connected
         if (WiFi.status() == WL_CONNECTED) {
           if (!g_wifi_sta_connected) {
-            // WiFi just connected - update status
+            // WiFi just connected - update status and clear timeout
             g_wifi_sta_connected = true;
+            g_wifi_attempt_start = 0; // Clear timeout
+            g_wifi_fallback_to_ble = false;
           }
         } else {
-          // WiFi not connected yet, but keep trying
+          // WiFi not connected yet
           g_wifi_sta_connected = false;
+          
+          // Check if timeout has been exceeded
+          if (g_wifi_attempt_start > 0 && 
+              (millis() - g_wifi_attempt_start) > WIFI_CONNECTION_TIMEOUT_MS) {
+            // WiFi connection timeout exceeded - fall back to BLE
+            if (!g_wifi_fallback_to_ble && serial_interface_ptr == &wifi_interface) {
+              g_wifi_fallback_to_ble = true;
+              
+              // Disable WiFi
+              if (WiFi.getMode() != WIFI_OFF) {
+                WiFi.disconnect(true);
+                delay(200);
+              }
+              WiFi.mode(WIFI_OFF);
+              delay(500); // Ensure WiFi is fully off before BLE init
+              
+              // Initialize BLE
+              char dev_name[32+16];
+              sprintf(dev_name, "%s%s", BLE_NAME_PREFIX, the_mesh.getNodeName());
+              uint32_t pin = the_mesh.getBLEPin();
+              if (pin != 0) {
+                ble_interface.begin(dev_name, pin);
+                serial_interface_ptr = &ble_interface;
+                the_mesh.startInterface(*serial_interface_ptr);
+              }
+            }
+          }
         }
       }
     }
