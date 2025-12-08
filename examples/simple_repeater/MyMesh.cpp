@@ -716,10 +716,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.advert_loc_policy = ADVERT_LOC_PREFS;
 
   _prefs.adc_multiplier = 0.0f; // 0.0f means use default board multiplier
-  
-  // WiFi defaults
-  StrHelper::strncpy(_prefs.wifi_ssid, "", sizeof(_prefs.wifi_ssid));
-  StrHelper::strncpy(_prefs.wifi_password, "", sizeof(_prefs.wifi_password));
 }
 
 void MyMesh::begin(FILESYSTEM *fs) {

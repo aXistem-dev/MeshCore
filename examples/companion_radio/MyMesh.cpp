@@ -754,10 +754,10 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _prefs.gps_interval = 0;      // No automatic GPS updates by default
   //_prefs.rx_delay_base = 10.0f;  enable once new algo fixed
   
-  // WiFi defaults (empty strings, disabled)
+  // WiFi defaults (empty strings, Auto mode)
   memset(_prefs.wifi_ssid, 0, sizeof(_prefs.wifi_ssid));
   memset(_prefs.wifi_password, 0, sizeof(_prefs.wifi_password));
-  _prefs.wifi_enabled = 0;
+  _prefs.interface_mode = 0;  // Default to Auto (0=Auto, 1=BLE only, 2=WiFi only, 3=USB Serial)
 }
 
 void MyMesh::begin(bool has_display) {
@@ -1314,29 +1314,27 @@ void MyMesh::handleCmdFrame(size_t len) {
   } else if (cmd_frame[0] == CMD_SET_WIFI_ENABLED && cmd_frame[1] == 5 && len >= 3) {
     // Two-byte command: CMD_SET_WIFI_ENABLED (44, 5)
     // Format: [44, 5, enabled] where enabled is 0 (off) or 1 (on)
+    // Note: This now sets interface_mode to Auto and controls WiFi via SSID presence
+    // For backward compatibility, we still accept this command but it's deprecated
     uint8_t enabled = cmd_frame[2];
     if (enabled <= 1) {
-      _prefs.wifi_enabled = enabled;
-      savePrefs();
+      // Set interface_mode to Auto (0) - WiFi will be tried if SSID is configured
+      _prefs.interface_mode = 0;
       
-      #ifdef ESP32
-        if (enabled) {
-          // Enable WiFi - connect if credentials are set
-          if (strlen(_prefs.wifi_ssid) > 0) {
-            WiFi.mode(WIFI_STA);
-            WiFi.begin(_prefs.wifi_ssid, _prefs.wifi_password);
-          } else {
-            // No credentials, just enable WiFi mode
-            WiFi.mode(WIFI_STA);
-          }
-        } else {
-          // Disable WiFi
+      // If disabling WiFi, clear SSID. If enabling, ensure interface_mode allows it.
+      if (!enabled) {
+        // Disable WiFi by clearing SSID (in Auto mode, WiFi is only tried if SSID exists)
+        memset(_prefs.wifi_ssid, 0, sizeof(_prefs.wifi_ssid));
+        #ifdef ESP32
+          // Also disconnect WiFi immediately
           WiFi.disconnect();
-          WiFi.mode(WIFI_AP_STA);  // Set to AP+STA mode then disable
-          WiFi.disconnect(true);    // Disconnect and disable station mode
-        }
-      #endif
+          WiFi.mode(WIFI_OFF);
+        #endif
+      }
+      // If enabling (enabled == 1), WiFi will be tried on next reboot if SSID is set
+      // The caller should set SSID separately using CMD_SET_WIFI_SSID
       
+      savePrefs();
       writeOKFrame();
     } else {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);

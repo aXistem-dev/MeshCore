@@ -1,36 +1,12 @@
 # WiFi Configuration
 
-This document describes the WiFi configuration capabilities available in MeshCore firmware, including runtime configuration of WiFi credentials and network settings.
+This document describes the WiFi configuration capabilities available in MeshCore companion radio firmware, including runtime configuration of WiFi credentials and network settings.
 
 ## Overview
 
-MeshCore supports runtime configuration of WiFi settings through both CLI commands (for repeaters and room servers) and binary protocol commands (for companion radio devices). WiFi can be configured without requiring firmware recompilation or device reboot in most cases.
+MeshCore companion radio devices support runtime configuration of WiFi settings through binary protocol commands. WiFi can be configured without requiring firmware recompilation or device reboot in most cases.
 
-## CLI Commands (Repeaters and Room Servers)
-
-WiFi settings are stored in the main preferences file and can be configured via serial CLI commands.
-
-### Get WiFi Settings
-
-```
-get wifi.ssid
-get wifi.pwd
-```
-
-Returns the currently configured WiFi SSID or password.
-
-### Set WiFi Settings
-
-```
-set wifi.ssid "My Network Name"
-set wifi.pwd "My Password"
-```
-
-Sets the WiFi SSID and password. Quotes are automatically stripped from multi-word SSIDs and passwords. Settings are saved immediately and persist across reboots.
-
-**Note:** WiFi settings take effect on the next reboot. The device must be restarted for WiFi to connect using the new credentials.
-
-## Binary Protocol Commands (Companion Radio)
+## Binary Protocol Commands
 
 Companion radio devices use a binary protocol for WiFi configuration. All WiFi commands use command code 44 with subcommands in the second byte.
 
@@ -623,11 +599,7 @@ WiFi will only connect automatically if:
 
 ## Data Persistence
 
-WiFi settings are stored in the device's preferences file:
-- **Repeaters/Room Servers:** Stored in `/com_prefs` (main preferences file)
-- **Companion Radio:** Stored in `/new_prefs` (NodePrefs structure)
-
-Settings persist across reboots and power cycles.
+WiFi settings are stored in the companion radio's preferences file (`/new_prefs`, NodePrefs structure). Settings persist across reboots and power cycles.
 
 ## Platform Support
 
@@ -655,6 +627,5 @@ When a command fails, the response is `[RESP_CODE_ERR (1), error_code]`:
 - WiFi SSID and password fields support up to 31 and 63 characters respectively
 - Static IP configuration overrides DHCP settings
 - WiFi must be enabled (`wifi_enabled = 1`) for automatic connection on startup
-- For repeaters and room servers, WiFi settings require a reboot to take effect
 - Companion radio devices apply WiFi settings immediately when using the enable command
 - IP addresses in binary frames use network byte order (big-endian), while other multi-byte integers use little-endian

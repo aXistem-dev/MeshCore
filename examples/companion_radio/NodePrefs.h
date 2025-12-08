@@ -29,5 +29,5 @@ struct NodePrefs {  // persisted to file
   uint32_t gps_interval;     // GPS read interval in seconds
   char wifi_ssid[32];       // WiFi SSID
   char wifi_password[64];  // WiFi password
-  uint8_t wifi_enabled;    // WiFi enabled flag (0=off, 1=on)
+  uint8_t interface_mode;  // Interface preference (primary control): 0=Auto (tries WiFi if SSID set), 1=BLE only, 2=WiFi only, 3=USB Serial (WiFi/BLE disabled, saves power)
 };

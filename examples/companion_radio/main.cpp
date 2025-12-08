@@ -38,11 +38,11 @@ static uint32_t _atoi(const char* sp) {
   #include <WiFi.h>
   #if defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE)
     bool g_wifi_sta_connected = false;  // shared with UI so it can hide the BLE PIN when WiFi is online
-    unsigned long g_wifi_attempt_start = 0;  // Track when WiFi connection attempt started
+    unsigned long g_wifi_attempt_start = 0;  // Track when WiFi connection attempt started (shared with UI)
     bool g_wifi_fallback_to_ble = false;  // Flag to indicate we should fall back to BLE
-    #define WIFI_CONNECTION_TIMEOUT_MS 60000  // 60 seconds timeout before falling back to BLE
+    #define WIFI_CONNECTION_TIMEOUT_MS 15000  // 15 seconds timeout before falling back to BLE
   #endif
-  // Runtime interface selection: WiFi preferred, BLE as fallback
+  // Runtime interface selection: WiFi preferred, BLE as fallback, USB serial as power-saving option
   // Both interfaces are created if both compile-time flags are set
   BaseSerialInterface* serial_interface_ptr = nullptr;
   #if defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE)
@@ -56,15 +56,16 @@ static uint32_t _atoi(const char* sp) {
     #include <helpers/esp32/SerialBLEInterface.h>
     SerialBLEInterface ble_interface;
   #endif
+  // USB serial interface - used when interface_mode is "Off" (3) to save power (WiFi/BLE disabled)
+  #if defined(SERIAL_RX)
+    #include <helpers/ArduinoSerialInterface.h>
+    ArduinoSerialInterface usb_serial_interface;
+    HardwareSerial companion_serial(1);
+  #else
+    #include <helpers/ArduinoSerialInterface.h>
+    ArduinoSerialInterface usb_serial_interface;
+  #endif
   #if !defined(WIFI_SSID) && !defined(WITH_WIFI_INTERFACE) && !defined(BLE_PIN_CODE)
-    #if defined(SERIAL_RX)
-      #include <helpers/ArduinoSerialInterface.h>
-      ArduinoSerialInterface serial_interface;
-      HardwareSerial companion_serial(1);
-    #else
-      #include <helpers/ArduinoSerialInterface.h>
-      ArduinoSerialInterface serial_interface;
-    #endif
     #define USE_SERIAL_INTERFACE
   #endif
 #elif defined(RP2040_PLATFORM)
@@ -235,16 +236,35 @@ void setup() {
   // Try runtime prefs first (new for repeaters/room servers and companion_radio)
   NodePrefs* prefs = the_mesh.getNodePrefs();
   #if defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE)
-    // Check if we should try WiFi
-    if (prefs && prefs->wifi_enabled && strlen(prefs->wifi_ssid) > 0) {
-      use_wifi = true;
-    }
-    // Fall back to compile-time flags (legacy support)
-    #ifdef WIFI_SSID
-      if (!use_wifi && strlen(WIFI_SSID) > 0) {
+    // Check interface_mode preference: 0=Auto, 1=BLE only, 2=WiFi only, 3=Off (both disabled)
+    // interface_mode is the primary control; wifi_enabled is derived/synced from it
+    uint8_t interface_mode = (prefs && prefs->interface_mode <= 3) ? prefs->interface_mode : 0;
+    
+    if (interface_mode == 3) {
+      // Off mode - disable both WiFi and BLE to save power
+      use_wifi = false;
+      // Will use null_interface below
+    } else if (interface_mode == 1) {
+      // BLE only - skip WiFi (wifi_enabled should be 0, but we check interface_mode first)
+      use_wifi = false;
+    } else if (interface_mode == 2) {
+      // WiFi only - force WiFi if credentials exist (wifi_enabled should be 1)
+      if (prefs && strlen(prefs->wifi_ssid) > 0) {
         use_wifi = true;
       }
-    #endif
+    } else {
+      // Auto mode (0) - try WiFi if SSID is configured
+      // Check if we should try WiFi
+      if (prefs && strlen(prefs->wifi_ssid) > 0) {
+        use_wifi = true;
+      }
+      // Fall back to compile-time flags (legacy support)
+      #ifdef WIFI_SSID
+        if (!use_wifi && strlen(WIFI_SSID) > 0) {
+          use_wifi = true;
+        }
+      #endif
+    }
     
     // Choose interface: Try WiFi first if credentials exist, otherwise use BLE
     #if defined(BLE_PIN_CODE)
@@ -257,7 +277,7 @@ void setup() {
       if (use_wifi) {
         // Try WiFi connection
         WiFi.mode(WIFI_STA);
-        if (prefs && prefs->wifi_enabled && strlen(prefs->wifi_ssid) > 0) {
+        if (prefs && strlen(prefs->wifi_ssid) > 0) {
           WiFi.begin(prefs->wifi_ssid, prefs->wifi_password);
         }
         #ifdef WIFI_SSID
@@ -270,8 +290,8 @@ void setup() {
         // Wait longer for WiFi to connect (up to 10 seconds) if WiFi is explicitly enabled
         // This gives WiFi a fair chance to connect before falling back to BLE
         unsigned long wifi_start = millis();
-        // Use longer timeout if WiFi is enabled via prefs OR if compile-time WIFI_SSID is set
-        bool wifi_explicitly_enabled = (prefs && prefs->wifi_enabled) || 
+        // Use longer timeout if WiFi SSID is configured via prefs OR if compile-time WIFI_SSID is set
+        bool wifi_explicitly_enabled = (prefs && strlen(prefs->wifi_ssid) > 0) || 
                                        #ifdef WIFI_SSID
                                        (strlen(WIFI_SSID) > 0) ||
                                        #endif
@@ -294,29 +314,66 @@ void setup() {
         // BLE not initialized when WiFi is connected (pin still available via getBLEPin())
       } else {
         // WiFi not connected or no credentials - use BLE
-        // Only disable WiFi if it's explicitly disabled or no credentials
+        // Check interface_mode preference
+        uint8_t interface_mode = (prefs && prefs->interface_mode <= 2) ? prefs->interface_mode : 0;
+        
         bool should_disable_wifi = true;
-        // Check if WiFi should keep trying: either enabled in prefs OR compile-time WIFI_SSID is set
         bool wifi_should_try = false;
-        if (prefs && prefs->wifi_enabled && strlen(prefs->wifi_ssid) > 0) {
-          wifi_should_try = true;
-        }
-        #ifdef WIFI_SSID
-          if (!wifi_should_try && strlen(WIFI_SSID) > 0) {
-            // Compile-time WiFi SSID is set - treat as enabled
+        
+        if (interface_mode == 3) {
+          // Off mode - disable WiFi and BLE
+          should_disable_wifi = true;
+        } else if (interface_mode == 1) {
+          // BLE only mode - always disable WiFi
+          should_disable_wifi = true;
+        } else if (interface_mode == 2) {
+          // WiFi only mode - keep trying WiFi even if not connected
+          if (prefs && strlen(prefs->wifi_ssid) > 0) {
+            wifi_should_try = true;
+            should_disable_wifi = false;
+          }
+        } else {
+          // Auto mode (0) - try WiFi if SSID is configured
+          // Check if WiFi should keep trying: either SSID in prefs OR compile-time WIFI_SSID is set
+          if (prefs && strlen(prefs->wifi_ssid) > 0) {
             wifi_should_try = true;
           }
-        #endif
-        
-        if (wifi_should_try) {
-          // WiFi is enabled (via prefs or compile-time) but didn't connect yet - keep it trying in background
-          // Note: On ESP32, we can't run BLE and WiFi simultaneously, so we must choose one
-          // If WiFi is enabled, we'll keep trying WiFi and not use BLE
-          // This means if WiFi doesn't connect, the device won't have any interface until WiFi connects
-          should_disable_wifi = false;
+          #ifdef WIFI_SSID
+            if (!wifi_should_try && strlen(WIFI_SSID) > 0) {
+              // Compile-time WiFi SSID is set - treat as enabled
+              wifi_should_try = true;
+            }
+          #endif
+          
+          if (wifi_should_try) {
+            // WiFi is enabled (via prefs or compile-time) but didn't connect yet - keep it trying in background
+            // Note: On ESP32, we can't run BLE and WiFi simultaneously, so we must choose one
+            // If WiFi is enabled, we'll keep trying WiFi and not use BLE
+            // This means if WiFi doesn't connect, the device won't have any interface until WiFi connects
+            should_disable_wifi = false;
+          }
         }
         
-        if (should_disable_wifi) {
+        if (interface_mode == 3) {
+          // Off mode - disable both WiFi and BLE to save power, use USB serial instead
+          g_wifi_sta_connected = false;
+          // Ensure WiFi is fully disabled
+          if (WiFi.getMode() != WIFI_OFF) {
+            WiFi.disconnect(true);
+            delay(200);
+          }
+          WiFi.mode(WIFI_OFF);
+          delay(500);
+          // Use USB serial interface (passive, no power consumption when not connected)
+          #if defined(SERIAL_RX)
+            companion_serial.setPins(SERIAL_RX, SERIAL_TX);
+            companion_serial.begin(115200);
+            usb_serial_interface.begin(companion_serial);
+          #else
+            usb_serial_interface.begin(Serial);
+          #endif
+          serial_interface_ptr = &usb_serial_interface;
+        } else if (should_disable_wifi) {
           g_wifi_sta_connected = false;
           // Ensure WiFi is fully disabled before initializing BLE
           if (WiFi.getMode() != WIFI_OFF) {
@@ -337,6 +394,16 @@ void setup() {
           }
         } else {
           // WiFi is enabled but not connected yet - keep WiFi trying and use WiFi interface
+          // Ensure WiFi.begin() is called to start connection attempt
+          WiFi.mode(WIFI_STA);
+          if (prefs && strlen(prefs->wifi_ssid) > 0) {
+            WiFi.begin(prefs->wifi_ssid, prefs->wifi_password);
+          }
+          #ifdef WIFI_SSID
+            else if (strlen(WIFI_SSID) > 0) {
+              WiFi.begin(WIFI_SSID, WIFI_PWD);
+            }
+          #endif
           // The interface will work once WiFi connects
           // Start timeout timer for fallback to BLE
           g_wifi_sta_connected = false; // Not connected yet, but trying
@@ -350,7 +417,7 @@ void setup() {
       // No BLE available, try WiFi if credentials exist
       if (use_wifi) {
         WiFi.mode(WIFI_STA);
-        if (prefs && prefs->wifi_enabled && strlen(prefs->wifi_ssid) > 0) {
+        if (prefs && strlen(prefs->wifi_ssid) > 0) {
           WiFi.begin(prefs->wifi_ssid, prefs->wifi_password);
         }
         #ifdef WIFI_SSID
@@ -365,11 +432,26 @@ void setup() {
       serial_interface_ptr = &wifi_interface;
     #endif
   #elif defined(BLE_PIN_CODE)
-    // No WiFi interface, use BLE
-    char dev_name[32+16];
-    sprintf(dev_name, "%s%s", BLE_NAME_PREFIX, the_mesh.getNodeName());
-    ble_interface.begin(dev_name, the_mesh.getBLEPin());
-    serial_interface_ptr = &ble_interface;
+    // No WiFi interface, check if we should use BLE or USB serial (Off mode)
+    NodePrefs* prefs = the_mesh.getNodePrefs();
+    uint8_t interface_mode = (prefs && prefs->interface_mode <= 3) ? prefs->interface_mode : 0;
+    if (interface_mode == 3) {
+      // Off mode - disable BLE to save power, use USB serial instead
+      #if defined(SERIAL_RX)
+        companion_serial.setPins(SERIAL_RX, SERIAL_TX);
+        companion_serial.begin(115200);
+        usb_serial_interface.begin(companion_serial);
+      #else
+        usb_serial_interface.begin(Serial);
+      #endif
+      serial_interface_ptr = &usb_serial_interface;
+    } else {
+      // Use BLE
+      char dev_name[32+16];
+      sprintf(dev_name, "%s%s", BLE_NAME_PREFIX, the_mesh.getNodeName());
+      ble_interface.begin(dev_name, the_mesh.getBLEPin());
+      serial_interface_ptr = &ble_interface;
+    }
   #elif defined(USE_SERIAL_INTERFACE)
     #if defined(SERIAL_RX)
       companion_serial.setPins(SERIAL_RX, SERIAL_TX);
@@ -412,16 +494,31 @@ void loop() {
     if (millis() - last_wifi_check > 1000) { // Check every second
       last_wifi_check = millis();
       NodePrefs* prefs = the_mesh.getNodePrefs();
+      // Check if WiFi should keep trying (based on interface_mode - primary control)
+      uint8_t interface_mode = (prefs && prefs->interface_mode <= 3) ? prefs->interface_mode : 0;
       bool wifi_should_try = false;
-      if (prefs && prefs->wifi_enabled && strlen(prefs->wifi_ssid) > 0) {
-        wifi_should_try = true;
-      }
-      #ifdef WIFI_SSID
-        if (!wifi_should_try && strlen(WIFI_SSID) > 0) {
-          // Compile-time WiFi SSID is set - treat as enabled
+      
+      if (interface_mode == 3) {
+        // Off mode - don't try WiFi
+        wifi_should_try = false;
+      } else if (interface_mode == 2) {
+        // WiFi only mode - keep trying if credentials exist
+        if (prefs && strlen(prefs->wifi_ssid) > 0) {
           wifi_should_try = true;
         }
-      #endif
+      } else if (interface_mode == 0) {
+        // Auto mode - try WiFi if SSID is configured
+        if (prefs && strlen(prefs->wifi_ssid) > 0) {
+          wifi_should_try = true;
+        }
+        #ifdef WIFI_SSID
+          if (!wifi_should_try && strlen(WIFI_SSID) > 0) {
+            // Compile-time WiFi SSID is set - treat as enabled
+            wifi_should_try = true;
+          }
+        #endif
+      }
+      // interface_mode == 1 (BLE only): wifi_should_try stays false
       
       if (wifi_should_try) {
         // WiFi is enabled with valid credentials - check if it has connected
@@ -461,9 +558,11 @@ void loop() {
           g_wifi_sta_connected = false;
           
           // Check if timeout has been exceeded
+          uint8_t interface_mode = (prefs && prefs->interface_mode <= 3) ? prefs->interface_mode : 0;
           if (g_wifi_attempt_start > 0 && 
-              (millis() - g_wifi_attempt_start) > WIFI_CONNECTION_TIMEOUT_MS) {
-            // WiFi connection timeout exceeded - fall back to BLE
+              (millis() - g_wifi_attempt_start) > WIFI_CONNECTION_TIMEOUT_MS &&
+              interface_mode != 2 && interface_mode != 3) {  // Don't fall back if WiFi only or Off mode
+            // WiFi connection timeout exceeded - fall back to BLE (unless WiFi only mode)
             if (!g_wifi_fallback_to_ble && serial_interface_ptr == &wifi_interface) {
               g_wifi_fallback_to_ble = true;
               
@@ -493,9 +592,36 @@ void loop() {
           }
         }
       } else {
-        // WiFi is enabled but has no valid credentials - ensure BLE is initialized
-        // This handles the case where wifi_enabled=1 but SSID is empty/invalid
-        if (serial_interface_ptr == &wifi_interface && !g_wifi_fallback_to_ble) {
+        // WiFi is enabled but has no valid credentials - check interface_mode
+        uint8_t interface_mode = (prefs && prefs->interface_mode <= 3) ? prefs->interface_mode : 0;
+        
+        if (interface_mode == 3) {
+          // Off mode - disable WiFi and use USB serial
+          if (serial_interface_ptr == &wifi_interface && !g_wifi_fallback_to_ble) {
+            g_wifi_fallback_to_ble = true;
+            // Disable WiFi
+            if (WiFi.getMode() != WIFI_OFF) {
+              WiFi.disconnect(true);
+              delay(200);
+            }
+            WiFi.mode(WIFI_OFF);
+            delay(500);
+            // Use USB serial interface
+            #if defined(SERIAL_RX)
+              companion_serial.setPins(SERIAL_RX, SERIAL_TX);
+              companion_serial.begin(115200);
+              usb_serial_interface.begin(companion_serial);
+            #else
+              usb_serial_interface.begin(Serial);
+            #endif
+            serial_interface_ptr = &usb_serial_interface;
+            the_mesh.startInterface(*serial_interface_ptr);
+            #ifdef DISPLAY_CLASS
+              ui_task.setSerialInterface(serial_interface_ptr);
+            #endif
+          }
+        } else if (interface_mode != 2 && serial_interface_ptr == &wifi_interface && !g_wifi_fallback_to_ble) {
+          // Only switch to BLE if not in WiFi only or Off mode
           // We're using WiFi interface but WiFi shouldn't be trying - switch to BLE
           g_wifi_fallback_to_ble = true;
           

@@ -8,8 +8,11 @@
 
 #if defined(ESP32) && (defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE))
 extern bool g_wifi_sta_connected;
+extern unsigned long g_wifi_attempt_start;
+#define WIFI_CONNECTION_TIMEOUT_MS 15000  // Must match main.cpp
 #else
 static const bool g_wifi_sta_connected = false;
+static const unsigned long g_wifi_attempt_start = 0;
 #endif
 
 #ifndef AUTO_OFF_MILLIS
@@ -222,15 +225,34 @@ public:
         display.setTextSize(1);
         display.drawTextCentered(display.width() / 2, 43, "< WiFi Ready >");
       } else {
-        // Show BLE pin if available (regardless of which interface is active)
-        uint32_t ble_pin = the_mesh.getBLEPin();
-        if (ble_pin != 0) {
-          display.setColor(DisplayDriver::RED);
-          display.setTextSize(2);
-          sprintf(tmp, "Pin:%d", ble_pin);
-          display.drawTextCentered(display.width() / 2, 43, tmp);
-        }
-        // If no connection and no BLE pin, nothing is displayed (blank area)
+        // Check if WiFi is attempting to connect
+        #if defined(ESP32) && (defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE))
+          bool wifi_connecting = false;
+          if (g_wifi_attempt_start > 0 && 
+              (millis() - g_wifi_attempt_start) < WIFI_CONNECTION_TIMEOUT_MS &&
+              WiFi.status() != WL_CONNECTED) {
+            // WiFi connection attempt is in progress
+            wifi_connecting = true;
+          }
+          
+          if (wifi_connecting) {
+            display.setColor(DisplayDriver::YELLOW);
+            display.setTextSize(1);
+            display.drawTextCentered(display.width() / 2, 43, "< WiFi Connecting >");
+          } else {
+        #endif
+            // Show BLE pin if available (regardless of which interface is active)
+            uint32_t ble_pin = the_mesh.getBLEPin();
+            if (ble_pin != 0) {
+              display.setColor(DisplayDriver::RED);
+              display.setTextSize(2);
+              sprintf(tmp, "Pin:%d", ble_pin);
+              display.drawTextCentered(display.width() / 2, 43, tmp);
+            }
+            // If no connection and no BLE pin, nothing is displayed (blank area)
+        #if defined(ESP32) && (defined(WIFI_SSID) || defined(WITH_WIFI_INTERFACE))
+          }
+        #endif
       }
     } else if (_page == HomePage::RECENT) {
       the_mesh.getRecentlyHeard(recent, UI_RECENT_LIST_SIZE);
@@ -278,11 +300,22 @@ public:
       display.print(tmp);
     } else if (_page == HomePage::BLUETOOTH) {
       display.setColor(DisplayDriver::GREEN);
-      display.drawXbm((display.width() - 32) / 2, 18,
-          _task->isSerialEnabled() ? bluetooth_on : bluetooth_off,
-          32, 32);
+      // Show icon based on interface mode
+      uint8_t mode = _node_prefs->interface_mode;
+      if (mode == 1) {  // BLE only
+        display.drawXbm((display.width() - 32) / 2, 18, bluetooth_on, 32, 32);
+      } else if (mode == 2) {  // WiFi only
+        display.drawXbm((display.width() - 32) / 2, 18, wifi_icon, 32, 32);
+      } else if (mode == 3) {  // USB Serial
+        display.drawXbm((display.width() - 32) / 2, 18, usb_icon, 32, 32);
+      } else {  // Auto (mode == 0)
+        display.drawXbm((display.width() - 32) / 2, 18, auto_icon, 32, 32);
+      }
       display.setTextSize(1);
-      display.drawTextCentered(display.width() / 2, 64 - 11, "toggle: " PRESS_LABEL);
+      // Show current mode
+      const char* mode_text = (mode == 1) ? "BLE" : (mode == 2) ? "WiFi" : (mode == 3) ? "USB" : "Auto";
+      display.drawTextCentered(display.width() / 2, 64 - 11, mode_text);
+      display.drawTextCentered(display.width() / 2, 64 - 22, "toggle: " PRESS_LABEL);
     } else if (_page == HomePage::ADVERT) {
       display.setColor(DisplayDriver::GREEN);
       display.drawXbm((display.width() - 32) / 2, 18, advert_icon, 32, 32);
@@ -424,11 +457,24 @@ public:
       return true;
     }
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
-      if (_task->isSerialEnabled()) {  // toggle Bluetooth on/off
-        _task->disableSerial();
-      } else {
-        _task->enableSerial();
-      }
+      // Four-way toggle: Auto (0) -> BLE only (1) -> WiFi only (2) -> USB Serial (3) -> Auto (0)
+      uint8_t mode = _node_prefs->interface_mode;
+      mode = (mode + 1) % 4;  // Cycle: 0->1->2->3->0
+      _node_prefs->interface_mode = mode;
+      
+      // Note: wifi_enabled is no longer used - interface_mode is the primary control
+      // In Auto mode, WiFi is tried if wifi_ssid has content
+      
+      the_mesh.savePrefs();
+      
+      // Show feedback
+      const char* mode_text = (mode == 1) ? "BLE" : (mode == 2) ? "WiFi" : (mode == 3) ? "USB" : "Auto";
+      char alert[32];
+      snprintf(alert, sizeof(alert), "Interface: %s", mode_text);
+      _task->showAlert(alert, 1000);
+      _task->notify(UIEventType::ack);
+      
+      // Note: Interface switching will take effect on next reboot
       return true;
     }
     if (c == KEY_ENTER && _page == HomePage::ADVERT) {

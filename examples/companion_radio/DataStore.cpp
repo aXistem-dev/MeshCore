@@ -228,16 +228,17 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& no
       if (file.available() >= sizeof(_prefs.wifi_ssid) + sizeof(_prefs.wifi_password)) {
         file.read((uint8_t *)&_prefs.wifi_ssid, sizeof(_prefs.wifi_ssid));                   // 93
         file.read((uint8_t *)&_prefs.wifi_password, sizeof(_prefs.wifi_password));           // 125
-        if (file.available() >= sizeof(_prefs.wifi_enabled)) {
-          file.read((uint8_t *)&_prefs.wifi_enabled, sizeof(_prefs.wifi_enabled));           // 189
+        if (file.available() >= sizeof(_prefs.interface_mode)) {
+          file.read((uint8_t *)&_prefs.interface_mode, sizeof(_prefs.interface_mode));       // 189
         } else {
-          _prefs.wifi_enabled = 0;  // Old prefs file, default to disabled
+          // Old prefs file without interface_mode - default to Auto
+          _prefs.interface_mode = 0;
         }
       } else {
         // Old prefs file, initialize WiFi fields to empty
         memset(_prefs.wifi_ssid, 0, sizeof(_prefs.wifi_ssid));
         memset(_prefs.wifi_password, 0, sizeof(_prefs.wifi_password));
-        _prefs.wifi_enabled = 0;
+        _prefs.interface_mode = 0;  // Default to Auto
       }
     } else {
       // Old prefs file, initialize new fields to defaults
@@ -246,7 +247,7 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& no
       _prefs.gps_interval = 0;
       memset(_prefs.wifi_ssid, 0, sizeof(_prefs.wifi_ssid));
       memset(_prefs.wifi_password, 0, sizeof(_prefs.wifi_password));
-      _prefs.wifi_enabled = 0;
+      _prefs.interface_mode = 0;  // Default to Auto
     }
 
     file.close();
@@ -284,7 +285,7 @@ void DataStore::savePrefs(const NodePrefs& _prefs, double node_lat, double node_
     file.write((uint8_t *)&_prefs.gps_interval, sizeof(_prefs.gps_interval));               // 89
     file.write((uint8_t *)&_prefs.wifi_ssid, sizeof(_prefs.wifi_ssid));                     // 93
     file.write((uint8_t *)&_prefs.wifi_password, sizeof(_prefs.wifi_password));             // 125
-    file.write((uint8_t *)&_prefs.wifi_enabled, sizeof(_prefs.wifi_enabled));               // 189
+    file.write((uint8_t *)&_prefs.interface_mode, sizeof(_prefs.interface_mode));           // 189
 
     file.close();
   }
