@@ -50,7 +50,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          name: Slunsecore Companion Firmware ${{ env.GIT_TAG_VERSION }}
-          body: ""
+          name: SlunseCore Companion Firmware ${{ env.GIT_TAG_VERSION }}
+          body: "See latest commits"
           draft: true
           files: out/*
