@@ -362,7 +362,9 @@ bool EnvironmentSensorManager::querySensors(uint8_t requester_permissions, Cayen
       telemetry.addTemperature(TELEM_CHANNEL_SELF, BME280.readTemperature());
       telemetry.addRelativeHumidity(TELEM_CHANNEL_SELF, BME280.readHumidity());
       telemetry.addBarometricPressure(TELEM_CHANNEL_SELF, BME280.readPressure()/100);
-      telemetry.addAltitude(TELEM_CHANNEL_SELF, BME280.readAltitude(TELEM_BME280_SEALEVELPRESSURE_HPA));
+      float altitude = BME280.readAltitude(TELEM_BME280_SEALEVELPRESSURE_HPA);
+      MESH_DEBUG_PRINTLN("BME280 altitude calculated: %.2f m", altitude);
+      telemetry.addAltitude(TELEM_CHANNEL_SELF, altitude);
     }
     #endif
 

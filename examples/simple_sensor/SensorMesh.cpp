@@ -1,4 +1,5 @@
 #include "SensorMesh.h"
+#include <helpers/sensors/LPPDataHelpers.h>
 
 /* ------------------------------ Config -------------------------------- */
 
@@ -181,6 +182,24 @@ uint8_t SensorMesh::handleRequest(uint8_t perms, uint32_t sender_timestamp, uint
     // query other sensors -- target specific
     sensors.querySensors(0xFF & perm_mask, telemetry);  // allow all telemetry permissions for admin or guest
     // TODO: let requester know permissions they have:  telemetry.addPresence(TELEM_CHANNEL_SELF, perms);
+
+    // Debug: verify altitude is in telemetry packet
+    LPPReader reader(telemetry.getBuffer(), telemetry.getSize());
+    uint8_t channel, type;
+    bool found_altitude = false;
+    while(reader.readHeader(channel, type)) {
+      if (type == LPP_ALTITUDE) {
+        float alt_val;
+        reader.readAltitude(alt_val);
+        MESH_DEBUG_PRINTLN("Telemetry packet contains altitude: %.2f m on channel %d", alt_val, channel);
+        found_altitude = true;
+        break;
+      }
+      reader.skipData(type);
+    }
+    if (!found_altitude) {
+      MESH_DEBUG_PRINTLN("WARNING: Altitude NOT found in telemetry packet!");
+    }
 
     uint8_t tlen = telemetry.getSize();
     memcpy(&reply_data[4], telemetry.getBuffer(), tlen);
