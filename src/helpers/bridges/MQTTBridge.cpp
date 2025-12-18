@@ -220,6 +220,7 @@ void MQTTBridge::begin() {
   if (WiFi.status() == WL_CONNECTED) {
     MQTT_DEBUG_PRINTLN("WiFi connected! IP: %s", WiFi.localIP().toString().c_str());
     
+    
     // Configure WiFi power management for efficient operation
     #ifdef ESP_PLATFORM
     // Set WiFi power save mode from preferences (0=min, 1=none, 2=max)
@@ -1360,8 +1361,8 @@ void MQTTBridge::setupAnalyzerClients() {
     });
 
             _analyzer_us_client->onError([this](esp_mqtt_error_codes error) {
-              MQTT_DEBUG_PRINTLN("Let's Mesh US server error - error_type: %d, connect_return_code: %d", 
-                                error.error_type, error.connect_return_code);
+              MQTT_DEBUG_PRINTLN("Let's Mesh US server error - error_type: %d, connect_return_code: %d, sock_errno: %d", 
+                                error.error_type, error.connect_return_code, error.esp_transport_sock_errno);
             });
 
     // Set up WebSocket MQTT over TLS connection to US server
@@ -1375,9 +1376,17 @@ void MQTTBridge::setupAnalyzerClients() {
     MQTT_DEBUG_PRINTLN("Using GTS Root R4 certificate for US server");
     _analyzer_us_client->setCACert(GTS_ROOT_R4);
 
-    // Connect to US server (async connection)
-    _analyzer_us_client->connect();
-    MQTT_DEBUG_PRINTLN("Initiating connection to Let's Mesh US server");
+    // Only attempt connection if WiFi is connected and NTP is synced
+    // Otherwise, maintainAnalyzerConnections() will handle it later
+    if (WiFi.status() == WL_CONNECTED && _ntp_synced) {
+      // Connect to US server (async connection)
+      _analyzer_us_client->connect();
+      MQTT_DEBUG_PRINTLN("Initiating connection to Let's Mesh US server");
+    } else {
+      MQTT_DEBUG_PRINTLN("Deferring US server connection - WiFi: %s, NTP: %s", 
+                        (WiFi.status() == WL_CONNECTED) ? "connected" : "disconnected",
+                        _ntp_synced ? "synced" : "not synced");
+    }
   }
 
   // Setup EU server client
@@ -1396,8 +1405,8 @@ void MQTTBridge::setupAnalyzerClients() {
     });
 
             _analyzer_eu_client->onError([this](esp_mqtt_error_codes error) {
-              MQTT_DEBUG_PRINTLN("Let's Mesh EU server error - error_type: %d, connect_return_code: %d", 
-                                error.error_type, error.connect_return_code);
+              MQTT_DEBUG_PRINTLN("Let's Mesh EU server error - error_type: %d, connect_return_code: %d, sock_errno: %d", 
+                                error.error_type, error.connect_return_code, error.esp_transport_sock_errno);
             });
 
     // Set up WebSocket MQTT over TLS connection to EU server
@@ -1411,9 +1420,17 @@ void MQTTBridge::setupAnalyzerClients() {
     MQTT_DEBUG_PRINTLN("Using GTS Root R4 certificate for EU server");
     _analyzer_eu_client->setCACert(GTS_ROOT_R4);
 
-    // Connect to EU server (async connection)
-    _analyzer_eu_client->connect();
-    MQTT_DEBUG_PRINTLN("Initiating connection to Let's Mesh EU server");
+    // Only attempt connection if WiFi is connected and NTP is synced
+    // Otherwise, maintainAnalyzerConnections() will handle it later
+    if (WiFi.status() == WL_CONNECTED && _ntp_synced) {
+      // Connect to EU server (async connection)
+      _analyzer_eu_client->connect();
+      MQTT_DEBUG_PRINTLN("Initiating connection to Let's Mesh EU server");
+    } else {
+      MQTT_DEBUG_PRINTLN("Deferring EU server connection - WiFi: %s, NTP: %s", 
+                        (WiFi.status() == WL_CONNECTED) ? "connected" : "disconnected",
+                        _ntp_synced ? "synced" : "not synced");
+    }
   }
 }
 
@@ -1581,6 +1598,18 @@ void MQTTBridge::maintainAnalyzerConnections() {
     if (now - last_wifi_warning > 300000) { // Log every 5 minutes max
       MQTT_DEBUG_PRINTLN("Skipping MQTT reconnection - WiFi not connected");
       last_wifi_warning = now;
+    }
+    return;
+  }
+  
+  // Check NTP sync status - JWT tokens require valid timestamps
+  // If NTP hasn't synced yet, wait before attempting connections
+  if (!_ntp_synced) {
+    static unsigned long last_ntp_warning = 0;
+    unsigned long now = millis();
+    if (now - last_ntp_warning > 300000) { // Log every 5 minutes max
+      MQTT_DEBUG_PRINTLN("Skipping MQTT reconnection - NTP not synced yet");
+      last_ntp_warning = now;
     }
     return;
   }
@@ -1847,6 +1876,14 @@ void MQTTBridge::syncTimeWithNTP() {
   
   MQTT_DEBUG_PRINTLN("Syncing time with NTP...");
   
+  // Test DNS resolution before attempting NTP sync
+  #ifdef ESP_PLATFORM
+  IPAddress resolved_ip;
+  if (!WiFi.hostByName("pool.ntp.org", resolved_ip)) {
+    MQTT_DEBUG_PRINTLN("WARNING: DNS resolution failed for pool.ntp.org - NTP sync may fail");
+  }
+  #endif
+  
   // Begin NTP client
   _ntp_client.begin();
   
@@ -1858,68 +1895,69 @@ void MQTTBridge::syncTimeWithNTP() {
     // This ensures time() returns UTC time
     configTime(0, 0, "pool.ntp.org");
     
-    // Update the device's RTC clock with UTC time
+    // Update the device's RTC clock with UTC time (if available)
     if (_rtc) {
       _rtc->setCurrentTime(epochTime);
-      _ntp_synced = true;
-      _last_ntp_sync = millis();
+    }
+    
+    // Mark NTP as synced regardless of RTC availability
+    // JWT tokens need valid time, which is now available via time()
+    _ntp_synced = true;
+    _last_ntp_sync = millis();
+    
+    MQTT_DEBUG_PRINTLN("Time synced: %lu", epochTime);
+    
+    // Set timezone from string (with DST support) - only if changed
+    static char last_timezone[64] = "";
+    if (strcmp(_prefs->timezone_string, last_timezone) != 0) {
+      MQTT_DEBUG_PRINTLN("Setting timezone: %s", _prefs->timezone_string);
       
-      MQTT_DEBUG_PRINTLN("Time synced: %lu", epochTime);
-      
-      // Set timezone from string (with DST support) - only if changed
-      static char last_timezone[64] = "";
-      if (strcmp(_prefs->timezone_string, last_timezone) != 0) {
-        MQTT_DEBUG_PRINTLN("Setting timezone: %s", _prefs->timezone_string);
-        
-        // Clean up old timezone object to prevent memory leak
-        if (_timezone) {
-          delete _timezone;
-          _timezone = nullptr;
-        }
-        
-        // Create timezone object based on timezone string
-        Timezone* tz = createTimezoneFromString(_prefs->timezone_string);
-        if (tz) {
-          MQTT_DEBUG_PRINTLN("Timezone created successfully");
-          // Store timezone for later use in message building
-          _timezone = tz;
-        } else {
-          MQTT_DEBUG_PRINTLN("Failed to create timezone, using UTC");
-          // Create UTC timezone as fallback
-          TimeChangeRule utc = {"UTC", Last, Sun, Mar, 0, 0};
-          _timezone = new Timezone(utc, utc);
-        }
-        
-        // Remember this timezone string
-        strncpy(last_timezone, _prefs->timezone_string, sizeof(last_timezone) - 1);
-        last_timezone[sizeof(last_timezone) - 1] = '\0';
-        
-        // Force memory defragmentation after timezone recreation
-        MQTT_DEBUG_PRINTLN("Forcing memory defragmentation after timezone change");
-        void* temp = malloc(1024);
-        if (temp) {
-          free(temp);
-          MQTT_DEBUG_PRINTLN("Defragmentation complete. Max Alloc: %d", ESP.getMaxAllocHeap());
-        }
+      // Clean up old timezone object to prevent memory leak
+      if (_timezone) {
+        delete _timezone;
+        _timezone = nullptr;
       }
       
-      // Show current time in both UTC and local
-      struct tm* utc_timeinfo = gmtime((time_t*)&epochTime);
-      struct tm* local_timeinfo = localtime((time_t*)&epochTime);
-      
-      if (utc_timeinfo) {
-        MQTT_DEBUG_PRINTLN("UTC time: %04d-%02d-%02d %02d:%02d:%02d", 
-                          utc_timeinfo->tm_year + 1900, utc_timeinfo->tm_mon + 1, utc_timeinfo->tm_mday,
-                          utc_timeinfo->tm_hour, utc_timeinfo->tm_min, utc_timeinfo->tm_sec);
+      // Create timezone object based on timezone string
+      Timezone* tz = createTimezoneFromString(_prefs->timezone_string);
+      if (tz) {
+        MQTT_DEBUG_PRINTLN("Timezone created successfully");
+        // Store timezone for later use in message building
+        _timezone = tz;
+      } else {
+        MQTT_DEBUG_PRINTLN("Failed to create timezone, using UTC");
+        // Create UTC timezone as fallback
+        TimeChangeRule utc = {"UTC", Last, Sun, Mar, 0, 0};
+        _timezone = new Timezone(utc, utc);
       }
       
-      if (local_timeinfo) {
-        MQTT_DEBUG_PRINTLN("Local time: %04d-%02d-%02d %02d:%02d:%02d", 
-                          local_timeinfo->tm_year + 1900, local_timeinfo->tm_mon + 1, local_timeinfo->tm_mday,
-                          local_timeinfo->tm_hour, local_timeinfo->tm_min, local_timeinfo->tm_sec);
+      // Remember this timezone string
+      strncpy(last_timezone, _prefs->timezone_string, sizeof(last_timezone) - 1);
+      last_timezone[sizeof(last_timezone) - 1] = '\0';
+      
+      // Force memory defragmentation after timezone recreation
+      MQTT_DEBUG_PRINTLN("Forcing memory defragmentation after timezone change");
+      void* temp = malloc(1024);
+      if (temp) {
+        free(temp);
+        MQTT_DEBUG_PRINTLN("Defragmentation complete. Max Alloc: %d", ESP.getMaxAllocHeap());
       }
-    } else {
-      MQTT_DEBUG_PRINTLN("No RTC clock available for time sync");
+    }
+    
+    // Show current time in both UTC and local
+    struct tm* utc_timeinfo = gmtime((time_t*)&epochTime);
+    struct tm* local_timeinfo = localtime((time_t*)&epochTime);
+    
+    if (utc_timeinfo) {
+      MQTT_DEBUG_PRINTLN("UTC time: %04d-%02d-%02d %02d:%02d:%02d", 
+                        utc_timeinfo->tm_year + 1900, utc_timeinfo->tm_mon + 1, utc_timeinfo->tm_mday,
+                        utc_timeinfo->tm_hour, utc_timeinfo->tm_min, utc_timeinfo->tm_sec);
+    }
+    
+    if (local_timeinfo) {
+      MQTT_DEBUG_PRINTLN("Local time: %04d-%02d-%02d %02d:%02d:%02d", 
+                        local_timeinfo->tm_year + 1900, local_timeinfo->tm_mon + 1, local_timeinfo->tm_mday,
+                        local_timeinfo->tm_hour, local_timeinfo->tm_min, local_timeinfo->tm_sec);
     }
   } else {
     MQTT_DEBUG_PRINTLN("NTP sync failed");
