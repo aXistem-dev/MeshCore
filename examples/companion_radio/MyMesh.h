@@ -113,6 +113,9 @@ protected:
   void sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t delay_millis=0) override;
 
   void logRxRaw(float snr, float rssi, const uint8_t raw[], int len) override;
+  void logRx(mesh::Packet *pkt, int len, float score) override;
+  const char *getLogDateTime();
+  bool isSerialLoggerConnected() const;
   bool isAutoAddEnabled() const override;
   bool onContactPathRecv(ContactInfo& from, uint8_t* in_path, uint8_t in_path_len, uint8_t* out_path, uint8_t out_path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) override;
   void onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path_len, const uint8_t* path) override;
@@ -172,6 +175,7 @@ private:
 
   void checkCLIRescueCmd();
   void checkSerialInterface();
+  void writeFrameToSerial(const uint8_t frame[], size_t len);
 
   // helpers, short-cuts
   void saveChannels() { _store->saveChannels(this); }
@@ -224,6 +228,11 @@ private:
 
   #define ADVERT_PATH_TABLE_SIZE   16
   AdvertPath advert_paths[ADVERT_PATH_TABLE_SIZE]; // circular table
+
+  #ifdef BLE_PIN_CODE
+  bool _serial_logger_connected;
+  unsigned long _serial_logger_last_check;
+  #endif
 };
 
 extern MyMesh the_mesh;

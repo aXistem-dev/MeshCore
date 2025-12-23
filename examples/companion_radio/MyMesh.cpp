@@ -244,6 +244,34 @@ uint8_t MyMesh::getExtraAckTransmitCount() const {
   return _prefs.multi_acks;
 }
 
+const char *MyMesh::getLogDateTime() {
+  static char tmp[32];
+  uint32_t now = getRTCClock()->getCurrentTime();
+  DateTime dt = DateTime(now);
+  sprintf(tmp, "%02d:%02d:%02d - %d/%d/%d U", dt.hour(), dt.minute(), dt.second(), dt.day(), dt.month(),
+          dt.year());
+  return tmp;
+}
+
+bool MyMesh::isSerialLoggerConnected() const {
+#ifdef BLE_PIN_CODE
+  // Check Serial connection status
+  // On most platforms, Serial.dtr() indicates USB connection
+  
+  #if defined(NRF52_PLATFORM) || defined(ESP32) || defined(RP2040_PLATFORM)
+    // Check DTR (Data Terminal Ready) which indicates USB connection
+    // This is the most reliable method for detecting USB Serial connection
+    return Serial.dtr();
+  #else
+    // Fallback for platforms without dtr(): assume connected if Serial is initialized
+    // This is less reliable but better than nothing
+    return true;
+  #endif
+#else
+  return false;
+#endif
+}
+
 void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
   if (_serial->isConnected() && len + 3 <= MAX_FRAME_SIZE) {
     int i = 0;
@@ -255,6 +283,47 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 
     _serial->writeFrame(out_frame, i);
   }
+  
+#ifdef BLE_PIN_CODE
+  // Output plain text to Serial for analyzer when using BLE and Serial is connected
+  // Format matches repeater/room server for analyzer compatibility
+  if (len > 0 && _serial_logger_connected) {
+    Serial.print(getLogDateTime());
+    Serial.print(" RAW: ");
+    mesh::Utils::printHex(Serial, raw, len);
+    Serial.printf(" SNR=%d RSSI=%d\n", (int)(snr * 4), (int)rssi);
+    Serial.flush();  // Ensure output is sent immediately
+  }
+#endif
+}
+
+void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
+  // Call base class implementation (if any)
+  BaseChatMesh::logRx(pkt, len, score);
+  
+#ifdef BLE_PIN_CODE
+  // Output parsed packet data to Serial for analyzer when using BLE and Serial is connected
+  // Format matches Dispatcher output for analyzer compatibility
+  if (pkt && _serial_logger_connected) {
+    Serial.print(getLogDateTime());
+    Serial.printf(": RX, len=%d (type=%d, route=%s, payload_len=%d) SNR=%d RSSI=%d score=%d", 
+            len, pkt->getPayloadType(), pkt->isRouteDirect() ? "D" : "F", pkt->payload_len,
+            (int)pkt->getSNR(), (int)_radio->getLastRSSI(), (int)(score * 1000));
+
+    static uint8_t packet_hash[MAX_HASH_SIZE];
+    pkt->calculatePacketHash(packet_hash);
+    Serial.print(" hash=");
+    mesh::Utils::printHex(Serial, packet_hash, MAX_HASH_SIZE);
+
+    if (pkt->getPayloadType() == PAYLOAD_TYPE_PATH || pkt->getPayloadType() == PAYLOAD_TYPE_REQ
+        || pkt->getPayloadType() == PAYLOAD_TYPE_RESPONSE || pkt->getPayloadType() == PAYLOAD_TYPE_TXT_MSG) {
+      Serial.printf(" [%02X -> %02X]\n", (uint32_t)pkt->payload[1], (uint32_t)pkt->payload[0]);
+    } else {
+      Serial.printf("\n");
+    }
+    Serial.flush();  // Ensure output is sent immediately
+  }
+#endif
 }
 
 bool MyMesh::isAutoAddEnabled() const {
@@ -673,6 +742,18 @@ void MyMesh::onRawDataRecv(mesh::Packet *packet) {
   } else {
     MESH_DEBUG_PRINTLN("onRawDataRecv(), data received while app offline");
   }
+  
+#ifdef BLE_PIN_CODE
+  // Output plain text to Serial for analyzer when using BLE and Serial is connected
+  // Format matches repeater/room server for analyzer compatibility
+  if (packet->payload_len > 0 && _serial_logger_connected) {
+    Serial.print(getLogDateTime());
+    Serial.print(" RAW_DATA: ");
+    mesh::Utils::printHex(Serial, packet->payload, packet->payload_len);
+    Serial.printf(" SNR=%d RSSI=%d\n", (int8_t)(_radio->getLastSNR() * 4), (int8_t)_radio->getLastRSSI());
+    Serial.flush();  // Ensure output is sent immediately
+  }
+#endif
 }
 
 void MyMesh::onTraceRecv(mesh::Packet *packet, uint32_t tag, uint32_t auth_code, uint8_t flags,
@@ -729,6 +810,10 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   dirty_contacts_expiry = 0;
   memset(advert_paths, 0, sizeof(advert_paths));
   memset(send_scope.key, 0, sizeof(send_scope.key));
+#ifdef BLE_PIN_CODE
+  _serial_logger_connected = false;
+  _serial_logger_last_check = 0;
+#endif
 
   // defaults
   memset(&_prefs, 0, sizeof(_prefs));
@@ -1861,6 +1946,25 @@ void MyMesh::loop() {
     saveContacts();
     dirty_contacts_expiry = 0;
   }
+
+#ifdef BLE_PIN_CODE
+  // Check Serial connection status periodically (every 500ms)
+  unsigned long now = _ms->getMillis();
+  if (now - _serial_logger_last_check >= 500) {
+    _serial_logger_last_check = now;
+    bool was_connected = _serial_logger_connected;
+    _serial_logger_connected = isSerialLoggerConnected();
+    
+    // Log connection state changes
+    if (_serial_logger_connected && !was_connected) {
+      Serial.println("Serial Logger: Connected - streaming enabled");
+      Serial.flush();
+    } else if (!_serial_logger_connected && was_connected) {
+      Serial.println("Serial Logger: Disconnected - streaming disabled");
+      Serial.flush();
+    }
+  }
+#endif
 
 #ifdef DISPLAY_CLASS
   if (_ui) _ui->setHasConnection(_serial->isConnected());
