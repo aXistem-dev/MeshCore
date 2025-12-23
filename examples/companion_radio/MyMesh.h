@@ -157,6 +157,7 @@ protected:
 
 public:
   void savePrefs() { _store->savePrefs(_prefs, sensors.node_lat, sensors.node_lon); }
+  void handleSerialCommand(const char* command);
 
 private:
   void writeOKFrame();

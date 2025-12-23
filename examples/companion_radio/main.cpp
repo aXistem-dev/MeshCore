@@ -101,6 +101,10 @@ MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
 
 /* END GLOBAL OBJECTS */
 
+#ifdef BLE_PIN_CODE
+static char serial_command[160];
+#endif
+
 void halt() {
   while (1) ;
 }
@@ -221,9 +225,43 @@ void setup() {
 #ifdef DISPLAY_CLASS
   ui_task.begin(disp, &sensors, the_mesh.getNodePrefs());  // still want to pass this in as dependency, as prefs might be moved
 #endif
+
+#ifdef BLE_PIN_CODE
+  serial_command[0] = 0;  // initialize command buffer
+#endif
 }
 
 void loop() {
+#ifdef BLE_PIN_CODE
+  // Handle plain text serial commands when BLE is enabled (Serial is free for commands)
+  int len = strlen(serial_command);
+  while (Serial.available() && len < sizeof(serial_command)-1) {
+    char c = Serial.read();
+    if (c != '\n') {
+      serial_command[len++] = c;
+      serial_command[len] = 0;
+      Serial.print(c);  // echo
+    }
+    if (c == '\r') break;
+  }
+  if (len == sizeof(serial_command)-1) {  // command buffer full
+    serial_command[sizeof(serial_command)-1] = '\r';
+  }
+
+  if (len > 0 && serial_command[len - 1] == '\r') {  // received complete line
+    Serial.print('\n');
+    serial_command[len - 1] = 0;  // replace newline with C string null terminator
+    
+    // Trim trailing whitespace
+    while (len > 0 && (serial_command[len-1] == ' ' || serial_command[len-1] == '\t' || serial_command[len-1] == '\r' || serial_command[len-1] == '\n')) {
+      serial_command[--len] = 0;
+    }
+    
+    the_mesh.handleSerialCommand(serial_command);
+    serial_command[0] = 0;  // reset command buffer
+  }
+#endif
+
   the_mesh.loop();
   sensors.loop();
 #ifdef DISPLAY_CLASS

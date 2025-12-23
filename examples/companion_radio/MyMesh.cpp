@@ -2,6 +2,19 @@
 
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
+#include <helpers/TxtDataHelpers.h>
+#include <helpers/StatsFormatHelper.h>
+#include <stdlib.h>
+
+// Helper function to parse unsigned integer from string
+static uint32_t _atoi(const char* sp) {
+  uint32_t n = 0;
+  while (*sp && *sp >= '0' && *sp <= '9') {
+    n *= 10;
+    n += (*sp++ - '0');
+  }
+  return n;
+}
 
 #define CMD_APP_START                 1
 #define CMD_SEND_TXT_MSG              2
@@ -1897,6 +1910,21 @@ void MyMesh::checkCLIRescueCmd() {
 
     } else if (strcmp(cli_command, "reboot") == 0) {
       board.reboot();  // doesn't return
+    } else if (memcmp(cli_command, "get ", 4) == 0) {
+      const char* config = &cli_command[4];
+      if (memcmp(config, "prv.key", 7) == 0) {
+        uint8_t prv_key[PRV_KEY_SIZE];
+        int len = self_id.writeTo(prv_key, PRV_KEY_SIZE);
+        if (len == PRV_KEY_SIZE) {
+          char hex_output[PRV_KEY_SIZE * 2 + 1];
+          mesh::Utils::toHex(hex_output, prv_key, PRV_KEY_SIZE);
+          Serial.printf("  > %s\n", hex_output);
+        } else {
+          Serial.println("  Error: failed to get private key");
+        }
+      } else {
+        Serial.printf("  Error: unknown config: %s\n", config);
+      }
     } else {
       Serial.println("  Error: unknown command");
     }
@@ -1952,23 +1980,100 @@ void MyMesh::loop() {
   unsigned long now = _ms->getMillis();
   if (now - _serial_logger_last_check >= 500) {
     _serial_logger_last_check = now;
-    bool was_connected = _serial_logger_connected;
     _serial_logger_connected = isSerialLoggerConnected();
-    
-    // Log connection state changes
-    if (_serial_logger_connected && !was_connected) {
-      Serial.println("Serial Logger: Connected - streaming enabled");
-      Serial.flush();
-    } else if (!_serial_logger_connected && was_connected) {
-      Serial.println("Serial Logger: Disconnected - streaming disabled");
-      Serial.flush();
-    }
   }
 #endif
 
 #ifdef DISPLAY_CLASS
   if (_ui) _ui->setHasConnection(_serial->isConnected());
 #endif
+}
+
+void MyMesh::handleSerialCommand(const char* command) {
+  // Handle empty command or \r\n\r\n (reset/wake serial connection)
+  if (command[0] == 0 || (command[0] == '\r' && command[1] == '\n' && command[2] == '\r' && command[3] == '\n')) {
+    Serial.println("  -> OK");
+    return;
+  }
+
+  // Handle "time <epoch_time>" command
+  if (memcmp(command, "time ", 5) == 0) {
+    uint32_t secs = _atoi(&command[5]);
+    uint32_t curr = getRTCClock()->getCurrentTime();
+    if (secs > curr) {
+      getRTCClock()->setCurrentTime(secs);
+      uint32_t now = getRTCClock()->getCurrentTime();
+      DateTime dt = DateTime(now);
+      Serial.printf("  -> OK - clock set: %02d:%02d - %d/%d/%d UTC\n", dt.hour(), dt.minute(), dt.day(), dt.month(), dt.year());
+    } else {
+      Serial.println("  -> (ERR: clock cannot go backwards)");
+    }
+    return;
+  }
+
+  // Handle "get <config>" commands
+  if (memcmp(command, "get ", 4) == 0) {
+    const char* config = &command[4];
+    if (memcmp(config, "name", 4) == 0) {
+      Serial.printf("  -> > %s\n", _prefs.node_name);
+    } else if (memcmp(config, "public.key", 10) == 0) {
+      // Format 1: "  -> > response_value\n"
+      char hex_output[PUB_KEY_SIZE * 2 + 1];
+      mesh::Utils::toHex(hex_output, self_id.pub_key, PUB_KEY_SIZE);
+      Serial.printf("  -> > %s\n", hex_output);
+    } else if (memcmp(config, "prv.key", 7) == 0) {
+      uint8_t prv_key[PRV_KEY_SIZE];
+      int len = self_id.writeTo(prv_key, PRV_KEY_SIZE);
+      if (len == PRV_KEY_SIZE) {
+        char hex_output[PRV_KEY_SIZE * 2 + 1];
+        mesh::Utils::toHex(hex_output, prv_key, PRV_KEY_SIZE);
+        Serial.printf("  -> > %s\n", hex_output);
+      } else {
+        Serial.println("  -> Error: failed to get private key");
+      }
+    } else if (memcmp(config, "radio", 5) == 0) {
+      char freq[16], bw[16];
+      strcpy(freq, StrHelper::ftoa(_prefs.freq));
+      strcpy(bw, StrHelper::ftoa3(_prefs.bw));
+      Serial.printf("  -> > %s,%s,%d,%d\n", freq, bw, (uint32_t)_prefs.sf, (uint32_t)_prefs.cr);
+    } else {
+      Serial.printf("  -> Error: unknown config: %s\n", config);
+    }
+    return;
+  }
+
+  // Handle "ver" command
+  if (memcmp(command, "ver", 3) == 0 && (command[3] == 0 || command[3] == '\r')) {
+    Serial.printf("  -> %s (Build: %s)\n", FIRMWARE_VERSION, FIRMWARE_BUILD_DATE);
+    return;
+  }
+
+  // Handle "board" command
+  if (memcmp(command, "board", 5) == 0 && (command[5] == 0 || command[5] == '\r')) {
+    Serial.printf("  -> %s\n", board.getManufacturerName());
+    return;
+  }
+
+  // Handle "stats-core" command
+  if (memcmp(command, "stats-core", 10) == 0 && (command[10] == 0 || command[10] == '\r')) {
+    char reply[200];
+    StatsFormatHelper::formatCoreStats(reply, board, *_ms, _err_flags, _mgr);
+    Serial.printf("  -> %s\n", reply);
+    return;
+  }
+
+  // Handle "stats-radio" command
+  if (memcmp(command, "stats-radio", 11) == 0 && (command[11] == 0 || command[11] == '\r')) {
+    char reply[200];
+    uint32_t tx_air_time_ms = getTotalAirTime();
+    uint32_t rx_air_time_ms = getReceiveAirTime();
+    StatsFormatHelper::formatRadioStats(reply, _radio, radio_driver, tx_air_time_ms, rx_air_time_ms);
+    Serial.printf("  -> %s\n", reply);
+    return;
+  }
+
+  // Unknown command
+  Serial.println("  -> Unknown command");
 }
 
 bool MyMesh::advert() {
