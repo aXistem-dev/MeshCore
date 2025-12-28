@@ -1,0 +1,335 @@
+Calibration
+
+
+// N (0°)
+//   ADC: | Voltage:
+ADC: 836.| Voltage: 2.697V.
+ADC: 837.| Voltage: 2.700V.
+ADC: 831.| Voltage: 2.681V.
+ADC: 836.| Voltage: 2.697V.
+ADC: 835.| Voltage: 2.694V.
+ADC: 831.| Voltage: 2.681V.
+ADC: 838.| Voltage: 2.703V.
+ADC: 843.| Voltage: 2.719V.
+ADC: 837.| Voltage: 2.700V.
+ADC: 836.| Voltage: 2.697V.
+ADC: 837.| Voltage: 2.700V.
+ADC: 835.| Voltage: 2.694V.
+ADC: 837.| Voltage: 2.700V.
+ADC: 834.| Voltage: 2.690V.
+ADC: 837.| Voltage: 2.700V.
+ADC: 839.| Voltage: 2.706V.
+ADC: 836.| Voltage: 2.697V.
+ADC: 833.| Voltage: 2.687V.
+
+// NNE (22.5°)
+//   ADC: | Voltage:
+
+ADC: 771.| Voltage: 2.487V.
+ADC: 770.| Voltage: 2.484V.
+ADC: 769.| Voltage: 2.481V.
+ADC: 771.| Voltage: 2.487V.
+ADC: 770.| Voltage: 2.484V.
+ADC: 771.| Voltage: 2.487V.
+ADC: 771.| Voltage: 2.487V.
+ADC: 769.| Voltage: 2.481V.
+ADC: 762.| Voltage: 2.458V.
+ADC: 773.| Voltage: 2.494V.
+ADC: 764.| Voltage: 2.465V.
+ADC: 773.| Voltage: 2.494V.
+ADC: 770.| Voltage: 2.484V.
+ADC: 769.| Voltage: 2.481V.
+ADC: 771.| Voltage: 2.487V.
+ADC: 776.| Voltage: 2.503V.
+ADC: 776.| Voltage: 2.503V.
+ADC: 767.| Voltage: 2.474V.
+ADC: 779.| Voltage: 2.513V.
+
+// NE (45°)
+//   ADC: | Voltage:
+
+ADC: 772.| Voltage: 2.490V.
+ADC: 773.| Voltage: 2.494V.
+ADC: 771.| Voltage: 2.487V.
+ADC: 770.| Voltage: 2.484V.
+ADC: 774.| Voltage: 2.497V.
+ADC: 769.| Voltage: 2.481V.
+ADC: 770.| Voltage: 2.484V.
+ADC: 781.| Voltage: 2.519V.
+ADC: 775.| Voltage: 2.500V.
+ADC: 771.| Voltage: 2.487V.
+ADC: 776.| Voltage: 2.503V.
+ADC: 770.| Voltage: 2.484V.
+ADC: 773.| Voltage: 2.494V.
+ADC: 771.| Voltage: 2.487V.
+ADC: 774.| Voltage: 2.497V.
+ADC: 770.| Voltage: 2.484V.
+ADC: 774.| Voltage: 2.497V.
+ADC: 771.| Voltage: 2.487V.
+ADC: 773.| Voltage: 2.494V.
+ADC: 771.| Voltage: 2.487V.
+ADC: 773.| Voltage: 2.494V.
+ADC: 772.| Voltage: 2.490V.
+ADC: 769.| Voltage: 2.481V.
+ADC: 769.| Voltage: 2.481V.
+ADC: 770.| Voltage: 2.484V.
+
+// ENE (67.5°)
+//   ADC: | Voltage:
+
+ADC: 578.| Voltage: 1.865V.
+ADC: 580.| Voltage: 1.871V.
+ADC: 580.| Voltage: 1.871V.
+ADC: 579.| Voltage: 1.868V.
+ADC: 576.| Voltage: 1.858V.
+ADC: 579.| Voltage: 1.868V.
+ADC: 579.| Voltage: 1.868V.
+ADC: 581.| Voltage: 1.874V.
+ADC: 579.| Voltage: 1.868V.
+ADC: 575.| Voltage: 1.855V.
+ADC: 580.| Voltage: 1.871V.
+
+// E (90°)
+//   ADC: | Voltage:
+
+ADC: 660.| Voltage: 2.129V.
+ADC: 664.| Voltage: 2.142V.
+ADC: 665.| Voltage: 2.145V.
+ADC: 665.| Voltage: 2.145V.
+ADC: 663.| Voltage: 2.139V.
+ADC: 664.| Voltage: 2.142V.
+ADC: 662.| Voltage: 2.135V.
+ADC: 665.| Voltage: 2.145V.
+ADC: 665.| Voltage: 2.145V.
+ADC: 662.| Voltage: 2.135V.
+ADC: 663.| Voltage: 2.139V.
+ADC: 666.| Voltage: 2.148V.
+ADC: 669.| Voltage: 2.158V.
+ADC: 660.| Voltage: 2.129V.
+ADC: 666.| Voltage: 2.148V.
+ADC: 663.| Voltage: 2.139V.
+ADC: 663.| Voltage: 2.139V.
+ADC: 665.| Voltage: 2.145V.
+ADC: 661.| Voltage: 2.132V.
+ADC: 664.| Voltage: 2.142V.
+ADC: 663.| Voltage: 2.139V.
+ADC: 663.| Voltage: 2.139V.
+ADC: 663.| Voltage: 2.139V.
+ADC: 662.| Voltage: 2.135V.
+ADC: 667.| Voltage: 2.152V.
+ADC: 668.| Voltage: 2.155V.
+ADC: 663.| Voltage: 2.139V.
+
+// ESE (112.5°)
+//   ADC: | Voltage:
+
+ADC: 354.| Voltage: 1.142V.
+ADC: 353.| Voltage: 1.139V.
+ADC: 352.| Voltage: 1.135V.
+ADC: 357.| Voltage: 1.152V.
+ADC: 352.| Voltage: 1.135V.
+ADC: 355.| Voltage: 1.145V.
+ADC: 360.| Voltage: 1.161V.
+ADC: 353.| Voltage: 1.139V.
+ADC: 356.| Voltage: 1.148V.
+ADC: 353.| Voltage: 1.139V.
+ADC: 355.| Voltage: 1.145V.
+ADC: 351.| Voltage: 1.132V.
+ADC: 355.| Voltage: 1.145V.
+ADC: 352.| Voltage: 1.135V.
+ADC: 354.| Voltage: 1.142V.
+ADC: 355.| Voltage: 1.145V.
+
+// SE (135°)
+//   ADC: | Voltage:
+
+ADC: 353.| Voltage: 1.139V.
+ADC: 355.| Voltage: 1.145V.
+ADC: 354.| Voltage: 1.142V.
+ADC: 355.| Voltage: 1.145V.
+ADC: 353.| Voltage: 1.139V.
+ADC: 354.| Voltage: 1.142V.
+ADC: 353.| Voltage: 1.139V.
+ADC: 354.| Voltage: 1.142V.
+ADC: 357.| Voltage: 1.152V.
+ADC: 353.| Voltage: 1.139V.
+ADC: 354.| Voltage: 1.142V.
+ADC: 353.| Voltage: 1.139V.
+ADC: 353.| Voltage: 1.139V.
+ADC: 356.| Voltage: 1.148V.
+ADC: 356.| Voltage: 1.148V.
+ADC: 352.| Voltage: 1.135V.
+ADC: 355.| Voltage: 1.145V.
+ADC: 353.| Voltage: 1.139V.
+ADC: 354.| Voltage: 1.142V.
+ADC: 353.| Voltage: 1.139V.
+ADC: 357.| Voltage: 1.152V.
+
+// SSE (157.5°)
+//   ADC: | Voltage:
+
+No values observed.
+
+// S (180°)
+//   ADC: | Voltage:
+
+ADC: 63.| Voltage: 0.203V.
+ADC: 62.| Voltage: 0.200V.
+ADC: 63.| Voltage: 0.203V.
+ADC: 63.| Voltage: 0.203V.
+ADC: 62.| Voltage: 0.200V.
+ADC: 62.| Voltage: 0.200V.
+ADC: 62.| Voltage: 0.200V.
+ADC: 63.| Voltage: 0.203V.
+ADC: 61.| Voltage: 0.197V.
+ADC: 62.| Voltage: 0.200V.
+ADC: 60.| Voltage: 0.194V.
+ADC: 62.| Voltage: 0.200V.
+ADC: 63.| Voltage: 0.203V.
+ADC: 63.| Voltage: 0.203V.
+ADC: 62.| Voltage: 0.200V.
+ADC: 63.| Voltage: 0.203V.
+ADC: 63.| Voltage: 0.203V.
+ADC: 61.| Voltage: 0.197V.
+ADC: 62.| Voltage: 0.200V.
+ADC: 54.| Voltage: 0.174V.
+ADC: 61.| Voltage: 0.197V.
+ADC: 66.| Voltage: 0.213V.
+ADC: 62.| Voltage: 0.200V.
+ADC: 64.| Voltage: 0.206V.
+ADC: 65.| Voltage: 0.210V.
+ADC: 63.| Voltage: 0.203V.
+
+// SSW (202.5°)
+//   ADC: | Voltage:
+
+ADC: 130.| Voltage: 0.419V.
+ADC: 129.| Voltage: 0.416V.
+ADC: 131.| Voltage: 0.423V.
+ADC: 132.| Voltage: 0.426V.
+ADC: 131.| Voltage: 0.423V.
+ADC: 130.| Voltage: 0.419V.
+ADC: 127.| Voltage: 0.410V.
+ADC: 132.| Voltage: 0.426V.
+ADC: 130.| Voltage: 0.419V.
+ADC: 132.| Voltage: 0.426V.
+ADC: 133.| Voltage: 0.429V.
+ADC: 129.| Voltage: 0.416V.
+ADC: 132.| Voltage: 0.426V.
+ADC: 140.| Voltage: 0.452V.
+ADC: 130.| Voltage: 0.419V.
+ADC: 131.| Voltage: 0.423V.
+
+// SW (225°)
+//   ADC: | Voltage:
+
+ADC: 130.| Voltage: 0.419V.
+ADC: 131.| Voltage: 0.423V.
+ADC: 130.| Voltage: 0.419V.
+ADC: 132.| Voltage: 0.426V.
+ADC: 128.| Voltage: 0.413V.
+ADC: 129.| Voltage: 0.416V.
+ADC: 131.| Voltage: 0.423V.
+ADC: 133.| Voltage: 0.429V.
+ADC: 127.| Voltage: 0.410V.
+ADC: 125.| Voltage: 0.403V.
+ADC: 134.| Voltage: 0.432V.
+ADC: 138.| Voltage: 0.445V.
+ADC: 128.| Voltage: 0.413V.
+ADC: 129.| Voltage: 0.416V.
+ADC: 130.| Voltage: 0.419V.
+ADC: 129.| Voltage: 0.416V.
+ADC: 130.| Voltage: 0.419V.
+ADC: 133.| Voltage: 0.429V.
+ADC: 130.| Voltage: 0.419V.
+ADC: 129.| Voltage: 0.416V.
+ADC: 133.| Voltage: 0.429V.
+ADC: 133.| Voltage: 0.429V.
+ADC: 132.| Voltage: 0.426V.
+ADC: 128.| Voltage: 0.413V.
+ADC: 133.| Voltage: 0.429V.
+ADC: 122.| Voltage: 0.394V.
+
+// WSW (247.5°)
+//   ADC: | Voltage:
+
+// W (270°)
+//   ADC: | Voltage:
+
+ADC: 205.| Voltage: 0.661V.
+ADC: 209.| Voltage: 0.674V.
+ADC: 208.| Voltage: 0.671V.
+ADC: 207.| Voltage: 0.668V.
+ADC: 210.| Voltage: 0.677V.
+ADC: 209.| Voltage: 0.674V.
+ADC: 208.| Voltage: 0.671V.
+ADC: 213.| Voltage: 0.687V.
+ADC: 211.| Voltage: 0.681V.
+ADC: 210.| Voltage: 0.677V.
+ADC: 211.| Voltage: 0.681V.
+ADC: 211.| Voltage: 0.681V.
+ADC: 205.| Voltage: 0.661V.
+ADC: 206.| Voltage: 0.665V.
+ADC: 213.| Voltage: 0.687V.
+ADC: 211.| Voltage: 0.681V.
+ADC: 210.| Voltage: 0.677V.
+ADC: 213.| Voltage: 0.687V.
+ADC: 210.| Voltage: 0.677V.
+ADC: 209.| Voltage: 0.674V.
+
+// WNW (292.5°)
+//   ADC: | Voltage:
+
+ADC: 178.| Voltage: 0.574V.
+ADC: 175.| Voltage: 0.565V.
+ADC: 178.| Voltage: 0.574V.
+ADC: 175.| Voltage: 0.565V.
+ADC: 172.| Voltage: 0.555V.
+ADC: 184.| Voltage: 0.594V.
+ADC: 177.| Voltage: 0.571V.
+
+// NW (315°)
+//   ADC: | Voltage:
+
+ADC: 508.| Voltage: 1.639V.
+ADC: 509.| Voltage: 1.642V.
+ADC: 508.| Voltage: 1.639V.
+ADC: 510.| Voltage: 1.645V.
+ADC: 508.| Voltage: 1.639V.
+ADC: 507.| Voltage: 1.635V.
+ADC: 510.| Voltage: 1.645V.
+ADC: 507.| Voltage: 1.635V.
+ADC: 503.| Voltage: 1.623V.
+ADC: 507.| Voltage: 1.635V.
+ADC: 544.| Voltage: 1.755V.
+ADC: 507.| Voltage: 1.635V.
+ADC: 518.| Voltage: 1.671V.
+ADC: 510.| Voltage: 1.645V.
+ADC: 510.| Voltage: 1.645V.
+ADC: 507.| Voltage: 1.635V.
+ADC: 508.| Voltage: 1.639V.
+ADC: 509.| Voltage: 1.642V.
+ADC: 509.| Voltage: 1.642V.
+ADC: 508.| Voltage: 1.639V.
+ADC: 510.| Voltage: 1.645V.
+ADC: 505.| Voltage: 1.629V.
+ADC: 503.| Voltage: 1.623V.
+ADC: 507.| Voltage: 1.635V.
+ADC: 512.| Voltage: 1.652V.
+ADC: 508.| Voltage: 1.639V.
+ADC: 508.| Voltage: 1.639V.
+ADC: 510.| Voltage: 1.645V.
+
+// NNW (337.5°)
+//   ADC: | Voltage:
+
+ADC: 474.| Voltage: 1.529V.
+ADC: 483.| Voltage: 1.558V.
+ADC: 477.| Voltage: 1.539V.
+ADC: 482.| Voltage: 1.555V.
+ADC: 483.| Voltage: 1.558V.
+ADC: 481.| Voltage: 1.552V.
+ADC: 478.| Voltage: 1.542V.
+ADC: 476.| Voltage: 1.535V.
+
+
