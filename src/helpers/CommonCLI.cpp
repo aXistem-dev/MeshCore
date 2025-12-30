@@ -37,14 +37,19 @@ static uint32_t _atoi(const char* sp) {
 }
 
 void CommonCLI::loadPrefs(FILESYSTEM* fs) {
+  bool is_fresh_install = false;
+  bool is_upgrade = false;
+  
   if (fs->exists("/com_prefs")) {
     loadPrefsInt(fs, "/com_prefs");   // new filename
   } else if (fs->exists("/node_prefs")) {
     loadPrefsInt(fs, "/node_prefs");
+    is_upgrade = true;  // Migrating from old filename
     savePrefs(fs);  // save to new filename
     fs->remove("/node_prefs");  // remove old
   } else {
     // File doesn't exist - set default bridge settings for fresh installs
+    is_fresh_install = true;
     _prefs->bridge_pkt_src = 1;  // Default to RX (logRx) for new installs
   }
 #ifdef WITH_MQTT_BRIDGE
@@ -52,6 +57,16 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
   loadMQTTPrefs(fs);
   // Sync MQTT prefs to NodePrefs so existing code (like MQTTBridge) can access them
   syncMQTTPrefsToNodePrefs();
+  
+  // For MQTT bridge, migrate bridge.source to RX (logRx) only on fresh installs or upgrades
+  // This ensures new users get the correct default, but respects existing user choices
+  // MQTT bridge with TX requires mqtt.tx to be enabled (disabled by default),
+  // so RX is the sensible default for MQTT bridge installations
+  if ((is_fresh_install || is_upgrade) && _prefs->bridge_pkt_src == 0) {
+    MESH_DEBUG_PRINTLN("MQTT Bridge: Migrating bridge.source from tx to rx (MQTT bridge default)");
+    _prefs->bridge_pkt_src = 1;  // Set to RX (logRx)
+    savePrefs(fs);  // Save the updated preference
+  }
 #endif
 }
 
