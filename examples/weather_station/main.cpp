@@ -128,9 +128,27 @@ void setup() {
   Serial.flush();
   board.begin();
   Serial.println("Board initialized.");
+  // Debug battery voltage reading
+  uint16_t batt_mv = board.getBattMilliVolts();
   Serial.print("Battery voltage: ");
-  Serial.print(board.getBattMilliVolts() / 1000.0);
-  Serial.println("V");
+  Serial.print(batt_mv / 1000.0);
+  Serial.print("V (");
+  Serial.print(batt_mv);
+  Serial.println(" mV)");
+  
+  // Debug: Read raw ADC value to verify calculation
+  analogReadResolution(12);
+  uint32_t raw_sum = 0;
+  for (int i = 0; i < 8; i++) {
+    raw_sum += analogRead(5);  // PIN_VBAT_READ
+  }
+  uint32_t raw_avg = raw_sum / 8;
+  float calculated_mv = (3.0f * 1.73f * 1.187f * 1000.0f * raw_avg) / 4096.0f;
+  Serial.print("DEBUG: Raw ADC (12-bit): ");
+  Serial.print(raw_avg);
+  Serial.print(" / 4095, Calculated: ");
+  Serial.print(calculated_mv);
+  Serial.println(" mV");
   Serial.flush();
   
   // Allow power rails to stabilize before initializing sensors

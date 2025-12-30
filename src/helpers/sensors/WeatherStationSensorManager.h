@@ -57,6 +57,20 @@ protected:
   volatile unsigned long lastWindTime = 0;
   unsigned long lastWindCalc = 0;
   
+  // Wind speed history tracking (circular buffer)
+  // Store wind speed readings with timestamps for interval calculations
+  // Sample every 5 seconds to track averages and peaks
+  static constexpr int MAX_WIND_READINGS = 2880;  // 5 sec intervals * 60 * 24 = 2880 (24 hours)
+  struct WindReading {
+    float speed_kmh;              // Wind speed in km/h
+    unsigned long timestamp_millis;  // millis() when reading was taken
+  };
+  WindReading windHistory[MAX_WIND_READINGS];
+  int windWriteIndex = 0;         // Next position to write (circular)
+  int windCount = 0;              // Number of readings stored
+  float peakWindSpeed_5min = 0.0f;  // Peak wind speed in last 5 minutes
+  unsigned long lastPeakUpdate = 0;  // Last time peak was updated
+  
   // Wind vane calibration map
   static const VaneReading vaneMap[];
   static const int numVaneReadings;
@@ -72,8 +86,13 @@ protected:
   static void windISR();
   
   // Helper functions (protected)
-  float getWindSpeed();
+  float getWindSpeed();  // Get current momentary wind speed and store in history
   int getWindDirection() const;
+  
+  // Wind speed calculation helpers
+  float getAverageWindSpeedForInterval(uint32_t start_unix, uint32_t end_unix, mesh::RTCClock* rtc) const;
+  float getPeakWindSpeed5Min(mesh::RTCClock* rtc) const;
+  void updateWindSpeedHistory(float speed);
   
   // Rainfall calculation helpers
   float getRainfallForInterval(uint32_t start_unix, uint32_t end_unix, mesh::RTCClock* rtc) const;

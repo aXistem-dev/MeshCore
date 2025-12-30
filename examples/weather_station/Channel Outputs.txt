@@ -1,0 +1,16 @@
+Channel 1, VOLTAGE - Battery voltage in Volts (device power)
+Channel 1, TEMPERATURE - Temperature in Celsius (BME280)
+Channel 1, BAROMETRIC_PRESSURE - Atmospheric pressure in hPa (BME280)
+Channel 1, RELATIVE_HUMIDITY - Relative humidity in % (BME280)
+Channel 1, ALTITUDE - Altitude in meters ASL (calculated from BME280 pressure)
+Channel 2, DISTANCE - Rainfall last 10 minutes in meters (0.2794mm per tip)
+Channel 2, ANALOG_INPUT - Average wind speed in km/h (0.01 resolution, 2.4 km/h per click/sec) in last 10 minutes
+Channel 3, DISTANCE - Rainfall last 1 hour in meters
+Channel 3, ANALOG_INPUT - Average wind speed in km/h (0.01 resolution, 2.4 km/h per click/sec) in last 1 hour
+Channel 4, DISTANCE - Rainfall last 24 hours in meters
+Channel 4, ANALOG_INPUT - Average wind speed in km/h (0.01 resolution, 2.4 km/h per click/sec) in last 24 hours
+Channel 5, DISTANCE - Rainfall current day (midnight to now) in meters
+Channel 5, ANALOG_INPUT - Average wind speed in km/h (0.01 resolution, 2.4 km/h per click/sec) in current day
+Channel 6, ANALOG_INPUT - Current momentary Wind speed in km/h (0.01 resolution, 2.4 km/h per click/sec)
+Channel 6, DIRECTION - Wind direction in degrees (0-359, 0°=North, 90°=East, 180°=South, 270°=West)
+Channel 7, ANALOG_INPUT - Peak Wind speed in km/h (0.01 resolution, 2.4 km/h per click/sec) in the last 5 minutes

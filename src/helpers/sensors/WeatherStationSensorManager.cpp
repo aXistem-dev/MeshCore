@@ -9,6 +9,9 @@ WeatherStationSensorManager* WeatherStationSensorManager::instance = nullptr;
 // Define MAX_RAIN_TIPS for linker (even though it's constexpr, some compilers need this)
 constexpr int WeatherStationSensorManager::MAX_RAIN_TIPS;
 
+// Define MAX_WIND_READINGS for linker
+constexpr int WeatherStationSensorManager::MAX_WIND_READINGS;
+
 // Wind vane calibration map - calibrated values from actual hardware measurements
 const VaneReading WeatherStationSensorManager::vaneMap[] = {
   // S Quadrant (180°-270°) - lowest ADC values
@@ -87,6 +90,12 @@ bool WeatherStationSensorManager::begin() {
   
   // Initialize wind speed calculation timer
   lastWindCalc = millis();
+  
+  // Initialize wind speed history
+  windWriteIndex = 0;
+  windCount = 0;
+  peakWindSpeed_5min = 0.0f;
+  lastPeakUpdate = millis();
   
   // Initialize BME280 following the pattern from bme280_reader example
   // Re-initialize Wire to ensure it's in the correct state
@@ -174,7 +183,8 @@ bool WeatherStationSensorManager::begin() {
   // Initialize weather station sensors
   pinMode(WEATHER_RAIN_PIN, INPUT_PULLUP);
   pinMode(WEATHER_WIND_PIN, INPUT_PULLUP);
-  pinMode(WEATHER_VANE_PIN, INPUT_PULLUP);
+  // Wind vane is analog input - no pullup needed (and it conflicts with battery voltage reading on same pin)
+  pinMode(WEATHER_VANE_PIN, INPUT);
   
   // Attach interrupts for rain gauge and anemometer
   attachInterrupt(digitalPinToInterrupt(WEATHER_RAIN_PIN), rainISR, FALLING);
@@ -213,68 +223,87 @@ bool WeatherStationSensorManager::querySensors(uint8_t requester_permissions, Ca
   }
   
   // Weather station readings
-  // Channel 2: All rainfall intervals (multiple values on same channel, like BME280)
-  // Order: 10min, 1hr, 24hr, current day (midnight to now)
+  // Separate channels for each rainfall interval (CayenneLPP only supports one value per type per channel)
   if (rtc) {
     uint32_t now_unix = rtc->getCurrentTime();
     
-    // Rainfall last 10 minutes
+    // Channel 2: Rainfall last 10 minutes + Average wind speed last 10 minutes
     uint32_t ten_min_ago = now_unix - (10 * 60);
     float rainfall_10min = getRainfallForInterval(ten_min_ago, now_unix, rtc);
     telemetry.addDistance(TELEM_CHANNEL_SELF + 1, rainfall_10min / 1000.0f);  // Convert mm to meters
+    float avgWind_10min = getAverageWindSpeedForInterval(ten_min_ago, now_unix, rtc);
+    if (avgWind_10min < 0.0f) avgWind_10min = 0.0f;
+    if (avgWind_10min > 327.67f) avgWind_10min = 327.67f;
+    telemetry.addAnalogInput(TELEM_CHANNEL_SELF + 1, avgWind_10min);
     
-    // Rainfall last hour
+    // Channel 3: Rainfall last 1 hour + Average wind speed last 1 hour
     uint32_t one_hour_ago = now_unix - (60 * 60);
     float rainfall_1hr = getRainfallForInterval(one_hour_ago, now_unix, rtc);
-    telemetry.addDistance(TELEM_CHANNEL_SELF + 1, rainfall_1hr / 1000.0f);
+    telemetry.addDistance(TELEM_CHANNEL_SELF + 2, rainfall_1hr / 1000.0f);
+    float avgWind_1hr = getAverageWindSpeedForInterval(one_hour_ago, now_unix, rtc);
+    if (avgWind_1hr < 0.0f) avgWind_1hr = 0.0f;
+    if (avgWind_1hr > 327.67f) avgWind_1hr = 327.67f;
+    telemetry.addAnalogInput(TELEM_CHANNEL_SELF + 2, avgWind_1hr);
     
-    // Rainfall last 24 hours
+    // Channel 4: Rainfall last 24 hours + Average wind speed last 24 hours
     uint32_t twenty_four_hr_ago = now_unix - (24 * 60 * 60);
     float rainfall_24hr = getRainfallForInterval(twenty_four_hr_ago, now_unix, rtc);
-    telemetry.addDistance(TELEM_CHANNEL_SELF + 1, rainfall_24hr / 1000.0f);
+    telemetry.addDistance(TELEM_CHANNEL_SELF + 3, rainfall_24hr / 1000.0f);
+    float avgWind_24hr = getAverageWindSpeedForInterval(twenty_four_hr_ago, now_unix, rtc);
+    if (avgWind_24hr < 0.0f) avgWind_24hr = 0.0f;
+    if (avgWind_24hr > 327.67f) avgWind_24hr = 327.67f;
+    telemetry.addAnalogInput(TELEM_CHANNEL_SELF + 3, avgWind_24hr);
     
-    // Rainfall current day (midnight to now)
+    // Channel 5: Rainfall current day (midnight to now) + Average wind speed current day
     uint32_t midnight_unix = getMidnightUnix(rtc);
     float rainfall_today = getRainfallForInterval(midnight_unix, now_unix, rtc);
-    telemetry.addDistance(TELEM_CHANNEL_SELF + 1, rainfall_today / 1000.0f);
+    telemetry.addDistance(TELEM_CHANNEL_SELF + 4, rainfall_today / 1000.0f);
+    float avgWind_today = getAverageWindSpeedForInterval(midnight_unix, now_unix, rtc);
+    if (avgWind_today < 0.0f) avgWind_today = 0.0f;
+    if (avgWind_today > 327.67f) avgWind_today = 327.67f;
+    telemetry.addAnalogInput(TELEM_CHANNEL_SELF + 4, avgWind_today);
   } else {
     // Fallback: total cumulative rainfall if no RTC
     float rainfall = getRainfall();
     telemetry.addDistance(TELEM_CHANNEL_SELF + 1, rainfall / 1000.0f);
   }
   
-  // Channel 3: Wind speed and direction (multiple types can share same channel)
+  // Channel 6: Current momentary wind speed + Wind direction
   // Wind speed in km/h (using LPP_ANALOG_INPUT type: 2 bytes, 0.01 resolution)
-  // LPP_ANALOG_INPUT: 2 bytes, 0.01 signed
-  // CayenneLPP addAnalogInput multiplies by 100 internally, so pass the value directly
-  // Always send wind speed, even if 0, to ensure it's never missing
-  float windSpeed = getWindSpeed();
+  float windSpeed = getWindSpeed();  // This also stores reading in history
   
   // Clamp to valid range for signed 16-bit: -327.68 to +327.67
-  // Wind speed should never be negative, but ensure it's in valid range
   if (windSpeed < 0.0f) windSpeed = 0.0f;
-  if (windSpeed > 327.67f) windSpeed = 327.67f;  // Max for signed 16-bit with 0.01 resolution
+  if (windSpeed > 327.67f) windSpeed = 327.67f;
   
-  // Pass the value directly - CayenneLPP addAnalogInput will multiply by 100 internally
-  telemetry.addAnalogInput(TELEM_CHANNEL_SELF + 2, windSpeed);
+  telemetry.addAnalogInput(TELEM_CHANNEL_SELF + 5, windSpeed);
   
   // Wind direction in degrees (using LPP_DIRECTION type: 2 bytes, 1deg resolution)
-  // LPP_DIRECTION: 2 bytes, 1deg, unsigned (0-359)
-  // Always send wind direction - getWindDirection() now always returns 0-359
   int windDir = getWindDirection();
-  
-  // Ensure direction is in valid range (0-359) - should always be, but double-check
   if (windDir < 0) windDir = 0;
   if (windDir > 359) windDir = windDir % 360;
+  telemetry.addDirection(TELEM_CHANNEL_SELF + 5, windDir);
   
-  telemetry.addDirection(TELEM_CHANNEL_SELF + 2, windDir);
+  // Channel 7: Peak wind speed in last 5 minutes
+  if (rtc) {
+    float peakWind = getPeakWindSpeed5Min(rtc);
+    if (peakWind < 0.0f) peakWind = 0.0f;
+    if (peakWind > 327.67f) peakWind = 327.67f;
+    telemetry.addAnalogInput(TELEM_CHANNEL_SELF + 6, peakWind);
+  }
   
   return true;
 }
 
 void WeatherStationSensorManager::loop() {
-  // Nothing needed here - interrupts handle counting
-  // Wind speed calculation happens in querySensors()
+  // Update wind speed history periodically (every 5 seconds)
+  // This builds up the history buffer for interval calculations
+  static unsigned long lastWindUpdate = 0;
+  unsigned long now = millis();
+  if (now - lastWindUpdate >= 5000) {  // Every 5 seconds
+    getWindSpeed();  // This calculates and stores current wind speed
+    lastWindUpdate = now;
+  }
 }
 
 int WeatherStationSensorManager::getNumSettings() const {
@@ -348,19 +377,144 @@ float WeatherStationSensorManager::getWindSpeed() {
   float clicksPerSecond = (float)clicks / timeDelta;
   float speed = clicksPerSecond * WEATHER_WIND_FACTOR;
   
-  // Debug output
-  Serial.printf("DEBUG: getWindSpeed - clicks=%lu, timeDelta=%.2f, clicksPerSec=%.2f, speed=%.2f\n", 
-                clicks, timeDelta, clicksPerSecond, speed);
-  
   // Clamp to reasonable range (0 to 200 km/h)
   if (speed < 0.0f) speed = 0.0f;
   if (speed > 200.0f) speed = 200.0f;
+  
+  // Store reading in history buffer (for interval calculations)
+  updateWindSpeedHistory(speed);
   
   // Reset for next calculation (atomic operation)
   windClicks = 0;
   lastWindCalc = now;
   
   return speed;
+}
+
+// Store wind speed reading in circular buffer
+void WeatherStationSensorManager::updateWindSpeedHistory(float speed) {
+  unsigned long now = millis();
+  
+  // Store reading
+  int idx = windWriteIndex;
+  windHistory[idx].speed_kmh = speed;
+  windHistory[idx].timestamp_millis = now;
+  windWriteIndex = (idx + 1) % MAX_WIND_READINGS;
+  if (windCount < MAX_WIND_READINGS) {
+    windCount++;
+  }
+  
+  // Update peak wind speed for last 5 minutes
+  unsigned long five_min_ago = now - (5 * 60 * 1000);
+  float peak = 0.0f;
+  int num_to_check = (windCount < MAX_WIND_READINGS) ? windCount : MAX_WIND_READINGS;
+  int start_idx = (windWriteIndex - num_to_check + MAX_WIND_READINGS) % MAX_WIND_READINGS;
+  
+  for (int i = 0; i < num_to_check; i++) {
+    int check_idx = (start_idx + i) % MAX_WIND_READINGS;
+    unsigned long reading_millis = windHistory[check_idx].timestamp_millis;
+    
+    // Handle millis() wrap-around
+    unsigned long millis_diff;
+    if (now >= reading_millis) {
+      millis_diff = now - reading_millis;
+    } else {
+      millis_diff = ((unsigned long)(-1) - reading_millis) + now + 1;
+    }
+    
+    // Check if reading is within last 5 minutes
+    if (millis_diff <= (5 * 60 * 1000)) {
+      if (windHistory[check_idx].speed_kmh > peak) {
+        peak = windHistory[check_idx].speed_kmh;
+      }
+    }
+  }
+  
+  peakWindSpeed_5min = peak;
+  lastPeakUpdate = now;
+}
+
+// Calculate average wind speed for a time interval
+float WeatherStationSensorManager::getAverageWindSpeedForInterval(uint32_t start_unix, uint32_t end_unix, mesh::RTCClock* rtc) const {
+  if (!rtc || windCount == 0) {
+    return 0.0f;
+  }
+  
+  uint32_t now_unix = rtc->getCurrentTime();
+  unsigned long now_millis = millis();
+  
+  float sum = 0.0f;
+  int count = 0;
+  int num_to_check = (windCount < MAX_WIND_READINGS) ? windCount : MAX_WIND_READINGS;
+  int start_idx = (windWriteIndex - num_to_check + MAX_WIND_READINGS) % MAX_WIND_READINGS;
+  
+  for (int i = 0; i < num_to_check; i++) {
+    int idx = (start_idx + i) % MAX_WIND_READINGS;
+    unsigned long reading_millis = windHistory[idx].timestamp_millis;
+    
+    // Convert millis to approximate unix time
+    unsigned long millis_diff;
+    if (now_millis >= reading_millis) {
+      millis_diff = now_millis - reading_millis;
+    } else {
+      millis_diff = ((unsigned long)(-1) - reading_millis) + now_millis + 1;
+    }
+    
+    uint32_t reading_unix = now_unix - (millis_diff / 1000);
+    
+    // Check if reading is within interval
+    if (reading_unix >= start_unix && reading_unix <= end_unix) {
+      sum += windHistory[idx].speed_kmh;
+      count++;
+    }
+  }
+  
+  if (count == 0) {
+    return 0.0f;
+  }
+  
+  return sum / count;
+}
+
+// Get peak wind speed in last 5 minutes
+float WeatherStationSensorManager::getPeakWindSpeed5Min(mesh::RTCClock* rtc) const {
+  // Return cached peak if recently updated (within last second)
+  unsigned long now = millis();
+  if (now - lastPeakUpdate < 1000) {
+    return peakWindSpeed_5min;
+  }
+  
+  // Otherwise calculate it
+  if (windCount == 0) {
+    return 0.0f;
+  }
+  
+  unsigned long five_min_ago = now - (5 * 60 * 1000);
+  float peak = 0.0f;
+  int num_to_check = (windCount < MAX_WIND_READINGS) ? windCount : MAX_WIND_READINGS;
+  int start_idx = (windWriteIndex - num_to_check + MAX_WIND_READINGS) % MAX_WIND_READINGS;
+  
+  for (int i = 0; i < num_to_check; i++) {
+    int idx = (start_idx + i) % MAX_WIND_READINGS;
+    unsigned long reading_millis = windHistory[idx].timestamp_millis;
+    
+    // Handle millis() wrap-around
+    unsigned long millis_diff;
+    if (now >= reading_millis) {
+      millis_diff = now - reading_millis;
+    } else {
+      millis_diff = ((unsigned long)(-1) - reading_millis) + now + 1;
+    }
+    
+    // Check if reading is within last 5 minutes
+    if (millis_diff <= (5 * 60 * 1000)) {
+      if (windHistory[idx].speed_kmh > peak) {
+        peak = windHistory[idx].speed_kmh;
+      }
+    }
+  }
+  
+  return peak;
 }
 
 int WeatherStationSensorManager::getWindDirection() const {
