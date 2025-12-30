@@ -423,10 +423,20 @@ void MQTTBridge::loop() {
   static unsigned long last_wifi_check = 0;
   static unsigned long last_wifi_reconnect_attempt = 0;
   static wl_status_t last_wifi_status = WL_DISCONNECTED;
+  static bool wifi_status_initialized = false;
   static unsigned long wifi_disconnected_time = 0;
   
   unsigned long now = millis();
   wl_status_t current_wifi_status = WiFi.status();
+  
+  // Initialize last_wifi_status on first loop() call to avoid false "reconnected" message
+  if (!wifi_status_initialized) {
+    last_wifi_status = current_wifi_status;
+    wifi_status_initialized = true;
+    if (current_wifi_status == WL_CONNECTED) {
+      MQTT_DEBUG_PRINTLN("WiFi connected! IP: %s", WiFi.localIP().toString().c_str());
+    }
+  }
   
   // Check WiFi status every 10 seconds for faster detection
   if (now - last_wifi_check > 10000) {
@@ -434,7 +444,7 @@ void MQTTBridge::loop() {
     
     if (current_wifi_status == WL_CONNECTED) {
       if (last_wifi_status != WL_CONNECTED) {
-        // WiFi just reconnected
+        // WiFi just reconnected (after being disconnected)
         MQTT_DEBUG_PRINTLN("WiFi reconnected! IP: %s", WiFi.localIP().toString().c_str());
         wifi_disconnected_time = 0;
       }
@@ -731,10 +741,22 @@ void MQTTBridge::processPacketQueue() {
   
   // MQTT_DEBUG_PRINTLN("Processing packet queue - count: %d", _queue_count);
   
-  // Process up to MAX_QUEUE_SIZE packets per loop to keep up with packet arrival rate
+  // Limit processing to 1-2 packets per loop iteration to maintain responsiveness
+  // Large packets (like neighbors list responses) can take significant time to process
+  // (JSON building + multiple broker publishes), so we spread the work across multiple loops
   int processed = 0;
-  int max_per_loop = MAX_QUEUE_SIZE; // Process all queued packets per loop
+  int max_per_loop = 2; // Process max 2 packets per loop to keep main loop responsive
+  unsigned long loop_start_time = millis();
+  const unsigned long MAX_PROCESSING_TIME_MS = 50; // Don't spend more than 50ms processing per loop
+  
   while (_queue_count > 0 && processed < max_per_loop) {
+    // Check time budget - if we've spent too long, stop processing to maintain responsiveness
+    unsigned long elapsed = millis() - loop_start_time;
+    if (elapsed > MAX_PROCESSING_TIME_MS) {
+      MQTT_DEBUG_PRINTLN("Packet processing time budget exceeded (%lu ms), deferring remaining %d packets", elapsed, _queue_count);
+      break;
+    }
+    
     QueuedPacket& queued = _packet_queue[_queue_head];
     
     MQTT_DEBUG_PRINTLN("Processing queued packet (is_tx: %s)", queued.is_tx ? "true" : "false");
@@ -1226,6 +1248,7 @@ bool MQTTBridge::createAuthToken() {
   // Get current time for expiration tracking
   unsigned long current_time = time(nullptr);
   unsigned long expires_in = 86400; // 24 hours
+  bool time_synced = (current_time >= 1000000000); // After year 2001
   
   // Prepare owner public key (if set) - convert to uppercase hex
   const char* owner_key = nullptr;
@@ -1261,8 +1284,17 @@ bool MQTTBridge::createAuthToken() {
         owner_key, client_version, email)) {
       MQTT_DEBUG_PRINTLN("Created auth token for US server");
       us_token_created = true;
+      // Set expiration time if time is synced, otherwise leave at 0 to be set later
+      if (time_synced) {
+        _token_us_expires_at = current_time + expires_in;
+        MQTT_DEBUG_PRINTLN("US token expiration set to: %lu", _token_us_expires_at);
+      } else {
+        _token_us_expires_at = 0; // Will be set after NTP sync
+        MQTT_DEBUG_PRINTLN("US token created, expiration will be set after NTP sync");
+      }
     } else {
       MQTT_DEBUG_PRINTLN("Failed to create auth token for US server");
+      _token_us_expires_at = 0;
     }
   }
   
@@ -1275,8 +1307,17 @@ bool MQTTBridge::createAuthToken() {
         owner_key, client_version, email)) {
       MQTT_DEBUG_PRINTLN("Created auth token for EU server");
       eu_token_created = true;
+      // Set expiration time if time is synced, otherwise leave at 0 to be set later
+      if (time_synced) {
+        _token_eu_expires_at = current_time + expires_in;
+        MQTT_DEBUG_PRINTLN("EU token expiration set to: %lu", _token_eu_expires_at);
+      } else {
+        _token_eu_expires_at = 0; // Will be set after NTP sync
+        MQTT_DEBUG_PRINTLN("EU token created, expiration will be set after NTP sync");
+      }
     } else {
       MQTT_DEBUG_PRINTLN("Failed to create auth token for EU server");
+      _token_eu_expires_at = 0;
     }
   }
   
@@ -1902,10 +1943,29 @@ void MQTTBridge::syncTimeWithNTP() {
     
     // Mark NTP as synced regardless of RTC availability
     // JWT tokens need valid time, which is now available via time()
+    bool was_ntp_synced = _ntp_synced;
     _ntp_synced = true;
     _last_ntp_sync = millis();
     
     MQTT_DEBUG_PRINTLN("Time synced: %lu", epochTime);
+    
+    // If tokens were created before NTP sync (expires_at == 0), set expiration times now
+    // Tokens are created during begin(), so they're recent (within last few minutes)
+    // Set expiration to 24 hours from now to be safe
+    if (!was_ntp_synced) {
+      unsigned long current_time = time(nullptr);
+      unsigned long expires_in = 86400; // 24 hours
+      
+      if (_analyzer_us_enabled && _token_us_expires_at == 0 && strlen(_auth_token_us) > 0) {
+        _token_us_expires_at = current_time + expires_in;
+        MQTT_DEBUG_PRINTLN("US token expiration set after NTP sync: %lu", _token_us_expires_at);
+      }
+      
+      if (_analyzer_eu_enabled && _token_eu_expires_at == 0 && strlen(_auth_token_eu) > 0) {
+        _token_eu_expires_at = current_time + expires_in;
+        MQTT_DEBUG_PRINTLN("EU token expiration set after NTP sync: %lu", _token_eu_expires_at);
+      }
+    }
     
     // Set timezone from string (with DST support) - only if changed
     static char last_timezone[64] = "";
