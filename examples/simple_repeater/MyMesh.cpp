@@ -1134,11 +1134,13 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
 }
 
 void MyMesh::loop() {
+  // Check radio FIRST to ensure we don't miss incoming packets
+  // MQTT processing can take time, so we prioritize radio reception
+  mesh::Mesh::loop();
+
 #ifdef WITH_BRIDGE
   bridge.loop();
 #endif
-
-  mesh::Mesh::loop();
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
     mesh::Packet *pkt = createSelfAdvert();
