@@ -126,6 +126,7 @@ The MQTT bridge comes with the following defaults:
 - **Default Broker**: meshtastic.pugetmesh.org:1883 (username: meshdev, password: large4cats)
 - **WiFi SSID**: "ssid_here" (must be configured)
 - **WiFi Password**: "password_here" (must be configured)
+- **WiFi Power Save**: "min" (minimum power saving, balanced performance and power)
 - **Timezone**: "America/Los_Angeles" (Pacific Time with DST support)
 - **Timezone Offset**: -8 hours (fallback)
 - **Let's Mesh Analyzer US**: Enabled (mqtt-us-v1.letsmesh.net:443)
@@ -170,10 +171,15 @@ The MQTT bridge comes with the following defaults:
 #### Get Commands
 - `get wifi.ssid` - Get WiFi SSID
 - `get wifi.pwd` - Get WiFi password
+- `get wifi.powersave` - Get WiFi power save mode (none/min/max)
 
 #### Set Commands
 - `set wifi.ssid <ssid>` - Set WiFi SSID
 - `set wifi.pwd <password>` - Set WiFi password
+- `set wifi.powersave none|min|max` - Set WiFi power save mode
+  - `none` - No power saving (best performance, highest power consumption)
+  - `min` - Minimum power saving (default, balanced performance and power)
+  - `max` - Maximum power saving (lowest power consumption, may affect performance)
 
 ### Timezone Commands
 
@@ -348,9 +354,14 @@ The device needs internet connectivity to publish to MQTT brokers.
 set wifi.ssid "YourWiFiNetwork"
 set wifi.pwd "YourWiFiPassword"
 
+# Optionally configure WiFi power saving (default: min)
+# Use "none" for best performance, "min" for balanced (default), "max" for lowest power
+set wifi.powersave min
+
 # Verify WiFi settings
 get wifi.ssid
 get wifi.pwd
+get wifi.powersave
 ```
 
 ### Step 4: Configure Device Identity
@@ -449,6 +460,7 @@ Once configured, the device will automatically publish messages to MQTT brokers.
 # Check WiFi settings
 get wifi.ssid
 get wifi.pwd
+get wifi.powersave
 
 # Reset WiFi settings
 set wifi.ssid ""
@@ -457,6 +469,9 @@ set wifi.pwd ""
 # Reconfigure with correct credentials
 set wifi.ssid "YourWiFiNetwork"
 set wifi.pwd "YourWiFiPassword"
+
+# If connection issues persist, try disabling power saving for better reliability
+set wifi.powersave none
 ```
 
 #### No MQTT Messages Appearing
