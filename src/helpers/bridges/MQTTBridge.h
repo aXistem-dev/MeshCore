@@ -106,6 +106,7 @@ private:
   NTPClient _ntp_client;
   unsigned long _last_ntp_sync;
   bool _ntp_synced;
+  bool _ntp_sync_pending;  // Flag to trigger NTP sync from loop() instead of event handler
   
   // Timezone handling
   Timezone* _timezone;

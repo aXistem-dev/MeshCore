@@ -45,7 +45,7 @@ MQTTBridge::MQTTBridge(NodePrefs *prefs, mesh::PacketManager *mgr, mesh::RTCCloc
     : BridgeBase(prefs, mgr, rtc), _mqtt_client(nullptr),
       _active_brokers(0), _queue_head(0), _queue_tail(0), _queue_count(0),
       _last_status_publish(0), _last_status_retry(0), _status_interval(300000), // 5 minutes default
-              _ntp_client(_ntp_udp, "pool.ntp.org", 0, 60000), _last_ntp_sync(0), _ntp_synced(false),
+              _ntp_client(_ntp_udp, "pool.ntp.org", 0, 60000), _last_ntp_sync(0), _ntp_synced(false), _ntp_sync_pending(false),
               _timezone(nullptr), _last_raw_len(0), _last_snr(0), _last_rssi(0), _last_raw_timestamp(0),
               _analyzer_us_enabled(false), _analyzer_eu_enabled(false), _identity(identity),
               _analyzer_us_client(nullptr), _analyzer_eu_client(nullptr), _config_valid(false),
@@ -128,15 +128,9 @@ void MQTTBridge::begin() {
   stripQuotes(_prefs->mqtt_username, sizeof(_prefs->mqtt_username));
   stripQuotes(_prefs->mqtt_password, sizeof(_prefs->mqtt_password));
   
-  // Strip quotes from origin if present
-  MQTT_DEBUG_PRINTLN("Origin before stripping: '%s'", _origin);
+  // Strip quotes from origin and IATA if present
   stripQuotes(_origin, sizeof(_origin));
-  MQTT_DEBUG_PRINTLN("Origin after stripping: '%s'", _origin);
-  
-  // Strip quotes from IATA if present
-  MQTT_DEBUG_PRINTLN("IATA before stripping: '%s'", _iata);
   stripQuotes(_iata, sizeof(_iata));
-  MQTT_DEBUG_PRINTLN("IATA after stripping: '%s'", _iata);
   
   // Convert IATA code to uppercase (IATA codes are conventionally uppercase)
   for (int i = 0; _iata[i]; i++) {
@@ -151,31 +145,18 @@ void MQTTBridge::begin() {
   // Set status interval to 5 minutes (300000 ms), or use preference if set and valid
   if (_prefs->mqtt_status_interval >= 1000 && _prefs->mqtt_status_interval <= 3600000) {
     _status_interval = _prefs->mqtt_status_interval;
-    MQTT_DEBUG_PRINTLN("Using preference status interval: %lu ms", _status_interval);
   } else {
     // Invalid or uninitialized value - fix it in preferences and use default
-    if (_prefs->mqtt_status_interval > 0 && _prefs->mqtt_status_interval != 300000) {
-      MQTT_DEBUG_PRINTLN("Invalid preference status interval: %lu ms (fixing to default 300000 ms)", 
-                         _prefs->mqtt_status_interval);
-    }
     _prefs->mqtt_status_interval = 300000; // Fix the preference value
     _status_interval = 300000; // 5 minutes default
-    // Note: We don't save preferences here as that should be done by the caller if needed
-    // This ensures the correct value is used for this session
   }
-  
-  MQTT_DEBUG_PRINTLN("Status publishing: enabled=%s, interval=%lu ms", 
-                     _status_enabled ? "true" : "false", _status_interval);
   
   // Check for configuration mismatch: bridge.source=tx but mqtt.tx=off
   checkConfigurationMismatch();
   
-  MQTT_DEBUG_PRINTLN("Origin: %s, IATA: %s", _origin, _iata);
-  MQTT_DEBUG_PRINTLN("Device ID: %s", _device_id);
-  MQTT_DEBUG_PRINTLN("WiFi SSID: %s", _prefs->wifi_ssid);
+  MQTT_DEBUG_PRINTLN("Config: Origin=%s, IATA=%s, Device=%s", _origin, _iata, _device_id);
   
   // Initialize WiFi
-  MQTT_DEBUG_PRINTLN("Starting WiFi...");
   WiFi.mode(WIFI_STA);
   
   // Enable automatic reconnection - ESP32 will handle reconnection automatically
@@ -186,23 +167,14 @@ void MQTTBridge::begin() {
   #ifdef ESP_PLATFORM
   WiFi.onEvent([this](WiFiEvent_t event, WiFiEventInfo_t info) {
     switch(event) {
-      case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-        // Log disconnection event - reason code access varies by ESP32 Arduino version
-        // Just log the event; detailed reason tracking happens in loop() monitoring
-        MQTT_DEBUG_PRINTLN("WiFi event: DISCONNECTED");
-        // Auto-reconnect is enabled, but we'll also monitor in loop() for active reconnection
-        break;
-      case ARDUINO_EVENT_WIFI_STA_CONNECTED:
-        MQTT_DEBUG_PRINTLN("WiFi event: CONNECTED to AP");
-        break;
       case ARDUINO_EVENT_WIFI_STA_GOT_IP:
-        MQTT_DEBUG_PRINTLN("WiFi event: GOT_IP - %s", IPAddress(info.got_ip.ip_info.ip.addr).toString().c_str());
-        break;
-      case ARDUINO_EVENT_WIFI_STA_LOST_IP:
-        MQTT_DEBUG_PRINTLN("WiFi event: LOST_IP");
+        MQTT_DEBUG_PRINTLN("WiFi connected: %s", IPAddress(info.got_ip.ip_info.ip.addr).toString().c_str());
+        // Set flag to trigger NTP sync from loop() instead of doing it here
+        if (!_ntp_synced && !_ntp_sync_pending) {
+          _ntp_sync_pending = true;
+        }
         break;
       default:
-        // Other events not critical for our use case
         break;
     }
   });
@@ -214,12 +186,8 @@ void MQTTBridge::begin() {
   // Auto-reconnect will handle connection in the background
   // Check connection status, but don't wait for it
   if (WiFi.status() == WL_CONNECTED) {
-    MQTT_DEBUG_PRINTLN("WiFi connected! IP: %s", WiFi.localIP().toString().c_str());
-    
-    
     // Configure WiFi power management for efficient operation
     #ifdef ESP_PLATFORM
-    // Set WiFi power save mode from preferences (0=min, 1=none, 2=max)
     wifi_ps_type_t ps_mode;
     uint8_t ps_pref = _prefs->wifi_power_save;
     if (ps_pref == 1) {
@@ -227,34 +195,19 @@ void MQTTBridge::begin() {
     } else if (ps_pref == 2) {
       ps_mode = WIFI_PS_MAX_MODEM;
     } else {
-      ps_mode = WIFI_PS_MIN_MODEM; // Default to min (0) if invalid or unset
+      ps_mode = WIFI_PS_MIN_MODEM;
     }
+    esp_wifi_set_ps(ps_mode);
     
-    esp_err_t ps_result = esp_wifi_set_ps(ps_mode);
-    if (ps_result == ESP_OK) {
-      const char* ps_name = (ps_mode == WIFI_PS_NONE) ? "none" : 
-                           (ps_mode == WIFI_PS_MAX_MODEM) ? "max" : "min";
-      MQTT_DEBUG_PRINTLN("WiFi power save mode set to: %s", ps_name);
-    } else {
-      MQTT_DEBUG_PRINTLN("Failed to set WiFi power save mode: %d", ps_result);
-    }
-    
-    // Set WiFi TX power - use build flag if defined, otherwise default to 11dBm
+    // Set WiFi TX power
     #ifdef MQTT_WIFI_TX_POWER
     WiFi.setTxPower(MQTT_WIFI_TX_POWER);
-    MQTT_DEBUG_PRINTLN("WiFi TX power set via build flag (MQTT_WIFI_TX_POWER)");
     #else
     WiFi.setTxPower(WIFI_POWER_11dBm);
-    MQTT_DEBUG_PRINTLN("WiFi TX power set to 11dBm (default)");
     #endif
     #endif
     
-    // Sync time with NTP
     syncTimeWithNTP();
-  } else {
-    MQTT_DEBUG_PRINTLN("WiFi connection failed! Auto-reconnect enabled, will retry automatically");
-    // Don't return here - allow MQTT bridge to initialize even if WiFi isn't connected yet
-    // Auto-reconnect will handle reconnection in the background
   }
   
   // Initialize PsychicMqttClient
@@ -266,26 +219,22 @@ void MQTTBridge::begin() {
   
   // Set up event callbacks for the main MQTT client
   _mqtt_client->onConnect([this](bool sessionPresent) {
-    MQTT_DEBUG_PRINTLN("MQTT client connected, session present: %s", sessionPresent ? "true" : "false");
-    // Update broker connection status
+    MQTT_DEBUG_PRINTLN("MQTT broker connected");
     for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
       if (_brokers[i].enabled && !_brokers[i].connected) {
         _brokers[i].connected = true;
         _active_brokers++;
-        MQTT_DEBUG_PRINTLN("Broker %d marked as connected", i);
         break;
       }
     }
   });
   
   _mqtt_client->onDisconnect([this](bool sessionPresent) {
-    MQTT_DEBUG_PRINTLN("MQTT client disconnected, session present: %s", sessionPresent ? "true" : "false");
-    // Update broker connection status
+    MQTT_DEBUG_PRINTLN("MQTT broker disconnected");
     for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
       if (_brokers[i].connected) {
         _brokers[i].connected = false;
         _active_brokers--;
-        MQTT_DEBUG_PRINTLN("Broker %d marked as disconnected", i);
         break;
       }
     }
@@ -294,8 +243,30 @@ void MQTTBridge::begin() {
   // Set default broker from preferences or build flags
   setBroker(0, _prefs->mqtt_server, _prefs->mqtt_port, _prefs->mqtt_username, _prefs->mqtt_password, true);
   
-  // Setup Let's Mesh Analyzer servers
-  setupAnalyzerServers();
+  // Setup Let's Mesh Analyzer servers (but defer JWT token creation until WiFi/NTP are ready)
+  // Only configure which servers are enabled, don't create tokens yet
+  _analyzer_us_enabled = _prefs->mqtt_analyzer_us_enabled;
+  _analyzer_eu_enabled = _prefs->mqtt_analyzer_eu_enabled;
+  MQTT_DEBUG_PRINTLN("Analyzer servers - US: %s, EU: %s", 
+                     _analyzer_us_enabled ? "enabled" : "disabled",
+                     _analyzer_eu_enabled ? "enabled" : "disabled");
+  
+  // Defer JWT token creation until WiFi is connected and NTP is synced
+  // Tokens will be created in loop() once conditions are met
+  if (WiFi.status() == WL_CONNECTED && _ntp_synced) {
+    // WiFi and NTP are already ready - create tokens now
+    if (_analyzer_us_enabled || _analyzer_eu_enabled) {
+      if (createAuthToken()) {
+        MQTT_DEBUG_PRINTLN("Created authentication token for analyzer servers");
+      } else {
+        MQTT_DEBUG_PRINTLN("Failed to create authentication token");
+      }
+    }
+  } else {
+    MQTT_DEBUG_PRINTLN("Deferring JWT token creation - WiFi: %s, NTP: %s", 
+                      (WiFi.status() == WL_CONNECTED) ? "connected" : "disconnected",
+                      _ntp_synced ? "synced" : "not synced");
+  }
   
   // Setup PsychicMqttClient WebSocket clients for analyzer servers
   setupAnalyzerClients();
@@ -429,12 +400,12 @@ void MQTTBridge::loop() {
   unsigned long now = millis();
   wl_status_t current_wifi_status = WiFi.status();
   
-  // Initialize last_wifi_status on first loop() call to avoid false "reconnected" message
+  // Initialize last_wifi_status on first loop() call
   if (!wifi_status_initialized) {
     last_wifi_status = current_wifi_status;
     wifi_status_initialized = true;
-    if (current_wifi_status == WL_CONNECTED) {
-      MQTT_DEBUG_PRINTLN("WiFi connected! IP: %s", WiFi.localIP().toString().c_str());
+    if (current_wifi_status == WL_CONNECTED && !_ntp_synced) {
+      syncTimeWithNTP();
     }
   }
   
@@ -444,42 +415,43 @@ void MQTTBridge::loop() {
     
     if (current_wifi_status == WL_CONNECTED) {
       if (last_wifi_status != WL_CONNECTED) {
-        // WiFi just reconnected (after being disconnected)
-        MQTT_DEBUG_PRINTLN("WiFi reconnected! IP: %s", WiFi.localIP().toString().c_str());
         wifi_disconnected_time = 0;
+        if (!_ntp_synced) {
+          syncTimeWithNTP();
+        }
       }
       last_wifi_status = WL_CONNECTED;
     } else {
-      // WiFi is disconnected
       if (last_wifi_status == WL_CONNECTED) {
-        // WiFi just disconnected
-        MQTT_DEBUG_PRINTLN("WiFi disconnected! Status: %d", current_wifi_status);
         wifi_disconnected_time = now;
       } else if (wifi_disconnected_time > 0) {
-        // WiFi has been disconnected for a while
         unsigned long disconnected_duration = now - wifi_disconnected_time;
         
         // Try to force reconnection if disconnected for more than 30 seconds
-        // and we haven't tried in the last 30 seconds
         if (disconnected_duration > 30000 && (now - last_wifi_reconnect_attempt) > 30000) {
-          MQTT_DEBUG_PRINTLN("WiFi still disconnected after %lu ms, attempting manual reconnect...", disconnected_duration);
           last_wifi_reconnect_attempt = now;
-          
-          // Force reconnection attempt (non-blocking)
           WiFi.disconnect();
-          // Don't use delay() - WiFi.begin() is async, delay blocks the entire system
           WiFi.begin(_prefs->wifi_ssid, _prefs->wifi_password);
-          MQTT_DEBUG_PRINTLN("WiFi.begin() called - connection will be established asynchronously");
-        } else if (disconnected_duration > 60000) {
-          // Log every minute if still disconnected
-          static unsigned long last_disconnect_log = 0;
-          if (now - last_disconnect_log > 60000) {
-            MQTT_DEBUG_PRINTLN("WiFi disconnected for %lu seconds, status: %d", disconnected_duration / 1000, current_wifi_status);
-            last_disconnect_log = now;
-          }
         }
       }
       last_wifi_status = current_wifi_status;
+    }
+  }
+  
+  // Check for pending NTP sync (triggered from WiFi event handler)
+  if (_ntp_sync_pending && WiFi.status() == WL_CONNECTED) {
+    _ntp_sync_pending = false;
+    syncTimeWithNTP();
+  }
+  
+  // Check if analyzer server settings have changed in preferences
+  static unsigned long last_analyzer_check = 0;
+  if (millis() - last_analyzer_check > 5000) {
+    last_analyzer_check = millis();
+    if (_analyzer_us_enabled != _prefs->mqtt_analyzer_us_enabled || 
+        _analyzer_eu_enabled != _prefs->mqtt_analyzer_eu_enabled) {
+      MQTT_DEBUG_PRINTLN("Analyzer settings changed - updating...");
+      setupAnalyzerServers();
     }
   }
   
@@ -548,80 +520,28 @@ void MQTTBridge::loop() {
     }
   }
   
-  // Memory monitoring (every 5 minutes)
-  static unsigned long last_memory_log = 0;
-  if (millis() - last_memory_log > 300000) { // 5 minutes
-    logMemoryStatus();
-    // Debug: Log status timer state when memory check happens
-    if (_status_enabled) {
-      unsigned long now = millis();
-      unsigned long elapsed = (now >= _last_status_publish) ? 
-                             (now - _last_status_publish) : 
-                             (ULONG_MAX - _last_status_publish + now + 1);
-      unsigned long next_publish = (elapsed < _status_interval) ? (_status_interval - elapsed) : 0;
-      MQTT_DEBUG_PRINTLN("Memory check: Status timer - elapsed: %lu ms, interval: %lu ms, next: %lu ms", 
-                         elapsed, _status_interval, next_publish);
-    }
-    last_memory_log = millis();
-  }
-  
-  // Critical memory check (every 15 minutes)
+  // Critical memory check (every 15 minutes) - only log warnings
   static unsigned long last_critical_check = 0;
   if (millis() - last_critical_check > 900000) { // 15 minutes
-    if (ESP.getMaxAllocHeap() < 60000) { // Less than 60KB max alloc
-      MQTT_DEBUG_PRINTLN("WARNING: Max alloc heap below 60KB - potential memory leak detected!");
-      MQTT_DEBUG_PRINTLN("Free: %d, Min: %d, Max: %d", ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap());
-      
-      // Attempt memory defragmentation by forcing garbage collection
-      MQTT_DEBUG_PRINTLN("Attempting memory defragmentation...");
-      // Force a small allocation and immediate free to trigger defrag
-      void* temp = malloc(1024);
-      if (temp) {
-        free(temp);
-        MQTT_DEBUG_PRINTLN("Defragmentation complete. New Max Alloc: %d", ESP.getMaxAllocHeap());
-      }
+    size_t max_alloc = ESP.getMaxAllocHeap();
+    if (max_alloc < 40000) {
+      MQTT_DEBUG_PRINTLN("CRITICAL: Low memory! Free: %d, Max: %d", ESP.getFreeHeap(), max_alloc);
+    } else if (max_alloc < 60000) {
+      MQTT_DEBUG_PRINTLN("WARNING: Memory pressure. Free: %d, Max: %d", ESP.getFreeHeap(), max_alloc);
     }
-    
-    // Critical threshold check
-    if (ESP.getMaxAllocHeap() < 40000) { // Less than 40KB max alloc
-      MQTT_DEBUG_PRINTLN("CRITICAL: Max alloc heap below 40KB - severe memory leak!");
-      MQTT_DEBUG_PRINTLN("Free: %d, Min: %d, Max: %d", ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap());
-    }
-    
     last_critical_check = millis();
   }
 }
 
 void MQTTBridge::onPacketReceived(mesh::Packet *packet) {
-  if (!_initialized || !_packets_enabled) {
-    MQTT_DEBUG_PRINTLN("Packet received but not processing - initialized: %s, packets_enabled: %s", 
-                      _initialized ? "true" : "false", _packets_enabled ? "true" : "false");
-    return;
-  }
+  if (!_initialized || !_packets_enabled) return;
   
   // Check if we have any valid brokers to send to
   bool has_valid_brokers = _config_valid || 
                           (_analyzer_us_enabled && _analyzer_us_client) ||
                           (_analyzer_eu_enabled && _analyzer_eu_client);
   
-  if (!has_valid_brokers) {
-    MQTT_DEBUG_PRINTLN("Packet received but no valid brokers available - discarding");
-    return;
-  }
-  
-  // Early exit if queue is full to avoid unnecessary processing
-  // queuePacket() will handle dropping oldest, but we can skip debug logging here
-  if (_queue_count >= MAX_QUEUE_SIZE) {
-    // Queue full - queuePacket() will handle dropping oldest packet
-    // Continue to queuePacket() to maintain consistent behavior
-  }
-  
-  // Debug logging for packet types that might be getting filtered
-  uint8_t packet_type = packet->getPayloadType();
-  if (packet_type == 4 || packet_type == 9) {  // ADVERT or TRACE
-    MQTT_DEBUG_PRINTLN("Packet received: type=%d (ADVERT=%d, TRACE=%d), queuing for transmission", 
-                      packet_type, (packet_type == 4), (packet_type == 9));
-  }
+  if (!has_valid_brokers) return;
   
   // Queue packet for transmission
   queuePacket(packet, false);
@@ -675,6 +595,19 @@ void MQTTBridge::connectToBrokers() {
     return;
   }
   
+  // Check WiFi status first - don't attempt MQTT connection if WiFi is disconnected
+  if (WiFi.status() != WL_CONNECTED) {
+    // WiFi is not connected - skip MQTT connection attempts
+    // WiFi auto-reconnect will handle WiFi, then we can connect MQTT
+    static unsigned long last_wifi_warning = 0;
+    unsigned long now = millis();
+    if (now - last_wifi_warning > 300000) { // Log every 5 minutes max
+      MQTT_DEBUG_PRINTLN("Skipping MQTT broker connection - WiFi not connected");
+      last_wifi_warning = now;
+    }
+    return;
+  }
+  
   // For now, connect to the first enabled broker
   // TODO: Implement multi-broker support with PsychicMqttClient
   for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
@@ -715,29 +648,20 @@ void MQTTBridge::connectToBrokers() {
       if (!_mqtt_client->connected()) {
         _brokers[i].connected = false;
         _active_brokers--;
-        MQTT_DEBUG_PRINTLN("Lost connection to broker %d", i);
       } else {
         // Periodic health check: Force reconnection every 4 hours to prevent stale connections
-        // This addresses the responsiveness degradation issue after long uptime
         static unsigned long last_health_check = 0;
         const unsigned long HEALTH_CHECK_INTERVAL = 14400000; // 4 hours
         unsigned long now = millis();
         
-        // Handle millis() overflow
         unsigned long elapsed = (now >= last_health_check) ? 
                                (now - last_health_check) : 
                                (ULONG_MAX - last_health_check + now + 1);
         
         if (elapsed >= HEALTH_CHECK_INTERVAL) {
-          MQTT_DEBUG_PRINTLN("Performing periodic connection health check for broker %d", i);
           last_health_check = now;
-          
-          // Disconnect and reconnect to refresh the connection
-          // This prevents accumulation of stale TCP connections or internal state
-          // Note: disconnect() and connect() are async, no delay needed
           _mqtt_client->disconnect();
           
-          // Reconnect with fresh connection (async, non-blocking)
           char broker_uri[128];
           snprintf(broker_uri, sizeof(broker_uri), "mqtt://%s:%d", _brokers[i].host, _brokers[i].port);
           _mqtt_client->setServer(broker_uri);
@@ -746,10 +670,8 @@ void MQTTBridge::connectToBrokers() {
           }
           _mqtt_client->connect();
           _brokers[i].last_attempt = now;
-          // Mark as disconnected temporarily - onConnect callback will mark as connected
           _brokers[i].connected = false;
           _active_brokers--;
-          MQTT_DEBUG_PRINTLN("Initiating health check reconnection for broker %d (async)", i);
         }
       }
     }
@@ -795,13 +717,10 @@ void MQTTBridge::processPacketQueue() {
     // Check time budget - if we've spent too long, stop processing to maintain responsiveness
     unsigned long elapsed = millis() - loop_start_time;
     if (elapsed > MAX_PROCESSING_TIME_MS) {
-      MQTT_DEBUG_PRINTLN("Packet processing time budget exceeded (%lu ms), deferring remaining %d packets", elapsed, _queue_count);
       break;
     }
     
     QueuedPacket& queued = _packet_queue[_queue_head];
-    
-    MQTT_DEBUG_PRINTLN("Processing queued packet (is_tx: %s)", queued.is_tx ? "true" : "false");
     
     // Publish packet (use stored raw data if available)
     publishPacket(queued.packet, queued.is_tx, 
@@ -869,11 +788,7 @@ bool MQTTBridge::publishStatus() {
   bool has_analyzer_servers = (_analyzer_us_enabled && _analyzer_us_client && _analyzer_us_client->connected()) ||
                                (_analyzer_eu_enabled && _analyzer_eu_client && _analyzer_eu_client->connected());
   
-  MQTT_DEBUG_PRINTLN("publishStatus() called - custom_brokers: %s, analyzer_servers: %s", 
-                     has_custom_brokers ? "yes" : "no", has_analyzer_servers ? "yes" : "no");
-  
   if (!has_custom_brokers && !has_analyzer_servers) {
-    MQTT_DEBUG_PRINTLN("No destinations available for status publish");
     return false;  // No destinations available
   }
   
@@ -963,7 +878,6 @@ bool MQTTBridge::publishStatus() {
               
               for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
                 if (_brokers[i].enabled && _brokers[i].connected) {
-                  MQTT_DEBUG_PRINTLN("Publishing status to topic: %s", topic);
                   
                   // Build broker URI
                   char broker_uri[128];
@@ -1011,12 +925,11 @@ bool MQTTBridge::publishStatus() {
             
             // Return true if we successfully published to at least one destination
             if (published) {
-              MQTT_DEBUG_PRINTLN("Status published successfully");
+              MQTT_DEBUG_PRINTLN("Status published");
               return true;
             }
           }
           
-          MQTT_DEBUG_PRINTLN("Status publish failed - no destinations or build failed");
           return false;  // Failed to build or publish message
 }
 
@@ -1388,11 +1301,25 @@ void MQTTBridge::setupAnalyzerServers() {
                      _analyzer_eu_enabled ? "enabled" : "disabled");
   
   // Create authentication token if any analyzer servers are enabled
+  // Only create tokens if WiFi is connected and NTP is synced (to ensure correct timestamps)
   if (_analyzer_us_enabled || _analyzer_eu_enabled) {
-    if (createAuthToken()) {
-      MQTT_DEBUG_PRINTLN("Created authentication token for analyzer servers");
+    if (WiFi.status() == WL_CONNECTED && _ntp_synced) {
+      if (createAuthToken()) {
+        MQTT_DEBUG_PRINTLN("Created authentication token for analyzer servers");
+        // Update client credentials with new tokens if clients exist
+        if (_analyzer_us_enabled && _analyzer_us_client && strlen(_auth_token_us) > 0) {
+          _analyzer_us_client->setCredentials(_analyzer_username, _auth_token_us);
+        }
+        if (_analyzer_eu_enabled && _analyzer_eu_client && strlen(_auth_token_eu) > 0) {
+          _analyzer_eu_client->setCredentials(_analyzer_username, _auth_token_eu);
+        }
+      } else {
+        MQTT_DEBUG_PRINTLN("Failed to create authentication token");
+      }
     } else {
-      MQTT_DEBUG_PRINTLN("Failed to create authentication token");
+      MQTT_DEBUG_PRINTLN("Deferring JWT token creation - WiFi: %s, NTP: %s", 
+                        (WiFi.status() == WL_CONNECTED) ? "connected" : "disconnected",
+                        _ntp_synced ? "synced" : "not synced");
     }
   }
   
@@ -1406,127 +1333,86 @@ void MQTTBridge::setupAnalyzerServers() {
 
 bool MQTTBridge::createAuthToken() {
   if (!_identity) {
-    MQTT_DEBUG_PRINTLN("No identity available for creating auth token");
+    MQTT_DEBUG_PRINTLN("No identity for auth token");
     return false;
   }
   
   // Create username in the format: v1_{UPPERCASE_PUBLIC_KEY}
   char public_key_hex[65];
   mesh::Utils::toHex(public_key_hex, _identity->pub_key, PUB_KEY_SIZE);
-  
   snprintf(_analyzer_username, sizeof(_analyzer_username), "v1_%s", public_key_hex);
-  
-  MQTT_DEBUG_PRINTLN("Creating auth token for username: %s", _analyzer_username);
   
   bool us_token_created = false;
   bool eu_token_created = false;
   
-  // Get current time for expiration tracking
   unsigned long current_time = time(nullptr);
   unsigned long expires_in = 86400; // 24 hours
-  bool time_synced = (current_time >= 1000000000); // After year 2001
+  bool time_synced = (current_time >= 1000000000);
   
   // Prepare owner public key (if set) - convert to uppercase hex
   const char* owner_key = nullptr;
   char owner_key_uppercase[65];
   if (_prefs->mqtt_owner_public_key[0] != '\0') {
-    // Copy and convert to uppercase
     strncpy(owner_key_uppercase, _prefs->mqtt_owner_public_key, sizeof(owner_key_uppercase) - 1);
     owner_key_uppercase[sizeof(owner_key_uppercase) - 1] = '\0';
     for (int i = 0; owner_key_uppercase[i]; i++) {
       owner_key_uppercase[i] = toupper(owner_key_uppercase[i]);
     }
     owner_key = owner_key_uppercase;
-    MQTT_DEBUG_PRINTLN("Using owner public key: %s", owner_key);
   }
   
-  // Build client version string (same format as used in status messages)
   char client_version[64];
   getClientVersion(client_version, sizeof(client_version));
   
-  // Get email from preferences (if set)
-  const char* email = nullptr;
-  if (_prefs->mqtt_email[0] != '\0') {
-    email = _prefs->mqtt_email;
-    MQTT_DEBUG_PRINTLN("Using email: %s", email);
-  }
+  const char* email = (_prefs->mqtt_email[0] != '\0') ? _prefs->mqtt_email : nullptr;
   
   // Create JWT token for US server
   if (_analyzer_us_enabled) {
-    MQTT_DEBUG_PRINTLN("Creating JWT token for US server...");
     if (JWTHelper::createAuthToken(
         *_identity, "mqtt-us-v1.letsmesh.net", 
         0, expires_in, _auth_token_us, sizeof(_auth_token_us),
         owner_key, client_version, email)) {
-      MQTT_DEBUG_PRINTLN("Created auth token for US server");
       us_token_created = true;
-      // Set expiration time if time is synced, otherwise leave at 0 to be set later
-      if (time_synced) {
-        _token_us_expires_at = current_time + expires_in;
-        MQTT_DEBUG_PRINTLN("US token expiration set to: %lu", _token_us_expires_at);
-      } else {
-        _token_us_expires_at = 0; // Will be set after NTP sync
-        MQTT_DEBUG_PRINTLN("US token created, expiration will be set after NTP sync");
-      }
+      _token_us_expires_at = time_synced ? (current_time + expires_in) : 0;
     } else {
-      MQTT_DEBUG_PRINTLN("Failed to create auth token for US server");
+      MQTT_DEBUG_PRINTLN("Failed to create US token");
       _token_us_expires_at = 0;
     }
   }
   
   // Create JWT token for EU server
   if (_analyzer_eu_enabled) {
-    MQTT_DEBUG_PRINTLN("Creating JWT token for EU server...");
     if (JWTHelper::createAuthToken(
         *_identity, "mqtt-eu-v1.letsmesh.net", 
         0, expires_in, _auth_token_eu, sizeof(_auth_token_eu),
         owner_key, client_version, email)) {
-      MQTT_DEBUG_PRINTLN("Created auth token for EU server");
       eu_token_created = true;
-      // Set expiration time if time is synced, otherwise leave at 0 to be set later
-      if (time_synced) {
-        _token_eu_expires_at = current_time + expires_in;
-        MQTT_DEBUG_PRINTLN("EU token expiration set to: %lu", _token_eu_expires_at);
-      } else {
-        _token_eu_expires_at = 0; // Will be set after NTP sync
-        MQTT_DEBUG_PRINTLN("EU token created, expiration will be set after NTP sync");
-      }
+      _token_eu_expires_at = time_synced ? (current_time + expires_in) : 0;
     } else {
-      MQTT_DEBUG_PRINTLN("Failed to create auth token for EU server");
+      MQTT_DEBUG_PRINTLN("Failed to create EU token");
       _token_eu_expires_at = 0;
     }
+  }
+  
+  if (us_token_created || eu_token_created) {
+    MQTT_DEBUG_PRINTLN("Auth tokens created (US:%s EU:%s)", 
+                       us_token_created ? "yes" : "no", eu_token_created ? "yes" : "no");
   }
   
   return us_token_created || eu_token_created;
 }
 
 void MQTTBridge::publishToAnalyzerServers(const char* topic, const char* payload, bool retained) {
-  if (!_analyzer_us_enabled && !_analyzer_eu_enabled) {
-    MQTT_DEBUG_PRINTLN("No analyzer servers enabled, skipping publish to topic: %s", topic);
-    return;
-  }
-  
-  MQTT_DEBUG_PRINTLN("Publishing to analyzer servers via WebSocket MQTT");
-  MQTT_DEBUG_PRINTLN("Topic: %s", topic);
-  MQTT_DEBUG_PRINTLN("Payload length: %d", strlen(payload));
-  MQTT_DEBUG_PRINTLN("US enabled: %s, EU enabled: %s", _analyzer_us_enabled ? "true" : "false", _analyzer_eu_enabled ? "true" : "false");
+  if (!_analyzer_us_enabled && !_analyzer_eu_enabled) return;
   
   // Publish to US server if enabled
   if (_analyzer_us_enabled && _analyzer_us_client) {
-    MQTT_DEBUG_PRINTLN("Publishing to US analyzer server");
     publishToAnalyzerClient(_analyzer_us_client, topic, payload, retained);
-  } else {
-    MQTT_DEBUG_PRINTLN("US analyzer server not available (enabled: %s, client: %s)", 
-                      _analyzer_us_enabled ? "true" : "false", _analyzer_us_client ? "exists" : "null");
   }
   
   // Publish to EU server if enabled
   if (_analyzer_eu_enabled && _analyzer_eu_client) {
-    MQTT_DEBUG_PRINTLN("Publishing to EU analyzer server");
     publishToAnalyzerClient(_analyzer_eu_client, topic, payload, retained);
-  } else {
-    MQTT_DEBUG_PRINTLN("EU analyzer server not available (enabled: %s, client: %s)", 
-                      _analyzer_eu_enabled ? "true" : "false", _analyzer_eu_client ? "exists" : "null");
   }
 }
 
@@ -1591,41 +1477,24 @@ void MQTTBridge::setupAnalyzerClients() {
 
     // Set up event callbacks for US server
     _analyzer_us_client->onConnect([this](bool sessionPresent) {
-      MQTT_DEBUG_PRINTLN("Connected to Let's Mesh US server, session present: %s", sessionPresent ? "true" : "false");
-      // Publish status message when connected
+      MQTT_DEBUG_PRINTLN("Connected to US analyzer");
       publishStatusToAnalyzerClient(_analyzer_us_client, "mqtt-us-v1.letsmesh.net");
     });
 
     _analyzer_us_client->onDisconnect([this](bool sessionPresent) {
-      MQTT_DEBUG_PRINTLN("Disconnected from Let's Mesh US server, session present: %s", sessionPresent ? "true" : "false");
+      MQTT_DEBUG_PRINTLN("Disconnected from US analyzer");
     });
 
-            _analyzer_us_client->onError([this](esp_mqtt_error_codes error) {
-              MQTT_DEBUG_PRINTLN("Let's Mesh US server error - error_type: %d, connect_return_code: %d, sock_errno: %d", 
-                                error.error_type, error.connect_return_code, error.esp_transport_sock_errno);
-            });
+    _analyzer_us_client->onError([this](esp_mqtt_error_codes error) {
+      MQTT_DEBUG_PRINTLN("US analyzer error: type=%d, code=%d", error.error_type, error.connect_return_code);
+    });
 
-    // Set up WebSocket MQTT over TLS connection to US server
     _analyzer_us_client->setServer("wss://mqtt-us-v1.letsmesh.net:443/mqtt");
-    MQTT_DEBUG_PRINTLN("US Server - Username: %s", _analyzer_username);
-    MQTT_DEBUG_PRINTLN("US Server - Auth token length: %d", strlen(_auth_token_us));
-    MQTT_DEBUG_PRINTLN("US Server - Auth token (first 50 chars): %.50s...", _auth_token_us);
     _analyzer_us_client->setCredentials(_analyzer_username, _auth_token_us);
-
-    // Configure TLS - use specific GTS Root R4 certificate
-    MQTT_DEBUG_PRINTLN("Using GTS Root R4 certificate for US server");
     _analyzer_us_client->setCACert(GTS_ROOT_R4);
 
-    // Only attempt connection if WiFi is connected and NTP is synced
-    // Otherwise, maintainAnalyzerConnections() will handle it later
     if (WiFi.status() == WL_CONNECTED && _ntp_synced) {
-      // Connect to US server (async connection)
       _analyzer_us_client->connect();
-      MQTT_DEBUG_PRINTLN("Initiating connection to Let's Mesh US server");
-    } else {
-      MQTT_DEBUG_PRINTLN("Deferring US server connection - WiFi: %s, NTP: %s", 
-                        (WiFi.status() == WL_CONNECTED) ? "connected" : "disconnected",
-                        _ntp_synced ? "synced" : "not synced");
     }
   }
 
@@ -1639,41 +1508,24 @@ void MQTTBridge::setupAnalyzerClients() {
 
     // Set up event callbacks for EU server
     _analyzer_eu_client->onConnect([this](bool sessionPresent) {
-      MQTT_DEBUG_PRINTLN("Connected to Let's Mesh EU server, session present: %s", sessionPresent ? "true" : "false");
-      // Publish status message when connected
+      MQTT_DEBUG_PRINTLN("Connected to EU analyzer");
       publishStatusToAnalyzerClient(_analyzer_eu_client, "mqtt-eu-v1.letsmesh.net");
     });
 
     _analyzer_eu_client->onDisconnect([this](bool sessionPresent) {
-      MQTT_DEBUG_PRINTLN("Disconnected from Let's Mesh EU server, session present: %s", sessionPresent ? "true" : "false");
+      MQTT_DEBUG_PRINTLN("Disconnected from EU analyzer");
     });
 
-            _analyzer_eu_client->onError([this](esp_mqtt_error_codes error) {
-              MQTT_DEBUG_PRINTLN("Let's Mesh EU server error - error_type: %d, connect_return_code: %d, sock_errno: %d", 
-                                error.error_type, error.connect_return_code, error.esp_transport_sock_errno);
-            });
+    _analyzer_eu_client->onError([this](esp_mqtt_error_codes error) {
+      MQTT_DEBUG_PRINTLN("EU analyzer error: type=%d, code=%d", error.error_type, error.connect_return_code);
+    });
 
-    // Set up WebSocket MQTT over TLS connection to EU server
     _analyzer_eu_client->setServer("wss://mqtt-eu-v1.letsmesh.net:443/mqtt");
-    MQTT_DEBUG_PRINTLN("EU Server - Username: %s", _analyzer_username);
-    MQTT_DEBUG_PRINTLN("EU Server - Auth token length: %d", strlen(_auth_token_eu));
-    MQTT_DEBUG_PRINTLN("EU Server - Auth token (first 50 chars): %.50s...", _auth_token_eu);
     _analyzer_eu_client->setCredentials(_analyzer_username, _auth_token_eu);
-
-    // Configure TLS - use specific GTS Root R4 certificate
-    MQTT_DEBUG_PRINTLN("Using GTS Root R4 certificate for EU server");
     _analyzer_eu_client->setCACert(GTS_ROOT_R4);
 
-    // Only attempt connection if WiFi is connected and NTP is synced
-    // Otherwise, maintainAnalyzerConnections() will handle it later
     if (WiFi.status() == WL_CONNECTED && _ntp_synced) {
-      // Connect to EU server (async connection)
       _analyzer_eu_client->connect();
-      MQTT_DEBUG_PRINTLN("Initiating connection to Let's Mesh EU server");
-    } else {
-      MQTT_DEBUG_PRINTLN("Deferring EU server connection - WiFi: %s, NTP: %s", 
-                        (WiFi.status() == WL_CONNECTED) ? "connected" : "disconnected",
-                        _ntp_synced ? "synced" : "not synced");
     }
   }
 }
@@ -1709,15 +1561,9 @@ void MQTTBridge::publishToAnalyzerClient(PsychicMqttClient* client, const char* 
     _last_analyzer_eu_log = 0;
   }
   
-  MQTT_DEBUG_PRINTLN("Publishing to analyzer client - topic: %s, payload length: %d, retained: %s", 
-                    topic, strlen(payload), retained ? "true" : "false");
-  
-  // Publish message using PsychicMqttClient API
   int result = client->publish(topic, 1, retained, payload, strlen(payload));
-  if (result > 0) {
-    MQTT_DEBUG_PRINTLN("PsychicMqttClient message published successfully, result=%d", result);
-  } else {
-    MQTT_DEBUG_PRINTLN("PsychicMqttClient publish failed, result=%d", result);
+  if (result <= 0) {
+    MQTT_DEBUG_PRINTLN("Analyzer publish failed (result=%d)", result);
   }
 }
 
@@ -1814,16 +1660,9 @@ void MQTTBridge::publishStatusToAnalyzerClient(PsychicMqttClient* client, const 
   );
   
   if (len > 0) {
-    MQTT_DEBUG_PRINTLN("Publishing status to %s server", server_name);
-    MQTT_DEBUG_PRINTLN("Status topic: %s", status_topic);
-    MQTT_DEBUG_PRINTLN("Status payload: %s", json_buffer);
-    
-    // Publish status message (retained)
     int result = client->publish(status_topic, 1, true, json_buffer, strlen(json_buffer));
-    if (result > 0) {
-      MQTT_DEBUG_PRINTLN("Status published to %s server successfully, result=%d", server_name, result);
-    } else {
-      MQTT_DEBUG_PRINTLN("Status publish to %s server failed, result=%d", server_name, result);
+    if (result <= 0) {
+      MQTT_DEBUG_PRINTLN("Status publish to %s failed", server_name);
     }
   }
 }
@@ -1835,27 +1674,31 @@ void MQTTBridge::maintainAnalyzerConnections() {
   
   // Check WiFi status first - don't attempt MQTT reconnection if WiFi is disconnected
   if (WiFi.status() != WL_CONNECTED) {
-    // WiFi is not connected - skip MQTT reconnection attempts
-    // WiFi auto-reconnect will handle WiFi, then we can reconnect MQTT
-    static unsigned long last_wifi_warning = 0;
-    unsigned long now = millis();
-    if (now - last_wifi_warning > 300000) { // Log every 5 minutes max
-      MQTT_DEBUG_PRINTLN("Skipping MQTT reconnection - WiFi not connected");
-      last_wifi_warning = now;
-    }
     return;
   }
   
   // Check NTP sync status - JWT tokens require valid timestamps
-  // If NTP hasn't synced yet, wait before attempting connections
   if (!_ntp_synced) {
-    static unsigned long last_ntp_warning = 0;
-    unsigned long now = millis();
-    if (now - last_ntp_warning > 300000) { // Log every 5 minutes max
-      MQTT_DEBUG_PRINTLN("Skipping MQTT reconnection - NTP not synced yet");
-      last_ntp_warning = now;
-    }
     return;
+  }
+  
+  // Create JWT tokens if they don't exist yet and conditions are met
+  if ((_analyzer_us_enabled || _analyzer_eu_enabled) && 
+      (strlen(_auth_token_us) == 0 && strlen(_auth_token_eu) == 0)) {
+    if (createAuthToken()) {
+      if (_analyzer_us_enabled && _analyzer_us_client && strlen(_auth_token_us) > 0) {
+        _analyzer_us_client->setCredentials(_analyzer_username, _auth_token_us);
+        if (!_analyzer_us_client->connected()) {
+          _analyzer_us_client->connect();
+        }
+      }
+      if (_analyzer_eu_enabled && _analyzer_eu_client && strlen(_auth_token_eu) > 0) {
+        _analyzer_eu_client->setCredentials(_analyzer_username, _auth_token_eu);
+        if (!_analyzer_eu_client->connected()) {
+          _analyzer_eu_client->connect();
+        }
+      }
+    }
   }
   
   unsigned long current_time = time(nullptr);
@@ -1897,8 +1740,6 @@ void MQTTBridge::maintainAnalyzerConnections() {
     
     if (token_needs_renewal && can_attempt_renewal) {
       _last_token_renewal_attempt_us = now_millis;
-      MQTT_DEBUG_PRINTLN("US token expired or expiring soon (expires_at: %lu, current: %lu), renewing...", 
-                         _token_us_expires_at, current_time);
       
       // Prepare owner public key (if set) - convert to uppercase hex
       const char* owner_key = nullptr;
@@ -1932,21 +1773,11 @@ void MQTTBridge::maintainAnalyzerConnections() {
           0, 86400, _auth_token_us, sizeof(_auth_token_us),
           owner_key, client_version, email)) {
         unsigned long expires_in = 86400; // 24 hours
-        // Only set expiration time if time is synced - otherwise set to 0 to indicate it needs to be set later
-        if (time_synced) {
-          _token_us_expires_at = current_time + expires_in;
-          MQTT_DEBUG_PRINTLN("US token renewed, new expiration: %lu", _token_us_expires_at);
-        } else {
-          _token_us_expires_at = 0; // Will be set properly after time sync
-          MQTT_DEBUG_PRINTLN("US token renewed, expiration will be set after time sync");
-        }
+        _token_us_expires_at = time_synced ? (current_time + expires_in) : 0;
+        MQTT_DEBUG_PRINTLN("US token renewed");
         
-        // Update client credentials with new token
         _analyzer_us_client->setCredentials(_analyzer_username, _auth_token_us);
         
-        // Only disconnect if OLD token is actually expired or very close to expiration
-        // For proactive renewals (1 hour before expiration), keep the connection alive
-        // The new token will be used on the next natural reconnection
         bool old_token_expired_or_imminent = !time_synced || 
                                             (old_token_expires_at == 0) ||
                                             (current_time >= old_token_expires_at) ||
@@ -1954,42 +1785,27 @@ void MQTTBridge::maintainAnalyzerConnections() {
                                              current_time >= (old_token_expires_at - DISCONNECT_THRESHOLD));
         
         if (old_token_expired_or_imminent && _analyzer_us_client->connected()) {
-          // Old token is expired or expiring very soon - must disconnect to apply new token
-          MQTT_DEBUG_PRINTLN("Disconnecting US server to apply new token (old token expired or expiring soon, expires_at: %lu)...", old_token_expires_at);
           _analyzer_us_client->disconnect();
-          MQTT_DEBUG_PRINTLN("Reconnecting to US server with renewed token...");
-          _last_reconnect_attempt_us = now_millis; // Update reconnect timestamp to throttle subsequent attempts
-          _analyzer_us_client->connect();
-        } else if (!_analyzer_us_client->connected()) {
-          // Not connected - reconnect with new token
-          MQTT_DEBUG_PRINTLN("Reconnecting to US server with renewed token...");
           _last_reconnect_attempt_us = now_millis;
           _analyzer_us_client->connect();
-        } else {
-          // Proactive renewal - connection is active and old token is still valid
-          // Just update credentials, connection will continue with old token until next natural reconnection
-          MQTT_DEBUG_PRINTLN("US token renewed proactively - credentials updated, connection remains active (old token expires at: %lu)", old_token_expires_at);
+        } else if (!_analyzer_us_client->connected()) {
+          _last_reconnect_attempt_us = now_millis;
+          _analyzer_us_client->connect();
         }
       } else {
         MQTT_DEBUG_PRINTLN("Failed to renew US token");
         _token_us_expires_at = 0;
       }
     } else if (needs_reconnect) {
-      // Token is still valid but connection is lost - reconnect with existing token
-      // Throttle reconnection attempts to avoid spamming
       unsigned long reconnect_elapsed = (now_millis >= _last_reconnect_attempt_us) ?
                                       (now_millis - _last_reconnect_attempt_us) :
                                       (ULONG_MAX - _last_reconnect_attempt_us + now_millis + 1);
       if (reconnect_elapsed >= RECONNECT_THROTTLE_MS) {
         _last_reconnect_attempt_us = now_millis;
-        MQTT_DEBUG_PRINTLN("US server disconnected but token still valid, reconnecting...");
         _analyzer_us_client->connect();
       } else {
-        // Throttled - only log periodically to avoid spam (every 5 minutes max)
         static unsigned long last_throttle_log_us = 0;
         if (now_millis - last_throttle_log_us > 300000) {
-          MQTT_DEBUG_PRINTLN("US server reconnection throttled (last attempt %lu ms ago, need %lu ms)", 
-                            reconnect_elapsed, RECONNECT_THROTTLE_MS);
           last_throttle_log_us = now_millis;
         }
       }
@@ -2022,8 +1838,6 @@ void MQTTBridge::maintainAnalyzerConnections() {
     
     if (token_needs_renewal && can_attempt_renewal) {
       _last_token_renewal_attempt_eu = now_millis;
-      MQTT_DEBUG_PRINTLN("EU token expired or expiring soon (expires_at: %lu, current: %lu), renewing...", 
-                         _token_eu_expires_at, current_time);
       
       // Prepare owner public key (if set) - convert to uppercase hex
       const char* owner_key = nullptr;
@@ -2057,21 +1871,11 @@ void MQTTBridge::maintainAnalyzerConnections() {
           0, 86400, _auth_token_eu, sizeof(_auth_token_eu),
           owner_key, client_version, email)) {
         unsigned long expires_in = 86400; // 24 hours
-        // Only set expiration time if time is synced - otherwise set to 0 to indicate it needs to be set later
-        if (time_synced) {
-          _token_eu_expires_at = current_time + expires_in;
-          MQTT_DEBUG_PRINTLN("EU token renewed, new expiration: %lu", _token_eu_expires_at);
-        } else {
-          _token_eu_expires_at = 0; // Will be set properly after time sync
-          MQTT_DEBUG_PRINTLN("EU token renewed, expiration will be set after time sync");
-        }
+        _token_eu_expires_at = time_synced ? (current_time + expires_in) : 0;
+        MQTT_DEBUG_PRINTLN("EU token renewed");
         
-        // Update client credentials with new token
         _analyzer_eu_client->setCredentials(_analyzer_username, _auth_token_eu);
         
-        // Only disconnect if OLD token is actually expired or very close to expiration
-        // For proactive renewals (1 hour before expiration), keep the connection alive
-        // The new token will be used on the next natural reconnection
         bool old_token_expired_or_imminent = !time_synced || 
                                             (old_token_expires_at == 0) ||
                                             (current_time >= old_token_expires_at) ||
@@ -2079,44 +1883,24 @@ void MQTTBridge::maintainAnalyzerConnections() {
                                              current_time >= (old_token_expires_at - DISCONNECT_THRESHOLD));
         
         if (old_token_expired_or_imminent && _analyzer_eu_client->connected()) {
-          // Old token is expired or expiring very soon - must disconnect to apply new token
-          MQTT_DEBUG_PRINTLN("Disconnecting EU server to apply new token (old token expired or expiring soon, expires_at: %lu)...", old_token_expires_at);
           _analyzer_eu_client->disconnect();
-          MQTT_DEBUG_PRINTLN("Reconnecting to EU server with renewed token...");
-          _last_reconnect_attempt_eu = now_millis; // Update reconnect timestamp to throttle subsequent attempts
-          _analyzer_eu_client->connect();
-        } else if (!_analyzer_eu_client->connected()) {
-          // Not connected - reconnect with new token
-          MQTT_DEBUG_PRINTLN("Reconnecting to EU server with renewed token...");
           _last_reconnect_attempt_eu = now_millis;
           _analyzer_eu_client->connect();
-        } else {
-          // Proactive renewal - connection is active and old token is still valid
-          // Just update credentials, connection will continue with old token until next natural reconnection
-          MQTT_DEBUG_PRINTLN("EU token renewed proactively - credentials updated, connection remains active (old token expires at: %lu)", old_token_expires_at);
+        } else if (!_analyzer_eu_client->connected()) {
+          _last_reconnect_attempt_eu = now_millis;
+          _analyzer_eu_client->connect();
         }
       } else {
         MQTT_DEBUG_PRINTLN("Failed to renew EU token");
         _token_eu_expires_at = 0;
       }
     } else if (needs_reconnect) {
-      // Token is still valid but connection is lost - reconnect with existing token
-      // Throttle reconnection attempts to avoid spamming
       unsigned long reconnect_elapsed = (now_millis >= _last_reconnect_attempt_eu) ?
                                       (now_millis - _last_reconnect_attempt_eu) :
                                       (ULONG_MAX - _last_reconnect_attempt_eu + now_millis + 1);
       if (reconnect_elapsed >= RECONNECT_THROTTLE_MS) {
         _last_reconnect_attempt_eu = now_millis;
-        MQTT_DEBUG_PRINTLN("EU server disconnected but token still valid, reconnecting...");
         _analyzer_eu_client->connect();
-      } else {
-        // Throttled - only log periodically to avoid spam (every 5 minutes max)
-        static unsigned long last_throttle_log_eu = 0;
-        if (now_millis - last_throttle_log_eu > 300000) {
-          MQTT_DEBUG_PRINTLN("EU server reconnection throttled (last attempt %lu ms ago, need %lu ms)", 
-                            reconnect_elapsed, RECONNECT_THROTTLE_MS);
-          last_throttle_log_eu = now_millis;
-        }
       }
     }
   }
@@ -2193,13 +1977,11 @@ void MQTTBridge::syncTimeWithNTP() {
     
     MQTT_DEBUG_PRINTLN("Time synced: %lu", epochTime);
     
-    // If tokens were created before NTP sync (expires_at == 0), set expiration times now
-    // Tokens are created during begin(), so they're recent (within last few minutes)
-    // Set expiration to 24 hours from now to be safe
     if (!was_ntp_synced) {
       unsigned long current_time = time(nullptr);
       unsigned long expires_in = 86400; // 24 hours
       
+      // If tokens were created before NTP sync (expires_at == 0), set expiration times now
       if (_analyzer_us_enabled && _token_us_expires_at == 0 && strlen(_auth_token_us) > 0) {
         _token_us_expires_at = current_time + expires_in;
         MQTT_DEBUG_PRINTLN("US token expiration set after NTP sync: %lu", _token_us_expires_at);
@@ -2207,15 +1989,33 @@ void MQTTBridge::syncTimeWithNTP() {
       
       if (_analyzer_eu_enabled && _token_eu_expires_at == 0 && strlen(_auth_token_eu) > 0) {
         _token_eu_expires_at = current_time + expires_in;
-        MQTT_DEBUG_PRINTLN("EU token expiration set after NTP sync: %lu", _token_eu_expires_at);
+      }
+      
+      // If tokens don't exist yet (deferred during begin()), create them now
+      if ((_analyzer_us_enabled || _analyzer_eu_enabled) && 
+          (strlen(_auth_token_us) == 0 && strlen(_auth_token_eu) == 0)) {
+        if (createAuthToken()) {
+          if (_analyzer_us_enabled && _analyzer_us_client && strlen(_auth_token_us) > 0) {
+            _analyzer_us_client->setCredentials(_analyzer_username, _auth_token_us);
+            if (!_analyzer_us_client->connected()) {
+              _analyzer_us_client->connect();
+            }
+          }
+          if (_analyzer_eu_enabled && _analyzer_eu_client && strlen(_auth_token_eu) > 0) {
+            _analyzer_eu_client->setCredentials(_analyzer_username, _auth_token_eu);
+            if (!_analyzer_eu_client->connected()) {
+              _analyzer_eu_client->connect();
+            }
+          }
+        } else {
+          MQTT_DEBUG_PRINTLN("Failed to create tokens after NTP sync");
+        }
       }
     }
     
     // Set timezone from string (with DST support) - only if changed
     static char last_timezone[64] = "";
     if (strcmp(_prefs->timezone_string, last_timezone) != 0) {
-      MQTT_DEBUG_PRINTLN("Setting timezone: %s", _prefs->timezone_string);
-      
       // Clean up old timezone object to prevent memory leak
       if (_timezone) {
         delete _timezone;
@@ -2225,44 +2025,28 @@ void MQTTBridge::syncTimeWithNTP() {
       // Create timezone object based on timezone string
       Timezone* tz = createTimezoneFromString(_prefs->timezone_string);
       if (tz) {
-        MQTT_DEBUG_PRINTLN("Timezone created successfully");
-        // Store timezone for later use in message building
         _timezone = tz;
       } else {
-        MQTT_DEBUG_PRINTLN("Failed to create timezone, using UTC");
         // Create UTC timezone as fallback
         TimeChangeRule utc = {"UTC", Last, Sun, Mar, 0, 0};
         _timezone = new Timezone(utc, utc);
       }
       
-      // Remember this timezone string
       strncpy(last_timezone, _prefs->timezone_string, sizeof(last_timezone) - 1);
       last_timezone[sizeof(last_timezone) - 1] = '\0';
       
       // Force memory defragmentation after timezone recreation
-      MQTT_DEBUG_PRINTLN("Forcing memory defragmentation after timezone change");
       void* temp = malloc(1024);
       if (temp) {
         free(temp);
-        MQTT_DEBUG_PRINTLN("Defragmentation complete. Max Alloc: %d", ESP.getMaxAllocHeap());
       }
     }
     
-    // Show current time in both UTC and local
+    // Get current time info
     struct tm* utc_timeinfo = gmtime((time_t*)&epochTime);
     struct tm* local_timeinfo = localtime((time_t*)&epochTime);
-    
-    if (utc_timeinfo) {
-      MQTT_DEBUG_PRINTLN("UTC time: %04d-%02d-%02d %02d:%02d:%02d", 
-                        utc_timeinfo->tm_year + 1900, utc_timeinfo->tm_mon + 1, utc_timeinfo->tm_mday,
-                        utc_timeinfo->tm_hour, utc_timeinfo->tm_min, utc_timeinfo->tm_sec);
-    }
-    
-    if (local_timeinfo) {
-      MQTT_DEBUG_PRINTLN("Local time: %04d-%02d-%02d %02d:%02d:%02d", 
-                        local_timeinfo->tm_year + 1900, local_timeinfo->tm_mon + 1, local_timeinfo->tm_mday,
-                        local_timeinfo->tm_hour, local_timeinfo->tm_min, local_timeinfo->tm_sec);
-    }
+    (void)utc_timeinfo; // Unused but kept for debugging if needed
+    (void)local_timeinfo;
   } else {
     MQTT_DEBUG_PRINTLN("NTP sync failed");
   }
@@ -2416,33 +2200,17 @@ void MQTTBridge::optimizeMqttClientConfig(PsychicMqttClient* client, bool is_ana
   esp_mqtt_client_config_t* config = client->getMqttConfig();
   if (config) {
     #if defined(ESP_IDF_VERSION_MAJOR) && ESP_IDF_VERSION_MAJOR >= 5
-      // ESP-IDF v5: Use buffer.size and buffer.out_size
-      // Set output buffer size to match input buffer
       if (config->buffer.out_size == 0 || config->buffer.out_size > buffer_size) {
         config->buffer.out_size = buffer_size;
-        MQTT_DEBUG_PRINTLN("Optimized MQTT client (%s): buffer.size=%d, out_size=%d", 
-                          is_analyzer_client ? "analyzer" : "main",
-                          config->buffer.size, config->buffer.out_size);
       }
-    #else
-      // ESP-IDF v4: buffer_size is set via setBufferSize() above
-      // Note: out_buffer_size may not be directly accessible in v4 config structure
-      MQTT_DEBUG_PRINTLN("Optimized MQTT client (%s): buffer_size=%d", 
-                        is_analyzer_client ? "analyzer" : "main",
-                        config->buffer_size);
     #endif
   }
 }
 
 void MQTTBridge::logMemoryStatus() {
-  MQTT_DEBUG_PRINTLN("=== Memory Status ===");
-  MQTT_DEBUG_PRINTLN("Free heap: %d bytes", ESP.getFreeHeap());
-  MQTT_DEBUG_PRINTLN("Min free heap: %d bytes", ESP.getMinFreeHeap());
-  MQTT_DEBUG_PRINTLN("Max alloc heap: %d bytes", ESP.getMaxAllocHeap());
-  MQTT_DEBUG_PRINTLN("Heap size: %d bytes", ESP.getHeapSize());
-  MQTT_DEBUG_PRINTLN("Free PSRAM: %d bytes", ESP.getFreePsram());
-  MQTT_DEBUG_PRINTLN("Queue size: %d/%d packets", _queue_count, MAX_QUEUE_SIZE);
-  MQTT_DEBUG_PRINTLN("===================");
+  MQTT_DEBUG_PRINTLN("Memory: Free=%d, Max=%d, Queue=%d/%d", 
+                     ESP.getFreeHeap(), ESP.getMaxAllocHeap(), _queue_count, MAX_QUEUE_SIZE);
 }
 
 #endif
+
