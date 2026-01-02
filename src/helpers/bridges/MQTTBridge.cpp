@@ -210,14 +210,9 @@ void MQTTBridge::begin() {
   
   WiFi.begin(_prefs->wifi_ssid, _prefs->wifi_password);
   
-  // Wait for WiFi connection
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(500);
-    MQTT_DEBUG_PRINT(".");
-    attempts++;
-  }
-  
+  // WiFi connection is asynchronous - don't block here
+  // Auto-reconnect will handle connection in the background
+  // Check connection status, but don't wait for it
   if (WiFi.status() == WL_CONNECTED) {
     MQTT_DEBUG_PRINTLN("WiFi connected! IP: %s", WiFi.localIP().toString().c_str());
     
@@ -470,11 +465,11 @@ void MQTTBridge::loop() {
           MQTT_DEBUG_PRINTLN("WiFi still disconnected after %lu ms, attempting manual reconnect...", disconnected_duration);
           last_wifi_reconnect_attempt = now;
           
-          // Force reconnection attempt
+          // Force reconnection attempt (non-blocking)
           WiFi.disconnect();
-          delay(100);
+          // Don't use delay() - WiFi.begin() is async, delay blocks the entire system
           WiFi.begin(_prefs->wifi_ssid, _prefs->wifi_password);
-          MQTT_DEBUG_PRINTLN("WiFi.begin() called - waiting for connection...");
+          MQTT_DEBUG_PRINTLN("WiFi.begin() called - connection will be established asynchronously");
         } else if (disconnected_duration > 60000) {
           // Log every minute if still disconnected
           static unsigned long last_disconnect_log = 0;
@@ -739,10 +734,10 @@ void MQTTBridge::connectToBrokers() {
           
           // Disconnect and reconnect to refresh the connection
           // This prevents accumulation of stale TCP connections or internal state
+          // Note: disconnect() and connect() are async, no delay needed
           _mqtt_client->disconnect();
-          delay(100); // Brief delay to allow cleanup
           
-          // Reconnect with fresh connection
+          // Reconnect with fresh connection (async, non-blocking)
           char broker_uri[128];
           snprintf(broker_uri, sizeof(broker_uri), "mqtt://%s:%d", _brokers[i].host, _brokers[i].port);
           _mqtt_client->setServer(broker_uri);
@@ -751,7 +746,10 @@ void MQTTBridge::connectToBrokers() {
           }
           _mqtt_client->connect();
           _brokers[i].last_attempt = now;
-          MQTT_DEBUG_PRINTLN("Reconnected broker %d for health check", i);
+          // Mark as disconnected temporarily - onConnect callback will mark as connected
+          _brokers[i].connected = false;
+          _active_brokers--;
+          MQTT_DEBUG_PRINTLN("Initiating health check reconnection for broker %d (async)", i);
         }
       }
     }
@@ -1866,7 +1864,8 @@ void MQTTBridge::maintainAnalyzerConnections() {
   // If expiration time was set before time sync, it will be a small value, so we'll renew
   bool time_synced = (current_time >= 1000000000); // After year 2001
   
-  const unsigned long RENEWAL_BUFFER = 3600; // Renew tokens 1 hour before expiration
+  const unsigned long RENEWAL_BUFFER = 60; // Renew tokens 60 seconds before expiration (minimal buffer to avoid downtime)
+  const unsigned long DISCONNECT_THRESHOLD = 60; // Only disconnect if token expires within 60 seconds
   const unsigned long RENEWAL_THROTTLE_MS = 60000; // Don't attempt renewal more than once per minute
   const unsigned long RECONNECT_THROTTLE_MS = 60000; // Don't attempt reconnection more than once per minute
   
@@ -1924,6 +1923,9 @@ void MQTTBridge::maintainAnalyzerConnections() {
         email = _prefs->mqtt_email;
       }
       
+      // Store old expiration time before renewing (to check if we need to disconnect)
+      unsigned long old_token_expires_at = _token_us_expires_at;
+      
       // Renew the token
       if (JWTHelper::createAuthToken(
           *_identity, "mqtt-us-v1.letsmesh.net", 
@@ -1942,15 +1944,32 @@ void MQTTBridge::maintainAnalyzerConnections() {
         // Update client credentials with new token
         _analyzer_us_client->setCredentials(_analyzer_username, _auth_token_us);
         
-        // Reconnect to apply new token (whether currently connected or not)
-        // If connected, disconnect first to ensure new token is used
-        if (_analyzer_us_client->connected()) {
-          MQTT_DEBUG_PRINTLN("Disconnecting US server to apply new token...");
+        // Only disconnect if OLD token is actually expired or very close to expiration
+        // For proactive renewals (1 hour before expiration), keep the connection alive
+        // The new token will be used on the next natural reconnection
+        bool old_token_expired_or_imminent = !time_synced || 
+                                            (old_token_expires_at == 0) ||
+                                            (current_time >= old_token_expires_at) ||
+                                            (time_synced && old_token_expires_at >= 1000000000 && 
+                                             current_time >= (old_token_expires_at - DISCONNECT_THRESHOLD));
+        
+        if (old_token_expired_or_imminent && _analyzer_us_client->connected()) {
+          // Old token is expired or expiring very soon - must disconnect to apply new token
+          MQTT_DEBUG_PRINTLN("Disconnecting US server to apply new token (old token expired or expiring soon, expires_at: %lu)...", old_token_expires_at);
           _analyzer_us_client->disconnect();
+          MQTT_DEBUG_PRINTLN("Reconnecting to US server with renewed token...");
+          _last_reconnect_attempt_us = now_millis; // Update reconnect timestamp to throttle subsequent attempts
+          _analyzer_us_client->connect();
+        } else if (!_analyzer_us_client->connected()) {
+          // Not connected - reconnect with new token
+          MQTT_DEBUG_PRINTLN("Reconnecting to US server with renewed token...");
+          _last_reconnect_attempt_us = now_millis;
+          _analyzer_us_client->connect();
+        } else {
+          // Proactive renewal - connection is active and old token is still valid
+          // Just update credentials, connection will continue with old token until next natural reconnection
+          MQTT_DEBUG_PRINTLN("US token renewed proactively - credentials updated, connection remains active (old token expires at: %lu)", old_token_expires_at);
         }
-        MQTT_DEBUG_PRINTLN("Reconnecting to US server with renewed token...");
-        _last_reconnect_attempt_us = now_millis; // Update reconnect timestamp to throttle subsequent attempts
-        _analyzer_us_client->connect();
       } else {
         MQTT_DEBUG_PRINTLN("Failed to renew US token");
         _token_us_expires_at = 0;
@@ -2029,6 +2048,9 @@ void MQTTBridge::maintainAnalyzerConnections() {
         email = _prefs->mqtt_email;
       }
       
+      // Store old expiration time before renewing (to check if we need to disconnect)
+      unsigned long old_token_expires_at = _token_eu_expires_at;
+      
       // Renew the token
       if (JWTHelper::createAuthToken(
           *_identity, "mqtt-eu-v1.letsmesh.net", 
@@ -2047,15 +2069,32 @@ void MQTTBridge::maintainAnalyzerConnections() {
         // Update client credentials with new token
         _analyzer_eu_client->setCredentials(_analyzer_username, _auth_token_eu);
         
-        // Reconnect to apply new token (whether currently connected or not)
-        // If connected, disconnect first to ensure new token is used
-        if (_analyzer_eu_client->connected()) {
-          MQTT_DEBUG_PRINTLN("Disconnecting EU server to apply new token...");
+        // Only disconnect if OLD token is actually expired or very close to expiration
+        // For proactive renewals (1 hour before expiration), keep the connection alive
+        // The new token will be used on the next natural reconnection
+        bool old_token_expired_or_imminent = !time_synced || 
+                                            (old_token_expires_at == 0) ||
+                                            (current_time >= old_token_expires_at) ||
+                                            (time_synced && old_token_expires_at >= 1000000000 && 
+                                             current_time >= (old_token_expires_at - DISCONNECT_THRESHOLD));
+        
+        if (old_token_expired_or_imminent && _analyzer_eu_client->connected()) {
+          // Old token is expired or expiring very soon - must disconnect to apply new token
+          MQTT_DEBUG_PRINTLN("Disconnecting EU server to apply new token (old token expired or expiring soon, expires_at: %lu)...", old_token_expires_at);
           _analyzer_eu_client->disconnect();
+          MQTT_DEBUG_PRINTLN("Reconnecting to EU server with renewed token...");
+          _last_reconnect_attempt_eu = now_millis; // Update reconnect timestamp to throttle subsequent attempts
+          _analyzer_eu_client->connect();
+        } else if (!_analyzer_eu_client->connected()) {
+          // Not connected - reconnect with new token
+          MQTT_DEBUG_PRINTLN("Reconnecting to EU server with renewed token...");
+          _last_reconnect_attempt_eu = now_millis;
+          _analyzer_eu_client->connect();
+        } else {
+          // Proactive renewal - connection is active and old token is still valid
+          // Just update credentials, connection will continue with old token until next natural reconnection
+          MQTT_DEBUG_PRINTLN("EU token renewed proactively - credentials updated, connection remains active (old token expires at: %lu)", old_token_expires_at);
         }
-        MQTT_DEBUG_PRINTLN("Reconnecting to EU server with renewed token...");
-        _last_reconnect_attempt_eu = now_millis; // Update reconnect timestamp to throttle subsequent attempts
-        _analyzer_eu_client->connect();
       } else {
         MQTT_DEBUG_PRINTLN("Failed to renew EU token");
         _token_eu_expires_at = 0;
