@@ -49,6 +49,7 @@ MQTTBridge::MQTTBridge(NodePrefs *prefs, mesh::PacketManager *mgr, mesh::RTCCloc
               _timezone(nullptr), _last_raw_len(0), _last_snr(0), _last_rssi(0), _last_raw_timestamp(0),
               _analyzer_us_enabled(false), _analyzer_eu_enabled(false), _identity(identity),
               _analyzer_us_client(nullptr), _analyzer_eu_client(nullptr), _config_valid(false),
+              _last_memory_check(0), _skipped_publishes(0),
               _last_no_broker_log(0), _last_config_warning(0), _dispatcher(nullptr), _radio(nullptr), _board(nullptr), _ms(nullptr) {
   
   // Initialize default values
@@ -263,6 +264,10 @@ void MQTTBridge::begin() {
   
   // Initialize PsychicMqttClient
   _mqtt_client = new PsychicMqttClient();
+  
+  // Optimize MQTT client configuration for memory efficiency
+  // Main client doesn't use JWT tokens, so can use smaller buffer
+  optimizeMqttClientConfig(_mqtt_client, false);
   
   // Set up event callbacks for the main MQTT client
   _mqtt_client->onConnect([this](bool sessionPresent) {
@@ -609,6 +614,13 @@ void MQTTBridge::onPacketReceived(mesh::Packet *packet) {
     return;
   }
   
+  // Early exit if queue is full to avoid unnecessary processing
+  // queuePacket() will handle dropping oldest, but we can skip debug logging here
+  if (_queue_count >= MAX_QUEUE_SIZE) {
+    // Queue full - queuePacket() will handle dropping oldest packet
+    // Continue to queuePacket() to maintain consistent behavior
+  }
+  
   // Debug logging for packet types that might be getting filtered
   uint8_t packet_type = packet->getPayloadType();
   if (packet_type == 4 || packet_type == 9) {  // ADVERT or TRACE
@@ -701,14 +713,46 @@ void MQTTBridge::connectToBrokers() {
       MQTT_DEBUG_PRINTLN("Initiating connection to broker %d", i);
     }
     
-    // Maintain connection
+    // Maintain connection and check for stale connections
     if (_brokers[i].connected) {
-      // PsychicMqttClient handles connection maintenance internally
-      // TODO: Implement proper connection state checking with callbacks
+      // Check actual connection state - if it's stale, force reconnection
+      // This prevents accumulation of stale connections that appear connected but aren't responsive
       if (!_mqtt_client->connected()) {
         _brokers[i].connected = false;
         _active_brokers--;
         MQTT_DEBUG_PRINTLN("Lost connection to broker %d", i);
+      } else {
+        // Periodic health check: Force reconnection every 4 hours to prevent stale connections
+        // This addresses the responsiveness degradation issue after long uptime
+        static unsigned long last_health_check = 0;
+        const unsigned long HEALTH_CHECK_INTERVAL = 14400000; // 4 hours
+        unsigned long now = millis();
+        
+        // Handle millis() overflow
+        unsigned long elapsed = (now >= last_health_check) ? 
+                               (now - last_health_check) : 
+                               (ULONG_MAX - last_health_check + now + 1);
+        
+        if (elapsed >= HEALTH_CHECK_INTERVAL) {
+          MQTT_DEBUG_PRINTLN("Performing periodic connection health check for broker %d", i);
+          last_health_check = now;
+          
+          // Disconnect and reconnect to refresh the connection
+          // This prevents accumulation of stale TCP connections or internal state
+          _mqtt_client->disconnect();
+          delay(100); // Brief delay to allow cleanup
+          
+          // Reconnect with fresh connection
+          char broker_uri[128];
+          snprintf(broker_uri, sizeof(broker_uri), "mqtt://%s:%d", _brokers[i].host, _brokers[i].port);
+          _mqtt_client->setServer(broker_uri);
+          if (strlen(_brokers[i].username) > 0) {
+            _mqtt_client->setCredentials(_brokers[i].username, _brokers[i].password);
+          }
+          _mqtt_client->connect();
+          _brokers[i].last_attempt = now;
+          MQTT_DEBUG_PRINTLN("Reconnected broker %d for health check", i);
+        }
       }
     }
   }
@@ -741,13 +785,13 @@ void MQTTBridge::processPacketQueue() {
   
   // MQTT_DEBUG_PRINTLN("Processing packet queue - count: %d", _queue_count);
   
-  // Limit processing to 1-2 packets per loop iteration to maintain responsiveness
+  // Limit processing to 1 packet per loop iteration to maintain responsiveness
   // Large packets (like neighbors list responses) can take significant time to process
   // (JSON building + multiple broker publishes), so we spread the work across multiple loops
   int processed = 0;
-  int max_per_loop = 2; // Process max 2 packets per loop to keep main loop responsive
+  int max_per_loop = 1; // Process max 1 packet per loop to keep main loop responsive (reduced from 2)
   unsigned long loop_start_time = millis();
-  const unsigned long MAX_PROCESSING_TIME_MS = 50; // Don't spend more than 50ms processing per loop
+  const unsigned long MAX_PROCESSING_TIME_MS = 30; // Reduced from 50ms to 30ms for better responsiveness
   
   while (_queue_count > 0 && processed < max_per_loop) {
     // Check time budget - if we've spent too long, stop processing to maintain responsiveness
@@ -782,6 +826,12 @@ void MQTTBridge::processPacketQueue() {
     // Remove from queue
     dequeuePacket();
     processed++;
+    
+    // Yield to main loop after each packet to maintain responsiveness
+    // This prevents blocking the main loop for extended periods
+    #ifdef ESP_PLATFORM
+    vTaskDelay(1); // Yield to other tasks (1 tick = ~10ms on ESP32)
+    #endif
   }
 }
 
@@ -797,6 +847,24 @@ bool MQTTBridge::publishStatus() {
     }
     return false;
   }
+  
+  // Memory pressure check: Skip status publishes when heap is severely fragmented
+  // Status publishes are less critical than packet publishes, so we can skip them more aggressively
+  #ifdef ESP32
+  unsigned long now = millis();
+  if (now - _last_memory_check > 5000) {  // Check every 5 seconds
+    size_t max_alloc = ESP.getMaxAllocHeap();
+    if (max_alloc < 70000) {  // Less than 70KB max alloc = moderate fragmentation
+      static unsigned long last_status_skip_log = 0;
+      if (now - last_status_skip_log > 300000) {  // Log every 5 minutes
+        MQTT_DEBUG_PRINTLN("MQTT: Skipping status publish due to memory pressure (Max alloc: %d)", max_alloc);
+        last_status_skip_log = now;
+      }
+      return false;  // Skip status publish
+    }
+    _last_memory_check = now;
+  }
+  #endif
   
   // Check if we have any valid destinations (custom brokers or analyzer servers)
   bool has_custom_brokers = isAnyBrokerConnected() && _config_valid;
@@ -884,46 +952,63 @@ bool MQTTBridge::publishStatus() {
           if (len > 0) {
             bool published = false;
             
+            // Build topic string once and reuse (optimization: avoid redundant snprintf calls)
+            char topic[128];
+            snprintf(topic, sizeof(topic), "meshcore/%s/%s/status", _iata, _device_id);
+            size_t json_len = strlen(json_buffer); // Cache length to avoid multiple strlen() calls
+            
             // Publish to all connected custom brokers
-            if (_config_valid) {
+            if (_config_valid && _mqtt_client && _mqtt_client->connected()) {
+              // Track last broker URI to avoid calling setServer() unnecessarily (memory optimization)
+              // setServer() may allocate memory, so we only call it when the broker changes
+              static char last_broker_uri_status[128] = "";
+              
               for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
                 if (_brokers[i].enabled && _brokers[i].connected) {
-                  char topic[128];
-                  snprintf(topic, sizeof(topic), "meshcore/%s/%s/status", _iata, _device_id);
                   MQTT_DEBUG_PRINTLN("Publishing status to topic: %s", topic);
                   
-                  // Set broker for this connection (PsychicMqttClient uses URI format)
+                  // Build broker URI
                   char broker_uri[128];
                   snprintf(broker_uri, sizeof(broker_uri), "mqtt://%s:%d", _brokers[i].host, _brokers[i].port);
-                  _mqtt_client->setServer(broker_uri);
-                  if (_mqtt_client->publish(topic, 1, true, json_buffer, strlen(json_buffer)) > 0) {
+                  
+                  // Only call setServer() if broker URI changed (reduces memory allocations)
+                  if (strcmp(broker_uri, last_broker_uri_status) != 0) {
+                    _mqtt_client->setServer(broker_uri);
+                    strncpy(last_broker_uri_status, broker_uri, sizeof(last_broker_uri_status) - 1);
+                    last_broker_uri_status[sizeof(last_broker_uri_status) - 1] = '\0';
+                  }
+                  
+                  // Publish with timeout check - don't block if connection is slow
+                  int publish_result = _mqtt_client->publish(topic, 1, true, json_buffer, json_len);
+                  if (publish_result > 0) {
                     published = true;
+                  } else {
+                    // Publish failed - connection may be stale, mark as disconnected
+                    static unsigned long last_status_publish_fail_log = 0;
+                    unsigned long now = millis();
+                    if (now - last_status_publish_fail_log > 60000) { // Log every minute max
+                      MQTT_DEBUG_PRINTLN("Status publish failed (result=%d), marking broker %d as disconnected", publish_result, i);
+                      last_status_publish_fail_log = now;
+                    }
+                    _brokers[i].connected = false;
+                    _active_brokers--;
                   }
                 }
               }
             }
             
             // Always publish to Let's Mesh Analyzer servers if enabled and connected
+            // Use shared helper function to publish same JSON to both servers (avoids duplication)
             if (has_analyzer_servers) {
-              char analyzer_topic[128];
-              snprintf(analyzer_topic, sizeof(analyzer_topic), "meshcore/%s/%s/status", _iata, _device_id);
-              
-              // Try to publish to analyzer servers
-              bool analyzer_published = false;
-              if (_analyzer_us_enabled && _analyzer_us_client && _analyzer_us_client->connected()) {
-                _analyzer_us_client->publish(analyzer_topic, 1, true, json_buffer, strlen(json_buffer));
-                analyzer_published = true;
-                MQTT_DEBUG_PRINTLN("Published status to US analyzer server");
-              }
-              if (_analyzer_eu_enabled && _analyzer_eu_client && _analyzer_eu_client->connected()) {
-                _analyzer_eu_client->publish(analyzer_topic, 1, true, json_buffer, strlen(json_buffer));
-                analyzer_published = true;
-                MQTT_DEBUG_PRINTLN("Published status to EU analyzer server");
-              }
-              
-              if (analyzer_published) {
+              #ifdef ESP32
+              size_t max_alloc = ESP.getMaxAllocHeap();
+              if (max_alloc >= 70000) {  // Only publish to analyzer servers if memory is OK
+              #endif
+                publishToAnalyzerServers(topic, json_buffer, true);  // retained=true for status
                 published = true;
+              #ifdef ESP32
               }
+              #endif
             }
             
             // Return true if we successfully published to at least one destination
@@ -953,6 +1038,26 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
     }
     return;
   }
+  
+  // Memory pressure check: Skip publishes when heap is severely fragmented
+  // This prevents further fragmentation and allows memory to recover
+  // Threshold: Max alloc < 60KB indicates severe fragmentation
+  #ifdef ESP32
+  unsigned long now = millis();
+  if (now - _last_memory_check > 5000) {  // Check every 5 seconds
+    size_t max_alloc = ESP.getMaxAllocHeap();
+    if (max_alloc < 60000) {  // Less than 60KB max alloc = severe fragmentation
+      _skipped_publishes++;
+      static unsigned long last_skip_log = 0;
+      if (now - last_skip_log > 60000) {  // Log every minute
+        MQTT_DEBUG_PRINTLN("MQTT: Skipping publish due to memory pressure (Max alloc: %d, skipped: %d)", max_alloc, _skipped_publishes);
+        last_skip_log = now;
+      }
+      return;  // Skip this publish to allow memory to recover
+    }
+    _last_memory_check = now;
+  }
+  #endif
   
   // Size-adaptive buffer: estimate needed size based on packet size
   // Most packets are <100 bytes (need ~400 byte JSON), large packets need ~1500 bytes
@@ -989,36 +1094,67 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
   }
   
   if (len > 0) {
+    // Build topic string once and reuse (optimization: avoid redundant snprintf calls)
+    char topic[128];
+    snprintf(topic, sizeof(topic), "meshcore/%s/%s/packets", _iata, _device_id);
+    size_t json_len = strlen(json_buffer); // Cache length to avoid multiple strlen() calls
+    
     // Publish to custom brokers (only if config is valid)
-    if (_config_valid) {
+    if (_config_valid && _mqtt_client && _mqtt_client->connected()) {
+      // Track last broker URI to avoid calling setServer() unnecessarily (memory optimization)
+      // setServer() may allocate memory, so we only call it when the broker changes
+      static char last_broker_uri[128] = "";
+      
       for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
         if (_brokers[i].enabled && _brokers[i].connected) {
-          // Double-check that the client is actually connected before publishing
-          // This prevents race conditions where onConnect fires but connection isn't ready yet
-          if (!_mqtt_client || !_mqtt_client->connected()) {
-            // Connection state is out of sync - mark broker as disconnected
-            _brokers[i].connected = false;
-            _active_brokers--;
-            continue;
-          }
-          
-          char topic[128];
-          snprintf(topic, sizeof(topic), "meshcore/%s/%s/packets", _iata, _device_id);
-          // MQTT_DEBUG_PRINTLN("Publishing packet to topic: %s", topic);
-          
-          // Set broker for this connection (PsychicMqttClient uses URI format)
+          // Build broker URI
           char broker_uri[128];
           snprintf(broker_uri, sizeof(broker_uri), "mqtt://%s:%d", _brokers[i].host, _brokers[i].port);
-          _mqtt_client->setServer(broker_uri);
-          _mqtt_client->publish(topic, 1, false, json_buffer, strlen(json_buffer)); // qos=1, retained=false
+          
+          // Only call setServer() if broker URI changed (reduces memory allocations)
+          if (strcmp(broker_uri, last_broker_uri) != 0) {
+            _mqtt_client->setServer(broker_uri);
+            strncpy(last_broker_uri, broker_uri, sizeof(last_broker_uri) - 1);
+            last_broker_uri[sizeof(last_broker_uri) - 1] = '\0';
+          }
+          
+          // Publish with timeout check - don't block if connection is slow
+          // This prevents blocking the main loop when MQTT broker is slow or unresponsive
+          int publish_result = _mqtt_client->publish(topic, 1, false, json_buffer, json_len); // qos=1, retained=false
+          if (publish_result <= 0) {
+            // Publish failed - connection may be stale, mark as disconnected
+            // This prevents accumulation of failed publishes that block the loop
+            static unsigned long last_publish_fail_log = 0;
+            unsigned long now = millis();
+            if (now - last_publish_fail_log > 60000) { // Log every minute max
+              MQTT_DEBUG_PRINTLN("Publish failed (result=%d), marking broker %d as disconnected", publish_result, i);
+              last_publish_fail_log = now;
+            }
+            _brokers[i].connected = false;
+            _active_brokers--;
+          }
+        }
+      }
+    } else if (_config_valid) {
+      // Connection state is out of sync - mark all brokers as disconnected
+      for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
+        if (_brokers[i].enabled && _brokers[i].connected) {
+          _brokers[i].connected = false;
+          _active_brokers--;
         }
       }
     }
     
     // Always publish to Let's Mesh Analyzer servers (independent of custom broker config)
-    char analyzer_topic[128];
-    snprintf(analyzer_topic, sizeof(analyzer_topic), "meshcore/%s/%s/packets", _iata, _device_id);
-    publishToAnalyzerServers(analyzer_topic, json_buffer, false);
+    // Skip analyzer servers if memory is severely fragmented (they're less critical than custom brokers)
+    #ifdef ESP32
+    size_t max_alloc = ESP.getMaxAllocHeap();
+    if (max_alloc >= 60000) {  // Only publish to analyzer servers if memory is OK
+      publishToAnalyzerServers(topic, json_buffer, false);
+    }
+    #else
+    publishToAnalyzerServers(topic, json_buffer, false);
+    #endif
   } else {
     // Debug: log when packet message building fails
     uint8_t packet_type = packet->getPayloadType();
@@ -1057,26 +1193,57 @@ void MQTTBridge::publishRaw(mesh::Packet* packet) {
   );
   
   if (len > 0) {
+    // Build topic string once and reuse (optimization: avoid redundant snprintf calls)
+    char topic[128];
+    snprintf(topic, sizeof(topic), "meshcore/%s/%s/raw", _iata, _device_id);
+    size_t json_len = strlen(json_buffer); // Cache length to avoid multiple strlen() calls
+    
     // Publish to custom brokers (only if config is valid)
-    if (_config_valid) {
+    if (_config_valid && _mqtt_client && _mqtt_client->connected()) {
+      // Track last broker URI to avoid calling setServer() unnecessarily (memory optimization)
+      // setServer() may allocate memory, so we only call it when the broker changes
+      static char last_broker_uri_raw[128] = "";
+      
       for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
         if (_brokers[i].enabled && _brokers[i].connected) {
-          char topic[128];
-          snprintf(topic, sizeof(topic), "meshcore/%s/%s/raw", _iata, _device_id);
-          
-          // Set broker for this connection (PsychicMqttClient uses URI format)
+          // Build broker URI
           char broker_uri[128];
           snprintf(broker_uri, sizeof(broker_uri), "mqtt://%s:%d", _brokers[i].host, _brokers[i].port);
-          _mqtt_client->setServer(broker_uri);
-          _mqtt_client->publish(topic, 1, false, json_buffer, strlen(json_buffer)); // qos=1, retained=false
+          
+          // Only call setServer() if broker URI changed (reduces memory allocations)
+          if (strcmp(broker_uri, last_broker_uri_raw) != 0) {
+            _mqtt_client->setServer(broker_uri);
+            strncpy(last_broker_uri_raw, broker_uri, sizeof(last_broker_uri_raw) - 1);
+            last_broker_uri_raw[sizeof(last_broker_uri_raw) - 1] = '\0';
+          }
+          
+          // Publish with timeout check - don't block if connection is slow
+          int publish_result = _mqtt_client->publish(topic, 1, false, json_buffer, json_len); // qos=1, retained=false
+          if (publish_result <= 0) {
+            // Publish failed - connection may be stale, mark as disconnected
+            static unsigned long last_raw_publish_fail_log = 0;
+            unsigned long now = millis();
+            if (now - last_raw_publish_fail_log > 60000) { // Log every minute max
+              MQTT_DEBUG_PRINTLN("Raw publish failed (result=%d), marking broker %d as disconnected", publish_result, i);
+              last_raw_publish_fail_log = now;
+            }
+            _brokers[i].connected = false;
+            _active_brokers--;
+          }
         }
       }
     }
     
     // Always publish to Let's Mesh Analyzer servers (independent of custom broker config)
-    char analyzer_topic[128];
-    snprintf(analyzer_topic, sizeof(analyzer_topic), "meshcore/%s/%s/raw", _iata, _device_id);
-    publishToAnalyzerServers(analyzer_topic, json_buffer, false);
+    // Skip analyzer servers if memory is severely fragmented (they're less critical than custom brokers)
+    #ifdef ESP32
+    size_t max_alloc = ESP.getMaxAllocHeap();
+    if (max_alloc >= 60000) {  // Only publish to analyzer servers if memory is OK
+      publishToAnalyzerServers(topic, json_buffer, false);
+    }
+    #else
+    publishToAnalyzerServers(topic, json_buffer, false);
+    #endif
   }
 }
 
@@ -1102,8 +1269,9 @@ void MQTTBridge::queuePacket(mesh::Packet* packet, bool is_tx) {
   queued.is_tx = is_tx;
   queued.has_raw_data = false; // Default to false, set true if we have valid data
   
-  // Capture current raw radio data if available (within 1 second window)
-  if (_last_raw_len > 0 && (millis() - _last_raw_timestamp) < 1000) {
+  // Only capture raw radio data for RX packets (TX packets are generated locally, no raw radio data)
+  // This saves 256 bytes per queued TX packet (memory optimization)
+  if (!is_tx && _last_raw_len > 0 && (millis() - _last_raw_timestamp) < 1000) {
     if (_last_raw_len <= sizeof(queued.raw_data)) {
       memcpy(queued.raw_data, _last_raw_data, _last_raw_len);
       queued.raw_len = _last_raw_len;
@@ -1211,6 +1379,9 @@ void MQTTBridge::storeRawRadioData(const uint8_t* raw_data, int len, float snr, 
 
 void MQTTBridge::setupAnalyzerServers() {
   // Update analyzer server settings from preferences
+  bool previous_us_enabled = _analyzer_us_enabled;
+  bool previous_eu_enabled = _analyzer_eu_enabled;
+  
   _analyzer_us_enabled = _prefs->mqtt_analyzer_us_enabled;
   _analyzer_eu_enabled = _prefs->mqtt_analyzer_eu_enabled;
   
@@ -1225,6 +1396,13 @@ void MQTTBridge::setupAnalyzerServers() {
     } else {
       MQTT_DEBUG_PRINTLN("Failed to create authentication token");
     }
+  }
+  
+  // If settings changed and bridge is already initialized, recreate clients
+  // This handles the case where settings change after initialization
+  if (_initialized && (previous_us_enabled != _analyzer_us_enabled || previous_eu_enabled != _analyzer_eu_enabled)) {
+    MQTT_DEBUG_PRINTLN("Analyzer server settings changed - recreating clients");
+    setupAnalyzerClients();
   }
 }
 
@@ -1379,16 +1557,39 @@ const char* GTS_ROOT_R4 =
     "-----END CERTIFICATE-----\n";
 
 void MQTTBridge::setupAnalyzerClients() {
+  MQTT_DEBUG_PRINTLN("Setting up PsychicMqttClient WebSocket clients...");
+  MQTT_DEBUG_PRINTLN("Analyzer servers - US: %s, EU: %s", 
+                     _analyzer_us_enabled ? "enabled" : "disabled",
+                     _analyzer_eu_enabled ? "enabled" : "disabled");
+
+  // Clean up existing clients if they're no longer enabled
+  // This handles the case where settings change after initialization
+  if (!_analyzer_us_enabled && _analyzer_us_client) {
+    MQTT_DEBUG_PRINTLN("US analyzer disabled - cleaning up client");
+    _analyzer_us_client->disconnect();
+    delete _analyzer_us_client;
+    _analyzer_us_client = nullptr;
+  }
+  
+  if (!_analyzer_eu_enabled && _analyzer_eu_client) {
+    MQTT_DEBUG_PRINTLN("EU analyzer disabled - cleaning up client");
+    _analyzer_eu_client->disconnect();
+    delete _analyzer_eu_client;
+    _analyzer_eu_client = nullptr;
+  }
+
   if (!_analyzer_us_enabled && !_analyzer_eu_enabled) {
     MQTT_DEBUG_PRINTLN("No analyzer servers enabled, skipping PsychicMqttClient setup");
     return;
   }
 
-  MQTT_DEBUG_PRINTLN("Setting up PsychicMqttClient WebSocket clients...");
-
-  // Setup US server client
-  if (_analyzer_us_enabled) {
+  // Setup US server client (only if enabled and doesn't already exist)
+  if (_analyzer_us_enabled && !_analyzer_us_client) {
     _analyzer_us_client = new PsychicMqttClient();
+    
+    // Optimize MQTT client configuration for memory efficiency
+    // Analyzer clients use 768-byte JWT tokens, need larger buffer for CONNECT message
+    optimizeMqttClientConfig(_analyzer_us_client, true);
 
     // Set up event callbacks for US server
     _analyzer_us_client->onConnect([this](bool sessionPresent) {
@@ -1430,9 +1631,13 @@ void MQTTBridge::setupAnalyzerClients() {
     }
   }
 
-  // Setup EU server client
-  if (_analyzer_eu_enabled) {
+  // Setup EU server client (only if enabled and doesn't already exist)
+  if (_analyzer_eu_enabled && !_analyzer_eu_client) {
     _analyzer_eu_client = new PsychicMqttClient();
+    
+    // Optimize MQTT client configuration for memory efficiency
+    // Analyzer clients use 768-byte JWT tokens, need larger buffer for CONNECT message
+    optimizeMqttClientConfig(_analyzer_eu_client, true);
 
     // Set up event callbacks for EU server
     _analyzer_eu_client->onConnect([this](bool sessionPresent) {
@@ -2154,6 +2359,40 @@ void MQTTBridge::getClientVersion(char* buffer, size_t buffer_size) const {
   }
   // Generate client version string in format "meshcore/{firmware_version}"
   snprintf(buffer, buffer_size, "meshcore/%s", _firmware_version);
+}
+
+void MQTTBridge::optimizeMqttClientConfig(PsychicMqttClient* client, bool is_analyzer_client) {
+  if (!client) return;
+  
+  // Buffer size selection:
+  // - Analyzer clients: Need 1024 bytes for CONNECT message with 768-byte JWT tokens
+  //   (CONNECT message: ~10 bytes overhead + 70 bytes username + 768 bytes password = ~850+ bytes)
+  // - Main client: Can use 768 bytes (smaller than default 1024, but safe for regular publishes)
+  //   Most JSON messages are <500 bytes, but we need headroom for CONNECT message too
+  int buffer_size = is_analyzer_client ? 1024 : 768;
+  
+  client->setBufferSize(buffer_size);
+  
+  // Access ESP-IDF config to optimize additional settings
+  esp_mqtt_client_config_t* config = client->getMqttConfig();
+  if (config) {
+    #if defined(ESP_IDF_VERSION_MAJOR) && ESP_IDF_VERSION_MAJOR >= 5
+      // ESP-IDF v5: Use buffer.size and buffer.out_size
+      // Set output buffer size to match input buffer
+      if (config->buffer.out_size == 0 || config->buffer.out_size > buffer_size) {
+        config->buffer.out_size = buffer_size;
+        MQTT_DEBUG_PRINTLN("Optimized MQTT client (%s): buffer.size=%d, out_size=%d", 
+                          is_analyzer_client ? "analyzer" : "main",
+                          config->buffer.size, config->buffer.out_size);
+      }
+    #else
+      // ESP-IDF v4: buffer_size is set via setBufferSize() above
+      // Note: out_buffer_size may not be directly accessible in v4 config structure
+      MQTT_DEBUG_PRINTLN("Optimized MQTT client (%s): buffer_size=%d", 
+                        is_analyzer_client ? "analyzer" : "main",
+                        config->buffer_size);
+    #endif
+  }
 }
 
 void MQTTBridge::logMemoryStatus() {

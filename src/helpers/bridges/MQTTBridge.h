@@ -127,6 +127,10 @@ private:
   // Token expiration tracking
   unsigned long _token_us_expires_at;
   unsigned long _token_eu_expires_at;
+  
+  // Memory pressure monitoring
+  unsigned long _last_memory_check;
+  int _skipped_publishes;  // Count of skipped publishes due to memory pressure
   unsigned long _last_token_renewal_attempt_us;
   unsigned long _last_token_renewal_attempt_eu;
   unsigned long _last_reconnect_attempt_us;
@@ -331,6 +335,15 @@ public:
   void maintainAnalyzerConnections();
   void publishToAnalyzerClient(PsychicMqttClient* client, const char* topic, const char* payload, bool retained = false);
   void publishStatusToAnalyzerClient(PsychicMqttClient* client, const char* server_name);
+  
+  /**
+   * Optimize MQTT client configuration for memory efficiency
+   * Reduces buffer sizes to minimize memory usage while maintaining functionality
+   * 
+   * @param client MQTT client to optimize
+   * @param is_analyzer_client If true, uses larger buffer for JWT tokens (768 bytes)
+   */
+  void optimizeMqttClientConfig(PsychicMqttClient* client, bool is_analyzer_client = false);
 
   /**
    * Enable/disable message types
