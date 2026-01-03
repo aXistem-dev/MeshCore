@@ -183,8 +183,9 @@ bool WeatherStationSensorManager::begin() {
   // Initialize weather station sensors
   pinMode(WEATHER_RAIN_PIN, INPUT_PULLUP);
   pinMode(WEATHER_WIND_PIN, INPUT_PULLUP);
-  // Wind vane is analog input - no pullup needed (and it conflicts with battery voltage reading on same pin)
-  pinMode(WEATHER_VANE_PIN, INPUT);
+  // Wind vane uses resistor network - needs pullup as voltage reference for voltage divider
+  // (Now on WB_A1, no longer conflicts with battery voltage on WB_A0)
+  pinMode(WEATHER_VANE_PIN, INPUT_PULLUP);
   
   // Attach interrupts for rain gauge and anemometer
   attachInterrupt(digitalPinToInterrupt(WEATHER_RAIN_PIN), rainISR, FALLING);
@@ -522,6 +523,8 @@ int WeatherStationSensorManager::getWindDirection() const {
   // RAK4631Board::getBattMilliVolts() sets it to 12-bit, so we need to reset it
   analogReadResolution(10);
   int raw = analogRead(WEATHER_VANE_PIN);
+  
+  Serial.printf("DEBUG: getWindDirection - WEATHER_VANE_PIN=%d, raw ADC=%d\n", WEATHER_VANE_PIN, raw);
   
   // Find matching direction from lookup table
   // Table is ordered so more specific ranges are checked first

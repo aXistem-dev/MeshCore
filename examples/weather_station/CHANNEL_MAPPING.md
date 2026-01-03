@@ -62,7 +62,7 @@ All rainfall measurements use **Type 130 (DISTANCE)** in meters. Multiple values
 - **Type 132 (DIRECTION)** - Wind direction in degrees
   - Resolution: 1 degree
   - Range: 0-359 degrees (0° = North, 90° = East, 180° = South, 270° = West)
-  - Read from wind vane via analog input (WB_A0) with 10-bit ADC resolution
+  - Read from wind vane via analog input (WB_A1, pin 31) with 10-bit ADC resolution
   - Uses calibrated lookup table (`vaneMap`) to convert ADC values to degrees
   - Always sent (defaults to 0° North if ADC reading is out of range)
 

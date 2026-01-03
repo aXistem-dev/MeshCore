@@ -37,10 +37,6 @@ public:
   #define BATTERY_SAMPLES 8
 
   uint16_t getBattMilliVolts() override {
-    // Pin 5 (PIN_VBAT_READ/WB_A0) may be used by weather station wind vane with INPUT_PULLUP
-    // Reconfigure to INPUT (no pullup) for accurate battery voltage reading
-    pinMode(PIN_VBAT_READ, INPUT);
-    
     analogReadResolution(12);
 
     uint32_t raw = 0;

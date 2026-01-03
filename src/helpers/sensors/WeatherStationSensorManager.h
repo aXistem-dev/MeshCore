@@ -8,7 +8,7 @@
 // Weather Station Pin Definitions (WisBlock IO Module)
 #define WEATHER_RAIN_PIN     WB_IO1    // Rain gauge -> IO1 header pin
 #define WEATHER_WIND_PIN     WB_IO3    // Anemometer -> IO3 header pin
-#define WEATHER_VANE_PIN     WB_A0     // Wind vane -> AIN0 header pin
+#define WEATHER_VANE_PIN     WB_A1     // Wind vane -> AIN1 header pin (moved from WB_A0 to avoid conflict with battery voltage)
 #define WEATHER_REF_VOLTAGE  3.3       // Reference voltage
 
 // Weather Station Constants
