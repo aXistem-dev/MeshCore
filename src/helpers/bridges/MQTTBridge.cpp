@@ -352,15 +352,13 @@ bool MQTTBridge::isConfigValid(const NodePrefs* prefs) {
     return false;
   }
   
-  // Check if MQTT username is configured (not default placeholder)
-  if (strlen(prefs->mqtt_username) == 0 || 
-      strcmp(prefs->mqtt_username, "your-username") == 0) {
+  // Username and password are optional - anonymous mode is supported
+  // Only reject if they contain the default placeholder values
+  if (strcmp(prefs->mqtt_username, "your-username") == 0) {
     return false;
   }
   
-  // Check if MQTT password is configured (not default placeholder)
-  if (strlen(prefs->mqtt_password) == 0 || 
-      strcmp(prefs->mqtt_password, "your-password") == 0) {
+  if (strcmp(prefs->mqtt_password, "your-password") == 0) {
     return false;
   }
   
@@ -566,15 +564,13 @@ bool MQTTBridge::isMQTTConfigValid() {
     return false;
   }
   
-  // Check if MQTT username is configured (not default placeholder)
-  if (strlen(_prefs->mqtt_username) == 0 || 
-      strcmp(_prefs->mqtt_username, "your-username") == 0) {
+  // Username and password are optional - anonymous mode is supported
+  // Only reject if they contain the default placeholder values
+  if (strcmp(_prefs->mqtt_username, "your-username") == 0) {
     return false;
   }
   
-  // Check if MQTT password is configured (not default placeholder)
-  if (strlen(_prefs->mqtt_password) == 0 || 
-      strcmp(_prefs->mqtt_password, "your-password") == 0) {
+  if (strcmp(_prefs->mqtt_password, "your-password") == 0) {
     return false;
   }
   
