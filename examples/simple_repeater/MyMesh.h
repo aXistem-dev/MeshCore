@@ -216,6 +216,17 @@ public:
     if (enable == bridge.isRunning()) return;
     if (enable)
     {
+      // Set device metadata before starting bridge (same as in begin())
+      char device_id[65];
+      mesh::LocalIdentity self_id = getSelfId();
+      mesh::Utils::toHex(device_id, self_id.pub_key, PUB_KEY_SIZE);
+      bridge.setDeviceID(device_id);
+      bridge.setFirmwareVersion(getFirmwareVer());
+      bridge.setBoardModel(_cli.getBoard()->getManufacturerName());
+      bridge.setBuildDate(getBuildDate());
+#ifdef WITH_MQTT_BRIDGE
+      bridge.setStatsSources(this, _radio, _cli.getBoard(), _ms);
+#endif
       bridge.begin();
     }
     else 
@@ -227,6 +238,17 @@ public:
   void restartBridge() override {
     if (!bridge.isRunning()) return;
     bridge.end();
+    // Set device metadata before restarting bridge (same as in begin())
+    char device_id[65];
+    mesh::LocalIdentity self_id = getSelfId();
+    mesh::Utils::toHex(device_id, self_id.pub_key, PUB_KEY_SIZE);
+    bridge.setDeviceID(device_id);
+    bridge.setFirmwareVersion(getFirmwareVer());
+    bridge.setBoardModel(_cli.getBoard()->getManufacturerName());
+    bridge.setBuildDate(getBuildDate());
+#ifdef WITH_MQTT_BRIDGE
+    bridge.setStatsSources(this, _radio, _cli.getBoard(), _ms);
+#endif
     bridge.begin();
   }
 
