@@ -422,8 +422,13 @@ void CommonCLI::syncNodePrefsToMQTTPrefs() {
 #define MIN_LOCAL_ADVERT_INTERVAL   60
 
 void CommonCLI::savePrefs() {
+  uint8_t old_advert_interval = _prefs->advert_interval;
   if (_prefs->advert_interval * 2 < MIN_LOCAL_ADVERT_INTERVAL) {
     _prefs->advert_interval = 0;  // turn it off, now that device has been manually configured
+  }
+  // If advert_interval was changed, update the timer to reflect the change
+  if (old_advert_interval != _prefs->advert_interval) {
+    _callbacks->updateAdvertTimer();
   }
   _callbacks->savePrefs();
 }

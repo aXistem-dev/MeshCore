@@ -639,37 +639,16 @@ void MQTTBridge::connectToBrokers() {
     
     // Maintain connection and check for stale connections
     if (_brokers[i].connected) {
-      // Check actual connection state - if it's stale, force reconnection
-      // This prevents accumulation of stale connections that appear connected but aren't responsive
+      // Check actual connection state - if it's stale, mark as disconnected
+      // PsychicMqttClient handles automatic reconnection internally, so we don't need
+      // to force periodic reconnections. Only mark as disconnected if actually disconnected.
       if (!_mqtt_client->connected()) {
         _brokers[i].connected = false;
         _active_brokers--;
-      } else {
-        // Periodic health check: Force reconnection every 4 hours to prevent stale connections
-        static unsigned long last_health_check = 0;
-        const unsigned long HEALTH_CHECK_INTERVAL = 14400000; // 4 hours
-        unsigned long now = millis();
-        
-        unsigned long elapsed = (now >= last_health_check) ? 
-                               (now - last_health_check) : 
-                               (ULONG_MAX - last_health_check + now + 1);
-        
-        if (elapsed >= HEALTH_CHECK_INTERVAL) {
-          last_health_check = now;
-          _mqtt_client->disconnect();
-          
-          char broker_uri[128];
-          snprintf(broker_uri, sizeof(broker_uri), "mqtt://%s:%d", _brokers[i].host, _brokers[i].port);
-          _mqtt_client->setServer(broker_uri);
-          if (strlen(_brokers[i].username) > 0) {
-            _mqtt_client->setCredentials(_brokers[i].username, _brokers[i].password);
-          }
-          _mqtt_client->connect();
-          _brokers[i].last_attempt = now;
-          _brokers[i].connected = false;
-          _active_brokers--;
-        }
       }
+      // Removed aggressive 4-hour health check that was causing connection instability.
+      // The MQTT client library handles connection health internally, and forcing
+      // disconnections on healthy connections was causing hours of downtime.
     }
   }
 }
