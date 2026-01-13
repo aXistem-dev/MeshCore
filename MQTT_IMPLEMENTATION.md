@@ -150,6 +150,10 @@ The MQTT bridge comes with the following defaults:
 - `get mqtt.password` - Get MQTT password
 - `get mqtt.analyzer.us` - Get US Let's Mesh Analyzer server setting (on/off)
 - `get mqtt.analyzer.eu` - Get EU Let's Mesh Analyzer server setting (on/off)
+- `get mqtt.owner` - Get owner public key (64 hex characters)
+  - **Note**: Available via serial console only (not via LoRa repeater console)
+- `get mqtt.email` - Get owner email address
+  - **Note**: Available via serial console only (not via LoRa repeater console)
 
 #### Set Commands
 - `set mqtt.origin <name>` - Set device origin name
@@ -165,6 +169,8 @@ The MQTT bridge comes with the following defaults:
 - `set mqtt.password <password>` - Set MQTT password
 - `set mqtt.analyzer.us on|off` - Enable/disable US Let's Mesh Analyzer server
 - `set mqtt.analyzer.eu on|off` - Enable/disable EU Let's Mesh Analyzer server
+- `set mqtt.owner <64-hex-char-public-key>` - Set owner public key (64 hex characters, 32 bytes)
+- `set mqtt.email <email>` - Set owner email address for matching nodes with owners
 
 ### WiFi Commands
 
@@ -375,6 +381,20 @@ set mqtt.iata "SEA"
 # Verify settings (origin is set automatically to device name)
 get mqtt.origin
 get mqtt.iata
+```
+
+**Via Serial Console (Optional - Owner Configuration):**
+```
+# Set owner public key (64 hex characters, 32 bytes)
+# This is used for matching nodes with owners in MQTT messages
+set mqtt.owner A1B2C3D4E5F6789012345678901234567890123456789012345678901234567890
+
+# Set owner email address
+set mqtt.email owner@example.com
+
+# Verify owner settings
+get mqtt.owner
+get mqtt.email
 ```
 
 ### Step 5: Configure Timezone
