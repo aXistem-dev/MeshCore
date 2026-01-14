@@ -199,7 +199,20 @@ int MQTTMessageBuilder::buildPacketJSON(
   
   // Get packet characteristics
   int packet_type = packet->getPayloadType();
-  const char* route_str = getRouteTypeString(packet->isRouteDirect() ? 1 : 0);
+  // Map actual route type to getRouteTypeString index:
+  // ROUTE_TYPE_FLOOD (0x01) or ROUTE_TYPE_TRANSPORT_FLOOD (0x00) → 0 → "F"
+  // ROUTE_TYPE_DIRECT (0x02) → 1 → "D"
+  // ROUTE_TYPE_TRANSPORT_DIRECT (0x03) → 2 → "T"
+  uint8_t route_type = packet->getRouteType();
+  int route_type_idx = 0;
+  if (route_type == 0x02) {  // ROUTE_TYPE_DIRECT
+    route_type_idx = 1;
+  } else if (route_type == 0x03) {  // ROUTE_TYPE_TRANSPORT_DIRECT
+    route_type_idx = 2;
+  } else {  // ROUTE_TYPE_FLOOD (0x01) or ROUTE_TYPE_TRANSPORT_FLOOD (0x00)
+    route_type_idx = 0;
+  }
+  const char* route_str = getRouteTypeString(route_type_idx);
   
   // Create proper packet hash using MeshCore's calculatePacketHash method
   char hash_str[17];
@@ -281,7 +294,20 @@ int MQTTMessageBuilder::buildPacketJSONFromRaw(
   
   // Get packet characteristics from the parsed packet
   int packet_type = packet->getPayloadType();
-  const char* route_str = getRouteTypeString(packet->isRouteDirect() ? 1 : 0);
+  // Map actual route type to getRouteTypeString index:
+  // ROUTE_TYPE_FLOOD (0x01) or ROUTE_TYPE_TRANSPORT_FLOOD (0x00) → 0 → "F"
+  // ROUTE_TYPE_DIRECT (0x02) → 1 → "D"
+  // ROUTE_TYPE_TRANSPORT_DIRECT (0x03) → 2 → "T"
+  uint8_t route_type = packet->getRouteType();
+  int route_type_idx = 0;
+  if (route_type == 0x02) {  // ROUTE_TYPE_DIRECT
+    route_type_idx = 1;
+  } else if (route_type == 0x03) {  // ROUTE_TYPE_TRANSPORT_DIRECT
+    route_type_idx = 2;
+  } else {  // ROUTE_TYPE_FLOOD (0x01) or ROUTE_TYPE_TRANSPORT_FLOOD (0x00)
+    route_type_idx = 0;
+  }
+  const char* route_str = getRouteTypeString(route_type_idx);
   
   // Create proper packet hash using MeshCore's calculatePacketHash method
   char hash_str[17];
