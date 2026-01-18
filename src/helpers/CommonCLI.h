@@ -48,37 +48,30 @@ struct NodePrefs { // persisted to file
   uint8_t gps_enabled;
   uint32_t gps_interval; // in seconds
   uint8_t advert_loc_policy;
-  uint32_t discovery_mod_timestamp;  // From upstream dev branch
-  float adc_multiplier;  // From upstream dev branch
-  // MQTT settings (stored separately in /mqtt_prefs, but kept here for backward compatibility)
-  char mqtt_origin[32];     // Device name for MQTT topics
-  char mqtt_iata[8];        // IATA code for MQTT topics
-  uint8_t mqtt_status_enabled;   // Enable status messages
-  uint8_t mqtt_packets_enabled;  // Enable packet messages
-  uint8_t mqtt_raw_enabled;      // Enable raw messages
-  uint8_t mqtt_tx_enabled;       // Enable TX packet uplinking
-  uint32_t mqtt_status_interval; // Status publish interval (ms)
-  
-  // WiFi settings
-  char wifi_ssid[32];       // WiFi SSID
-  char wifi_password[64];  // WiFi password
-  uint8_t wifi_power_save; // WiFi power save mode: 0=min, 1=none, 2=max (default: 0=min)
-  
-  // Timezone settings
-  char timezone_string[32]; // Timezone string (e.g., "America/Los_Angeles")
-  int8_t timezone_offset;   // Timezone offset in hours (-12 to +14) - fallback
-  
-  // MQTT server settings
-  char mqtt_server[64];     // MQTT server hostname
-  uint16_t mqtt_port;       // MQTT server port
-  char mqtt_username[32];   // MQTT username
-  char mqtt_password[64];   // MQTT password
-  
-  // Let's Mesh Analyzer settings
-  uint8_t mqtt_analyzer_us_enabled; // Enable US analyzer server
-  uint8_t mqtt_analyzer_eu_enabled; // Enable EU analyzer server
-  char mqtt_owner_public_key[65]; // Owner public key (hex string, same length as repeater public key)
-  char mqtt_email[64]; // Owner email address for matching nodes with owners
+  uint32_t discovery_mod_timestamp;
+  float adc_multiplier;
+  char owner_info[120];
+  // MQTT settings (stored in /mqtt_prefs when WITH_MQTT_BRIDGE; in NodePrefs for file layout compat)
+  char mqtt_origin[32];
+  char mqtt_iata[8];
+  uint8_t mqtt_status_enabled;
+  uint8_t mqtt_packets_enabled;
+  uint8_t mqtt_raw_enabled;
+  uint8_t mqtt_tx_enabled;
+  uint32_t mqtt_status_interval;
+  char wifi_ssid[32];
+  char wifi_password[64];
+  uint8_t wifi_power_save; // 0=min, 1=none, 2=max
+  char timezone_string[32];
+  int8_t timezone_offset;
+  char mqtt_server[64];
+  uint16_t mqtt_port;
+  char mqtt_username[32];
+  char mqtt_password[64];
+  uint8_t mqtt_analyzer_us_enabled;
+  uint8_t mqtt_analyzer_eu_enabled;
+  char mqtt_owner_public_key[65];
+  char mqtt_email[64];
 };
 
 #ifdef WITH_MQTT_BRIDGE
