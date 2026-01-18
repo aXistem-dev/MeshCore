@@ -13,6 +13,29 @@
 
 static volatile uint8_t state = STATE_IDLE;
 
+#ifdef RADIO_RX_DEBUG
+static uint32_t simpleRxHash(const uint8_t* data, int len) {
+  uint32_t h = 2166136261u;
+  for (int i = 0; i < len; i++) {
+    h ^= data[i];
+    h *= 16777619u;
+  }
+  return h;
+}
+#endif
+
+#ifdef RADIO_RX_DEBUG_VERBOSE
+static void bytesToHex(char* dest, size_t dest_len, const uint8_t* data, int len) {
+  if (!dest || dest_len == 0) return;
+  size_t out = 0;
+  for (int i = 0; i < len && out + 2 < dest_len; i++) {
+    snprintf(&dest[out], dest_len - out, "%02X", data[i]);
+    out += 2;
+  }
+  dest[out] = '\0';
+}
+#endif
+
 // this function is called when a complete packet
 // is transmitted by the module
 static 
@@ -98,7 +121,8 @@ bool RadioLibWrapper::isInRecvMode() const {
 int RadioLibWrapper::recvRaw(uint8_t* bytes, int sz) {
   int len = 0;
   if (state & STATE_INT_READY) {
-    len = _radio->getPacketLength();
+    int raw_len = _radio->getPacketLength();
+    len = raw_len;
     if (len > 0) {
       if (len > sz) { len = sz; }
       int err = _radio->readData(bytes, len);
@@ -108,6 +132,42 @@ int RadioLibWrapper::recvRaw(uint8_t* bytes, int sz) {
       } else {
       //  Serial.print("  readData() -> "); Serial.println(len);
         n_recv++;
+#ifdef RADIO_RX_DEBUG
+        static uint32_t prev_hash = 0;
+        static int prev_len = 0;
+        uint32_t hash = simpleRxHash(bytes, len);
+        float snr = getLastSNR();
+        float rssi = getLastRSSI();
+        if (hash == prev_hash && len == prev_len) {
+          MESH_DEBUG_PRINTLN("RadioLibWrapper: RX len=%d hash=0x%08lX SNR=%.1f RSSI=%.1f (same as previous)",
+                             len, (unsigned long)hash, snr, rssi);
+        } else {
+          MESH_DEBUG_PRINTLN("RadioLibWrapper: RX len=%d hash=0x%08lX SNR=%.1f RSSI=%.1f",
+                             len, (unsigned long)hash, snr, rssi);
+        }
+        prev_hash = hash;
+        prev_len = len;
+#endif
+#ifdef RADIO_RX_DEBUG_VERBOSE
+        static int prev_raw_len = 0;
+        if (raw_len != len) {
+          MESH_DEBUG_PRINTLN("RadioLibWrapper: RX raw_len=%d truncated_to=%d (sz=%d)", raw_len, len, sz);
+        } else {
+          MESH_DEBUG_PRINTLN("RadioLibWrapper: RX raw_len=%d", raw_len);
+        }
+        if (prev_raw_len > 0 && raw_len < prev_raw_len) {
+          MESH_DEBUG_PRINTLN("RadioLibWrapper: RX raw_len dropped from %d to %d (possible stale tail risk)", prev_raw_len, raw_len);
+        }
+        prev_raw_len = raw_len;
+
+        const int head_len = (len < 8) ? len : 8;
+        const int tail_len = (len < 8) ? len : 8;
+        char head_hex[2 * 8 + 1];
+        char tail_hex[2 * 8 + 1];
+        bytesToHex(head_hex, sizeof(head_hex), bytes, head_len);
+        bytesToHex(tail_hex, sizeof(tail_hex), bytes + (len - tail_len), tail_len);
+        MESH_DEBUG_PRINTLN("RadioLibWrapper: RX head=%s tail=%s", head_hex, tail_hex);
+#endif
       }
     }
     state = STATE_IDLE;   // need another startReceive()
