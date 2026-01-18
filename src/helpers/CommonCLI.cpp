@@ -271,7 +271,11 @@ static void setMQTTPrefsDefaults(MQTTPrefs* prefs) {
   prefs->mqtt_status_interval = 300000; // 5 minutes default
   prefs->mqtt_analyzer_us_enabled = 1; // enabled by default
   prefs->mqtt_analyzer_eu_enabled = 1; // enabled by default
+  #ifdef MQTT_WIFI_POWER_SAVE_DEFAULT
+  prefs->wifi_power_save = MQTT_WIFI_POWER_SAVE_DEFAULT; // 0=min, 1=none, 2=max
+  #else
   prefs->wifi_power_save = 0; // Default to WIFI_PS_MIN_MODEM (0=min)
+  #endif
   // String fields are already zero-initialized by memset
 }
 
