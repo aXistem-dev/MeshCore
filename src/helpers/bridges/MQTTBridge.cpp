@@ -253,8 +253,17 @@ void MQTTBridge::begin() {
     #endif
     #endif
     
+    // Allow the network stack to stabilize before first NTP (helps on some boards, e.g. Heltec V4,
+    // where DNS/UDP can fail if attempted immediately after WiFi reports connected).
+    delay(2000);
+
     // Sync time with NTP
     syncTimeWithNTP();
+    if (!_ntp_synced) {
+      MQTT_DEBUG_PRINTLN("NTP sync failed, retrying after 2s...");
+      delay(2000);
+      syncTimeWithNTP();
+    }
   } else {
     MQTT_DEBUG_PRINTLN("WiFi connection failed! Auto-reconnect enabled, will retry automatically");
     // Don't return here - allow MQTT bridge to initialize even if WiFi isn't connected yet
