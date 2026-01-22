@@ -48,8 +48,9 @@ struct NodePrefs { // persisted to file
   uint8_t gps_enabled;
   uint32_t gps_interval; // in seconds
   uint8_t advert_loc_policy;
-  uint32_t discovery_mod_timestamp;  // From upstream dev branch
-  float adc_multiplier;  // From upstream dev branch
+  uint32_t discovery_mod_timestamp;
+  float adc_multiplier;
+  char owner_info[120];
   // MQTT settings (stored separately in /mqtt_prefs, but kept here for backward compatibility)
   char mqtt_origin[32];     // Device name for MQTT topics
   char mqtt_iata[8];        // IATA code for MQTT topics
