@@ -963,9 +963,11 @@ void MQTTBridge::connectToBrokers() {
     if (!_brokers[i].enabled) continue;
     
     // Check if we need to attempt connection
-    if (!_brokers[i].connected && 
-        millis() - _brokers[i].last_attempt > _brokers[i].reconnect_interval) {
-      
+    // Allow immediate reconnect if last_attempt is 0 (was reset due to failure)
+    bool can_attempt = (_brokers[i].last_attempt == 0) || 
+                       (millis() - _brokers[i].last_attempt > _brokers[i].reconnect_interval);
+    
+    if (!_brokers[i].connected && can_attempt) {
       MQTT_DEBUG_PRINTLN("Connecting to broker %d: %s:%d", i, _brokers[i].host, _brokers[i].port);
       
       // Generate unique client ID
@@ -982,6 +984,12 @@ void MQTTBridge::connectToBrokers() {
         _mqtt_client->setCredentials(_brokers[i].username, _brokers[i].password);
       }
       
+      // Ensure we're disconnected before attempting new connection
+      if (_mqtt_client->connected()) {
+        _mqtt_client->disconnect();
+        vTaskDelay(pdMS_TO_TICKS(100));  // Brief delay to allow disconnect to complete
+      }
+      
       // Connect to the broker (PsychicMqttClient uses async connection)
       _mqtt_client->connect();
       
@@ -992,18 +1000,26 @@ void MQTTBridge::connectToBrokers() {
     
     // Maintain connection and check for stale connections
     if (_brokers[i].connected) {
-      // Check actual connection state - if it's stale, mark as disconnected
-      // PsychicMqttClient handles automatic reconnection internally, so we don't need
-      // to force periodic reconnections. Only mark as disconnected if actually disconnected.
+      // Check actual connection state - if it's stale, mark as disconnected and trigger reconnect
+      // PsychicMqttClient handles automatic reconnection internally, but we need to detect stale state
       if (!_mqtt_client->connected()) {
+        MQTT_DEBUG_PRINTLN("Broker %d connection lost, marking for reconnect", i);
         _brokers[i].connected = false;
         _active_brokers--;
+        _brokers[i].last_attempt = 0;  // Reset attempt time to allow immediate reconnect
         // Update cached broker status
         _cached_has_brokers = isAnyBrokerConnected();
       }
       // Removed aggressive 4-hour health check that was causing connection instability.
       // The MQTT client library handles connection health internally, and forcing
       // disconnections on healthy connections was causing hours of downtime.
+    } else {
+      // Not connected - ensure we attempt reconnection if enough time has passed
+      // Reset last_attempt if it's been too long (prevents getting stuck)
+      if (_brokers[i].last_attempt > 0 && (millis() - _brokers[i].last_attempt) > 300000) {
+        // Been trying for more than 5 minutes - reset to allow fresh attempt
+        _brokers[i].last_attempt = 0;
+      }
     }
   }
   
@@ -1177,11 +1193,32 @@ bool MQTTBridge::publishStatus() {
   #endif
   
   // Use cached destination status to avoid redundant checks
+  // Note: Connection state is verified in connectToBrokers() which runs before publishStatus()
   bool has_custom_brokers = _cached_has_brokers && _config_valid;
   bool has_destinations = has_custom_brokers || _cached_has_analyzer_servers;
   
   if (!has_destinations) {
     return false;  // No destinations available
+  }
+  
+  // Final verification: ensure client is actually connected before attempting publish
+  // This catches cases where connection state got out of sync
+  if (has_custom_brokers && _mqtt_client && !_mqtt_client->connected()) {
+    // Client says disconnected but our state says connected - fix the state
+    MQTT_DEBUG_PRINTLN("Status publish: Client disconnected but state says connected - fixing state");
+    for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
+      if (_brokers[i].enabled && _brokers[i].connected) {
+        _brokers[i].connected = false;
+        _active_brokers--;
+        _brokers[i].last_attempt = 0;  // Allow immediate reconnect
+      }
+    }
+    _cached_has_brokers = false;
+    has_custom_brokers = false;
+    has_destinations = has_custom_brokers || _cached_has_analyzer_servers;
+    if (!has_destinations) {
+      return false;  // No destinations after fixing state
+    }
   }
   
   // Status messages with stats can be larger (~400-500 bytes), so increase buffer size
@@ -1263,13 +1300,15 @@ bool MQTTBridge::publishStatus() {
             size_t json_len = strlen(json_buffer); // Cache length to avoid multiple strlen() calls
             
             // Publish to all connected custom brokers
+            // Double-check client is actually connected before attempting publish
             if (_config_valid && _mqtt_client && _mqtt_client->connected()) {
               // Track last broker URI to avoid calling setServer() unnecessarily (memory optimization)
               // setServer() may allocate memory, so we only call it when the broker changes
               static char last_broker_uri_status[128] = "";
               
               for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
-                if (_brokers[i].enabled && _brokers[i].connected) {
+                // Verify broker is actually connected (state might be stale)
+                if (_brokers[i].enabled && _brokers[i].connected && _mqtt_client->connected()) {
                   
                   // Build broker URI
                   char broker_uri[128];
@@ -1287,15 +1326,22 @@ bool MQTTBridge::publishStatus() {
                   if (publish_result > 0) {
                     published = true;
                   } else {
-                    // Publish failed - connection may be stale, mark as disconnected
+                    // Publish failed - connection may be stale, force disconnect and mark for reconnect
                     static unsigned long last_status_publish_fail_log = 0;
                     unsigned long now = millis();
                     if (now - last_status_publish_fail_log > 60000) { // Log every minute max
-                      MQTT_DEBUG_PRINTLN("Status publish failed (result=%d), marking broker %d as disconnected", publish_result, i);
+                      MQTT_DEBUG_PRINTLN("Status publish failed (result=%d), forcing broker %d reconnect", publish_result, i);
                       last_status_publish_fail_log = now;
+                    }
+                    // Force disconnect to trigger reconnection
+                    if (_mqtt_client->connected()) {
+                      _mqtt_client->disconnect();
                     }
                     _brokers[i].connected = false;
                     _active_brokers--;
+                    _brokers[i].last_attempt = 0;  // Reset attempt time to allow immediate reconnect
+                    // Update cached broker status
+                    _cached_has_brokers = isAnyBrokerConnected();
                   }
                 }
               }
@@ -1403,13 +1449,15 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
     size_t json_len = strlen(json_buffer); // Cache length to avoid multiple strlen() calls
     
     // Publish to custom brokers (only if config is valid)
+    // Double-check client is actually connected before attempting publish
     if (_config_valid && _mqtt_client && _mqtt_client->connected()) {
       // Track last broker URI to avoid calling setServer() unnecessarily (memory optimization)
       // setServer() may allocate memory, so we only call it when the broker changes
       static char last_broker_uri[128] = "";
       
       for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
-        if (_brokers[i].enabled && _brokers[i].connected) {
+        // Verify broker is actually connected (state might be stale)
+        if (_brokers[i].enabled && _brokers[i].connected && _mqtt_client->connected()) {
           // Build broker URI
           char broker_uri[128];
           snprintf(broker_uri, sizeof(broker_uri), "mqtt://%s:%d", _brokers[i].host, _brokers[i].port);
@@ -1425,16 +1473,22 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
           // This prevents blocking the main loop when MQTT broker is slow or unresponsive
           int publish_result = _mqtt_client->publish(topic, 1, false, json_buffer, json_len); // qos=1, retained=false
           if (publish_result <= 0) {
-            // Publish failed - connection may be stale, mark as disconnected
-            // This prevents accumulation of failed publishes that block the loop
+            // Publish failed - connection may be stale, force disconnect and mark for reconnect
             static unsigned long last_publish_fail_log = 0;
             unsigned long now = millis();
             if (now - last_publish_fail_log > 60000) { // Log every minute max
-              MQTT_DEBUG_PRINTLN("Publish failed (result=%d), marking broker %d as disconnected", publish_result, i);
+              MQTT_DEBUG_PRINTLN("Publish failed (result=%d), forcing broker %d reconnect", publish_result, i);
               last_publish_fail_log = now;
+            }
+            // Force disconnect to trigger reconnection
+            if (_mqtt_client->connected()) {
+              _mqtt_client->disconnect();
             }
             _brokers[i].connected = false;
             _active_brokers--;
+            _brokers[i].last_attempt = 0;  // Reset attempt time to allow immediate reconnect
+            // Update cached broker status
+            _cached_has_brokers = isAnyBrokerConnected();
           }
         }
       }
@@ -1502,13 +1556,15 @@ void MQTTBridge::publishRaw(mesh::Packet* packet) {
     size_t json_len = strlen(json_buffer); // Cache length to avoid multiple strlen() calls
     
     // Publish to custom brokers (only if config is valid)
+    // Double-check client is actually connected before attempting publish
     if (_config_valid && _mqtt_client && _mqtt_client->connected()) {
       // Track last broker URI to avoid calling setServer() unnecessarily (memory optimization)
       // setServer() may allocate memory, so we only call it when the broker changes
       static char last_broker_uri_raw[128] = "";
       
       for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
-        if (_brokers[i].enabled && _brokers[i].connected) {
+        // Verify broker is actually connected (state might be stale)
+        if (_brokers[i].enabled && _brokers[i].connected && _mqtt_client->connected()) {
           // Build broker URI
           char broker_uri[128];
           snprintf(broker_uri, sizeof(broker_uri), "mqtt://%s:%d", _brokers[i].host, _brokers[i].port);
@@ -1523,15 +1579,22 @@ void MQTTBridge::publishRaw(mesh::Packet* packet) {
           // Publish with timeout check - don't block if connection is slow
           int publish_result = _mqtt_client->publish(topic, 1, false, json_buffer, json_len); // qos=1, retained=false
           if (publish_result <= 0) {
-            // Publish failed - connection may be stale, mark as disconnected
+            // Publish failed - connection may be stale, force disconnect and mark for reconnect
             static unsigned long last_raw_publish_fail_log = 0;
             unsigned long now = millis();
             if (now - last_raw_publish_fail_log > 60000) { // Log every minute max
-              MQTT_DEBUG_PRINTLN("Raw publish failed (result=%d), marking broker %d as disconnected", publish_result, i);
+              MQTT_DEBUG_PRINTLN("Raw publish failed (result=%d), forcing broker %d reconnect", publish_result, i);
               last_raw_publish_fail_log = now;
+            }
+            // Force disconnect to trigger reconnection
+            if (_mqtt_client->connected()) {
+              _mqtt_client->disconnect();
             }
             _brokers[i].connected = false;
             _active_brokers--;
+            _brokers[i].last_attempt = 0;  // Reset attempt time to allow immediate reconnect
+            // Update cached broker status
+            _cached_has_brokers = isAnyBrokerConnected();
           }
         }
       }

@@ -103,27 +103,7 @@ int RadioLibWrapper::recvRaw(uint8_t* bytes, int sz) {
       if (len > sz) { len = sz; }
       int err = _radio->readData(bytes, len);
       if (err != RADIOLIB_ERR_NONE) {
-        // Throttle error logging to avoid spam (CRC errors are common in noisy environments)
-        static unsigned long last_crc_error_log = 0;
-        static unsigned long crc_error_count = 0;
-        unsigned long now = millis();
-        crc_error_count++;
-        
-        // Log every 10 seconds max, or on first error
-        if (last_crc_error_log == 0 || (now - last_crc_error_log > 10000)) {
-          MESH_DEBUG_PRINTLN("RadioLibWrapper: error: readData(%d) - %lu errors in last 10s", err, crc_error_count);
-          last_crc_error_log = now;
-          crc_error_count = 0;
-        }
-        
-        // For CRC mismatch errors (-7), reset radio state to prevent stuck conditions
-        // Similar to CustomLR1110's handling of header errors
-        if (err == -7) {  // RADIOLIB_ERR_CRC_MISMATCH
-          // Call standby() to reset radio to known-good state
-          // This helps recover from false packet detections or corrupted state
-          _radio->standby();
-        }
-        
+        MESH_DEBUG_PRINTLN("RadioLibWrapper: error: readData(%d)", err);
         len = 0;
       } else {
       //  Serial.print("  readData() -> "); Serial.println(len);
