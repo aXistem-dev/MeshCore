@@ -898,7 +898,7 @@ void MyMesh::loop() {
   // MQTT processing can take time, so we prioritize radio reception
   mesh::Mesh::loop();
 #ifdef WITH_MQTT_BRIDGE
-  bridge.loop();
+  // bridge.loop() is now handled by FreeRTOS task on Core 0 - no need to call it here
 #endif
 
   if (millisHasNowPassed(next_push) && acl.getNumClients() > 0) {

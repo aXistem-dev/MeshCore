@@ -9,6 +9,13 @@
 #include <Timezone.h>
 #include "helpers/JWTHelper.h"
 
+#ifdef ESP_PLATFORM
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/queue.h>
+#include <freertos/semphr.h>
+#endif
+
 #if defined(MQTT_DEBUG) && defined(ARDUINO)
   #include <Arduino.h>
   // USB CDC-aware debug macros: only print if Serial is ready (non-blocking check)
@@ -96,10 +103,19 @@ private:
   };
   
   static const int MAX_QUEUE_SIZE = 10;
+  
+  // FreeRTOS queue for thread-safe packet queuing
+  #ifdef ESP_PLATFORM
+  QueueHandle_t _packet_queue_handle;
+  TaskHandle_t _mqtt_task_handle;
+  SemaphoreHandle_t _raw_data_mutex;  // Mutex for raw radio data
+  #else
+  // Fallback to circular buffer for non-ESP32 platforms
   QueuedPacket _packet_queue[MAX_QUEUE_SIZE];
   int _queue_head;
   int _queue_tail;
-  int _queue_count;
+  #endif
+  int _queue_count;  // Protected by queue operations or mutex
   
   // NTP time sync
   WiFiUDP _ntp_udp;
@@ -151,6 +167,10 @@ private:
   // Configuration validation state
   bool _config_valid;
   
+  // Cached broker connection status (updated in callbacks to avoid redundant checks)
+  bool _cached_has_brokers;
+  bool _cached_has_analyzer_servers;
+  
   // Throttle logging for disconnected broker messages
   unsigned long _last_no_broker_log;
   static const unsigned long NO_BROKER_LOG_INTERVAL = 30000; // Log every 30 seconds max
@@ -172,6 +192,13 @@ private:
   void connectToBrokers();
   void processPacketQueue();
   bool publishStatus();  // Returns true if status was successfully published
+  
+  // FreeRTOS task function (runs on Core 0)
+  #ifdef ESP_PLATFORM
+  static void mqttTask(void* parameter);
+  void mqttTaskLoop();  // Main loop for MQTT task
+  void initializeWiFiInTask();  // WiFi initialization moved to task
+  #endif
   void publishPacket(mesh::Packet* packet, bool is_tx, 
                      const uint8_t* raw_data = nullptr, int raw_len = 0, 
                      float snr = 0.0f, float rssi = 0.0f);

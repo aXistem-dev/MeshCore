@@ -1174,11 +1174,11 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
 
 void MyMesh::loop() {
   // Check radio FIRST to ensure we don't miss incoming packets
-  // MQTT processing can take time, so we prioritize radio reception
+  // MQTT processing runs in a separate FreeRTOS task on Core 0, so we don't call bridge.loop() here
   mesh::Mesh::loop();
 
 #ifdef WITH_BRIDGE
-  bridge.loop();
+  // bridge.loop() is now handled by FreeRTOS task on Core 0 - no need to call it here
 #endif
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {

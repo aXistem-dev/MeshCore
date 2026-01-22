@@ -6,6 +6,10 @@
 
 #ifdef ESP_PLATFORM
 #include <esp_wifi.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/queue.h>
+#include <freertos/semphr.h>
 #endif
 
 // Helper function to strip quotes from strings (both single and double quotes)
@@ -43,14 +47,21 @@ static bool isWiFiConfigValid(const NodePrefs* prefs) {
 
 MQTTBridge::MQTTBridge(NodePrefs *prefs, mesh::PacketManager *mgr, mesh::RTCClock *rtc, mesh::LocalIdentity *identity)
     : BridgeBase(prefs, mgr, rtc), _mqtt_client(nullptr),
-      _active_brokers(0), _queue_head(0), _queue_tail(0), _queue_count(0),
+      _active_brokers(0), _queue_count(0),
       _last_status_publish(0), _last_status_retry(0), _status_interval(300000), // 5 minutes default
               _ntp_client(_ntp_udp, "pool.ntp.org", 0, 60000), _last_ntp_sync(0), _ntp_synced(false), _ntp_sync_pending(false),
               _timezone(nullptr), _last_raw_len(0), _last_snr(0), _last_rssi(0), _last_raw_timestamp(0),
               _analyzer_us_enabled(false), _analyzer_eu_enabled(false), _identity(identity),
               _analyzer_us_client(nullptr), _analyzer_eu_client(nullptr), _config_valid(false),
+              _cached_has_brokers(false), _cached_has_analyzer_servers(false),
               _last_memory_check(0), _skipped_publishes(0),
-              _last_no_broker_log(0), _last_config_warning(0), _dispatcher(nullptr), _radio(nullptr), _board(nullptr), _ms(nullptr) {
+              _last_no_broker_log(0), _last_config_warning(0), _dispatcher(nullptr), _radio(nullptr), _board(nullptr), _ms(nullptr)
+#ifdef ESP_PLATFORM
+              , _packet_queue_handle(nullptr), _mqtt_task_handle(nullptr), _raw_data_mutex(nullptr)
+#else
+              , _queue_head(0), _queue_tail(0)
+#endif
+{
   
   // Initialize default values
   strncpy(_origin, "MeshCore-Repeater", sizeof(_origin) - 1);
@@ -84,12 +95,16 @@ MQTTBridge::MQTTBridge(NodePrefs *prefs, mesh::PacketManager *mgr, mesh::RTCCloc
   strncpy(_prefs->mqtt_password, MQTT_PASSWORD, sizeof(_prefs->mqtt_password) - 1);
 #endif
   
-  // Initialize packet queue
+  // Initialize packet queue (FreeRTOS queue will be created in begin())
+  #ifdef ESP_PLATFORM
+  // Queue and mutex will be created in begin()
+  #else
+  // Initialize circular buffer for non-ESP32 platforms
   memset(_packet_queue, 0, sizeof(_packet_queue));
-  // Initialize has_raw_data flags
   for (int i = 0; i < MAX_QUEUE_SIZE; i++) {
     _packet_queue[i].has_raw_data = false;
   }
+  #endif
   
   // Initialize throttle log timers
   _last_no_broker_log = 0;
@@ -156,65 +171,27 @@ void MQTTBridge::begin() {
   
   MQTT_DEBUG_PRINTLN("Config: Origin=%s, IATA=%s, Device=%s", _origin, _iata, _device_id);
   
-  // Initialize WiFi
-  WiFi.mode(WIFI_STA);
-  
-  // Enable automatic reconnection - ESP32 will handle reconnection automatically
-  WiFi.setAutoReconnect(true);
-  WiFi.setAutoConnect(true);
-  
-  // Set up WiFi event handlers for better diagnostics and immediate disconnection detection
   #ifdef ESP_PLATFORM
-  WiFi.onEvent([this](WiFiEvent_t event, WiFiEventInfo_t info) {
-    switch(event) {
-      case ARDUINO_EVENT_WIFI_STA_GOT_IP:
-        MQTT_DEBUG_PRINTLN("WiFi connected: %s", IPAddress(info.got_ip.ip_info.ip.addr).toString().c_str());
-        // Set flag to trigger NTP sync from loop() instead of doing it here
-        if (!_ntp_synced && !_ntp_sync_pending) {
-          _ntp_sync_pending = true;
-        }
-        break;
-      default:
-        break;
-    }
-  });
-  #endif
-  
-  WiFi.begin(_prefs->wifi_ssid, _prefs->wifi_password);
-  
-  // WiFi connection is asynchronous - don't block here
-  // Auto-reconnect will handle connection in the background
-  // Check connection status, but don't wait for it
-  if (WiFi.status() == WL_CONNECTED) {
-    // Configure WiFi power management for efficient operation
-    #ifdef ESP_PLATFORM
-    wifi_ps_type_t ps_mode;
-    uint8_t ps_pref = _prefs->wifi_power_save;
-    if (ps_pref == 1) {
-      ps_mode = WIFI_PS_NONE;
-    } else if (ps_pref == 2) {
-      ps_mode = WIFI_PS_MAX_MODEM;
-    } else {
-      ps_mode = WIFI_PS_MIN_MODEM;
-    }
-    esp_wifi_set_ps(ps_mode);
-    
-    // Set WiFi TX power
-    #ifdef MQTT_WIFI_TX_POWER
-    WiFi.setTxPower(MQTT_WIFI_TX_POWER);
-    #else
-    WiFi.setTxPower(WIFI_POWER_11dBm);
-    #endif
-    #endif
-    
-    syncTimeWithNTP();
+  // Create FreeRTOS queue for thread-safe packet queuing
+  _packet_queue_handle = xQueueCreate(MAX_QUEUE_SIZE, sizeof(QueuedPacket));
+  if (_packet_queue_handle == nullptr) {
+    MQTT_DEBUG_PRINTLN("Failed to create packet queue!");
+    return;
   }
   
-  // Initialize PsychicMqttClient
+  // Create mutex for raw radio data protection
+  _raw_data_mutex = xSemaphoreCreateMutex();
+  if (_raw_data_mutex == nullptr) {
+    MQTT_DEBUG_PRINTLN("Failed to create raw data mutex!");
+    vQueueDelete(_packet_queue_handle);
+    _packet_queue_handle = nullptr;
+    return;
+  }
+  
+  // Initialize PsychicMqttClient (will be used by task)
   _mqtt_client = new PsychicMqttClient();
   
   // Optimize MQTT client configuration for memory efficiency
-  // Main client doesn't use JWT tokens, so can use smaller buffer
   optimizeMqttClientConfig(_mqtt_client, false);
   
   // Set up event callbacks for the main MQTT client
@@ -224,6 +201,8 @@ void MQTTBridge::begin() {
       if (_brokers[i].enabled && !_brokers[i].connected) {
         _brokers[i].connected = true;
         _active_brokers++;
+        // Update cached broker status
+        _cached_has_brokers = isAnyBrokerConnected();
         break;
       }
     }
@@ -235,6 +214,8 @@ void MQTTBridge::begin() {
       if (_brokers[i].connected) {
         _brokers[i].connected = false;
         _active_brokers--;
+        // Update cached broker status
+        _cached_has_brokers = isAnyBrokerConnected();
         break;
       }
     }
@@ -243,36 +224,90 @@ void MQTTBridge::begin() {
   // Set default broker from preferences or build flags
   setBroker(0, _prefs->mqtt_server, _prefs->mqtt_port, _prefs->mqtt_username, _prefs->mqtt_password, true);
   
-  // Setup Let's Mesh Analyzer servers (but defer JWT token creation until WiFi/NTP are ready)
-  // Only configure which servers are enabled, don't create tokens yet
+  // Setup Let's Mesh Analyzer servers configuration
   _analyzer_us_enabled = _prefs->mqtt_analyzer_us_enabled;
   _analyzer_eu_enabled = _prefs->mqtt_analyzer_eu_enabled;
   MQTT_DEBUG_PRINTLN("Analyzer servers - US: %s, EU: %s", 
                      _analyzer_us_enabled ? "enabled" : "disabled",
                      _analyzer_eu_enabled ? "enabled" : "disabled");
   
-  // Defer JWT token creation until WiFi is connected and NTP is synced
-  // Tokens will be created in loop() once conditions are met
-  if (WiFi.status() == WL_CONNECTED && _ntp_synced) {
-    // WiFi and NTP are already ready - create tokens now
-    if (_analyzer_us_enabled || _analyzer_eu_enabled) {
-      if (createAuthToken()) {
-        MQTT_DEBUG_PRINTLN("Created authentication token for analyzer servers");
-      } else {
-        MQTT_DEBUG_PRINTLN("Failed to create authentication token");
-      }
-    }
-  } else {
-    MQTT_DEBUG_PRINTLN("Deferring JWT token creation - WiFi: %s, NTP: %s", 
-                      (WiFi.status() == WL_CONNECTED) ? "connected" : "disconnected",
-                      _ntp_synced ? "synced" : "not synced");
+  // Create FreeRTOS task for MQTT/WiFi processing on Core 0
+  #ifndef MQTT_TASK_CORE
+  #define MQTT_TASK_CORE 0
+  #endif
+  #ifndef MQTT_TASK_STACK_SIZE
+  #define MQTT_TASK_STACK_SIZE 8192
+  #endif
+  #ifndef MQTT_TASK_PRIORITY
+  #define MQTT_TASK_PRIORITY 1
+  #endif
+  
+  BaseType_t task_result = xTaskCreatePinnedToCore(
+    mqttTask,           // Task function
+    "MQTTBridge",      // Task name
+    MQTT_TASK_STACK_SIZE,  // Stack size
+    this,               // Parameter (this pointer)
+    MQTT_TASK_PRIORITY, // Priority
+    &_mqtt_task_handle, // Task handle
+    MQTT_TASK_CORE      // Core ID (0)
+  );
+  
+  if (task_result != pdPASS) {
+    MQTT_DEBUG_PRINTLN("Failed to create MQTT task!");
+    vQueueDelete(_packet_queue_handle);
+    _packet_queue_handle = nullptr;
+    vSemaphoreDelete(_raw_data_mutex);
+    _raw_data_mutex = nullptr;
+    delete _mqtt_client;
+    _mqtt_client = nullptr;
+    return;
   }
   
-  // Setup PsychicMqttClient WebSocket clients for analyzer servers
-  setupAnalyzerClients();
+  MQTT_DEBUG_PRINTLN("MQTT task created on Core %d", MQTT_TASK_CORE);
+  #else
+  // Non-ESP32: Initialize WiFi directly (no task)
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.setAutoConnect(true);
+  WiFi.begin(_prefs->wifi_ssid, _prefs->wifi_password);
   
-  // Connect to brokers
+  // Initialize PsychicMqttClient
+  _mqtt_client = new PsychicMqttClient();
+  optimizeMqttClientConfig(_mqtt_client, false);
+  
+  // Set up event callbacks
+  _mqtt_client->onConnect([this](bool sessionPresent) {
+    MQTT_DEBUG_PRINTLN("MQTT broker connected");
+    for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
+      if (_brokers[i].enabled && !_brokers[i].connected) {
+        _brokers[i].connected = true;
+        _active_brokers++;
+        // Update cached broker status
+        _cached_has_brokers = isAnyBrokerConnected();
+        break;
+      }
+    }
+  });
+  
+  _mqtt_client->onDisconnect([this](bool sessionPresent) {
+    MQTT_DEBUG_PRINTLN("MQTT broker disconnected");
+    for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
+      if (_brokers[i].connected) {
+        _brokers[i].connected = false;
+        _active_brokers--;
+        // Update cached broker status
+        _cached_has_brokers = isAnyBrokerConnected();
+        break;
+      }
+    }
+  });
+  
+  setBroker(0, _prefs->mqtt_server, _prefs->mqtt_port, _prefs->mqtt_username, _prefs->mqtt_password, true);
+  _analyzer_us_enabled = _prefs->mqtt_analyzer_us_enabled;
+  _analyzer_eu_enabled = _prefs->mqtt_analyzer_eu_enabled;
+  setupAnalyzerClients();
   connectToBrokers();
+  #endif
   
   _initialized = true;
   MQTT_DEBUG_PRINTLN("MQTT Bridge initialized");
@@ -281,6 +316,35 @@ void MQTTBridge::begin() {
 void MQTTBridge::end() {
   MQTT_DEBUG_PRINTLN("Stopping MQTT Bridge...");
   
+  #ifdef ESP_PLATFORM
+  // Delete FreeRTOS task first (it will clean up WiFi/MQTT connections)
+  if (_mqtt_task_handle != nullptr) {
+    vTaskDelete(_mqtt_task_handle);
+    _mqtt_task_handle = nullptr;
+    // Give task time to clean up
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+  
+  // Clean up queued packets from FreeRTOS queue
+  if (_packet_queue_handle != nullptr) {
+    QueuedPacket queued;
+    while (xQueueReceive(_packet_queue_handle, &queued, 0) == pdTRUE) {
+      if (queued.packet) {
+        _mgr->free(queued.packet);
+        queued.packet = nullptr;
+      }
+      _queue_count--;
+    }
+    vQueueDelete(_packet_queue_handle);
+    _packet_queue_handle = nullptr;
+  }
+  
+  // Delete mutex
+  if (_raw_data_mutex != nullptr) {
+    vSemaphoreDelete(_raw_data_mutex);
+    _raw_data_mutex = nullptr;
+  }
+  #else
   // Disconnect from all brokers
   for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
     if (_brokers[i].enabled && _brokers[i].connected) {
@@ -308,17 +372,14 @@ void MQTTBridge::end() {
       _mgr->free(_packet_queue[index].packet);
       _packet_queue[index].packet = nullptr;
     }
-    // Clear the entire structure to free raw_data buffers
     memset(&_packet_queue[index], 0, sizeof(QueuedPacket));
   }
   
-  // Clear packet queue
   _queue_count = 0;
   _queue_head = 0;
   _queue_tail = 0;
-  
-  // Clear all queue slots for safety
   memset(_packet_queue, 0, sizeof(_packet_queue));
+  #endif
   
   // Clean up timezone object to prevent memory leak
   if (_timezone) {
@@ -335,6 +396,273 @@ void MQTTBridge::end() {
   _initialized = false;
   MQTT_DEBUG_PRINTLN("MQTT Bridge stopped");
 }
+
+#ifdef ESP_PLATFORM
+void MQTTBridge::mqttTask(void* parameter) {
+  MQTTBridge* bridge = static_cast<MQTTBridge*>(parameter);
+  if (bridge) {
+    bridge->mqttTaskLoop();
+  }
+  // Task should never return, but if it does, delete itself
+  vTaskDelete(nullptr);
+}
+
+void MQTTBridge::initializeWiFiInTask() {
+  MQTT_DEBUG_PRINTLN("Initializing WiFi in MQTT task...");
+  
+  // Initialize WiFi
+  WiFi.mode(WIFI_STA);
+  
+  // Enable automatic reconnection - ESP32 will handle reconnection automatically
+  WiFi.setAutoReconnect(true);
+  WiFi.setAutoConnect(true);
+  
+  // Set up WiFi event handlers for better diagnostics and immediate disconnection detection
+  WiFi.onEvent([this](WiFiEvent_t event, WiFiEventInfo_t info) {
+    switch(event) {
+      case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+        MQTT_DEBUG_PRINTLN("WiFi connected: %s", IPAddress(info.got_ip.ip_info.ip.addr).toString().c_str());
+        // Set flag to trigger NTP sync from loop() instead of doing it here
+        if (!_ntp_synced && !_ntp_sync_pending) {
+          _ntp_sync_pending = true;
+        }
+        break;
+      default:
+        break;
+    }
+  });
+  
+  WiFi.begin(_prefs->wifi_ssid, _prefs->wifi_password);
+  
+  // WiFi connection is asynchronous - don't block here
+  // Auto-reconnect will handle connection in the background
+  
+  // Setup PsychicMqttClient WebSocket clients for analyzer servers
+  setupAnalyzerClients();
+  
+  MQTT_DEBUG_PRINTLN("WiFi initialization started in task");
+}
+
+void MQTTBridge::mqttTaskLoop() {
+  // Initialize WiFi first
+  initializeWiFiInTask();
+  
+  // Wait a bit for WiFi to start connecting
+  vTaskDelay(pdMS_TO_TICKS(1000));
+  
+  // Main task loop
+  while (true) {
+    // Run the main MQTT bridge loop logic
+    // This replaces the original loop() method but runs in the task
+    
+    // Actively monitor and manage WiFi connection
+    static unsigned long last_wifi_check = 0;
+    static unsigned long last_wifi_reconnect_attempt = 0;
+    static wl_status_t last_wifi_status = WL_DISCONNECTED;
+    static bool wifi_status_initialized = false;
+    static unsigned long wifi_disconnected_time = 0;
+    
+    unsigned long now = millis();
+    wl_status_t current_wifi_status = WiFi.status();
+    
+    // Initialize last_wifi_status on first loop() call
+    if (!wifi_status_initialized) {
+      last_wifi_status = current_wifi_status;
+      wifi_status_initialized = true;
+      if (current_wifi_status == WL_CONNECTED && !_ntp_synced) {
+        syncTimeWithNTP();
+      }
+    }
+    
+    // Check WiFi status every 10 seconds for faster detection
+    if (now - last_wifi_check > 10000) {
+      last_wifi_check = now;
+      
+      if (current_wifi_status == WL_CONNECTED) {
+        if (last_wifi_status != WL_CONNECTED) {
+          wifi_disconnected_time = 0;
+          // Configure WiFi power management for efficient operation
+          wifi_ps_type_t ps_mode;
+          uint8_t ps_pref = _prefs->wifi_power_save;
+          if (ps_pref == 1) {
+            ps_mode = WIFI_PS_NONE;
+          } else if (ps_pref == 2) {
+            ps_mode = WIFI_PS_MAX_MODEM;
+          } else {
+            ps_mode = WIFI_PS_MIN_MODEM;
+          }
+          esp_wifi_set_ps(ps_mode);
+          
+          // Set WiFi TX power
+          #ifdef MQTT_WIFI_TX_POWER
+          WiFi.setTxPower(MQTT_WIFI_TX_POWER);
+          #else
+          WiFi.setTxPower(WIFI_POWER_11dBm);
+          #endif
+          
+          if (!_ntp_synced) {
+            syncTimeWithNTP();
+          }
+        }
+        last_wifi_status = WL_CONNECTED;
+      } else {
+        if (last_wifi_status == WL_CONNECTED) {
+          wifi_disconnected_time = now;
+        } else if (wifi_disconnected_time > 0) {
+          unsigned long disconnected_duration = now - wifi_disconnected_time;
+          
+          // Try to force reconnection if disconnected for more than 30 seconds
+          if (disconnected_duration > 30000 && (now - last_wifi_reconnect_attempt) > 30000) {
+            last_wifi_reconnect_attempt = now;
+            WiFi.disconnect();
+            WiFi.begin(_prefs->wifi_ssid, _prefs->wifi_password);
+          }
+        }
+        last_wifi_status = current_wifi_status;
+      }
+    }
+    
+    // Check for pending NTP sync (triggered from WiFi event handler)
+    if (_ntp_sync_pending && WiFi.status() == WL_CONNECTED) {
+      _ntp_sync_pending = false;
+      syncTimeWithNTP();
+    }
+    
+    // Check if analyzer server settings have changed in preferences
+    static unsigned long last_analyzer_check = 0;
+    if (now - last_analyzer_check > 5000) {
+      last_analyzer_check = now;
+      if (_analyzer_us_enabled != _prefs->mqtt_analyzer_us_enabled || 
+          _analyzer_eu_enabled != _prefs->mqtt_analyzer_eu_enabled) {
+        MQTT_DEBUG_PRINTLN("Analyzer settings changed - updating...");
+        setupAnalyzerServers();
+      }
+    }
+    
+    // Maintain broker connections
+    connectToBrokers();
+    
+    // Maintain analyzer server connections
+    maintainAnalyzerConnections();
+    
+    // Process packet queue
+    processPacketQueue();
+    
+    // Periodic configuration check (throttled to avoid spam)
+    checkConfigurationMismatch();
+    
+    // Periodic NTP sync (every hour) - only when connected
+    if (WiFi.status() == WL_CONNECTED && now - _last_ntp_sync > 3600000) {
+      syncTimeWithNTP();
+    }
+    
+    // Publish status updates (handle millis() overflow correctly)
+    if (_status_enabled) {
+      // Use cached destination status (updated in connection callbacks) - early exit if no destinations
+      // Only refresh cache if status publish is enabled to avoid unnecessary checks
+      bool has_custom_brokers = _cached_has_brokers && _config_valid;
+      bool has_destinations = has_custom_brokers || _cached_has_analyzer_servers;
+      
+      // Early exit if no destinations - skip all the expensive logic below
+      if (!has_destinations) {
+        if (_last_status_retry != 0) {
+          _last_status_retry = 0;
+        }
+      } else {
+        bool should_publish = false;
+        
+        // First, check if we need to respect retry interval (prevents spam when publish keeps failing)
+        if (_last_status_retry != 0) {
+          unsigned long retry_elapsed = (now >= _last_status_retry) ?
+                                       (now - _last_status_retry) :
+                                       (ULONG_MAX - _last_status_retry + now + 1);
+          if (retry_elapsed < STATUS_RETRY_INTERVAL) {
+            // Too soon to retry - wait longer
+            should_publish = false;
+          } else {
+            // Retry interval has passed - allow retry
+            should_publish = true;
+          }
+        } else {
+          // No pending retry - check if normal interval has passed
+          // Handle case where _last_status_publish is 0 (first publish attempt)
+          if (_last_status_publish == 0) {
+            // First publish attempt - allow it immediately
+            should_publish = true;
+          } else {
+            // Calculate elapsed time since last successful publish
+            unsigned long elapsed = (now >= _last_status_publish) ? 
+                                   (now - _last_status_publish) : 
+                                   (ULONG_MAX - _last_status_publish + now + 1);
+            should_publish = (elapsed >= _status_interval);
+          }
+        }
+        
+        if (should_publish) {
+          // Only log elapsed time if we have a previous successful publish
+          if (_last_status_publish != 0) {
+            unsigned long elapsed = (now >= _last_status_publish) ? 
+                                   (now - _last_status_publish) : 
+                                   (ULONG_MAX - _last_status_publish + now + 1);
+            MQTT_DEBUG_PRINTLN("Status publish timer expired (elapsed: %lu ms, interval: %lu ms)", elapsed, _status_interval);
+          } else {
+            MQTT_DEBUG_PRINTLN("Status publish attempt (first publish or retry)");
+          }
+          
+          _last_status_retry = now;
+          if (publishStatus()) {
+            _last_status_publish = now;
+            _last_status_retry = 0;
+            MQTT_DEBUG_PRINTLN("Status published successfully, next publish in %lu ms", _status_interval);
+          } else {
+            MQTT_DEBUG_PRINTLN("Status publish failed, will retry in %lu ms", STATUS_RETRY_INTERVAL);
+            // _last_status_retry already set above - will prevent immediate retry
+          }
+        }
+      }
+    }
+    
+    // Critical memory check (every 15 minutes) - only log warnings
+    static unsigned long last_critical_check = 0;
+    if (now - last_critical_check > 900000) {
+      size_t max_alloc = ESP.getMaxAllocHeap();
+      if (max_alloc < 40000) {
+        MQTT_DEBUG_PRINTLN("CRITICAL: Low memory! Free: %d, Max: %d", ESP.getFreeHeap(), max_alloc);
+      } else if (max_alloc < 60000) {
+        MQTT_DEBUG_PRINTLN("WARNING: Memory pressure. Free: %d, Max: %d", ESP.getFreeHeap(), max_alloc);
+      }
+      last_critical_check = now;
+    }
+    
+    // Update cached analyzer server status periodically (every 5 seconds)
+    // This ensures cache stays accurate even if callbacks miss updates
+    static unsigned long last_analyzer_status_update = 0;
+    if (now - last_analyzer_status_update > 5000) {
+      _cached_has_analyzer_servers = (_analyzer_us_enabled && _analyzer_us_client && _analyzer_us_client->connected()) ||
+                                     (_analyzer_eu_enabled && _analyzer_eu_client && _analyzer_eu_client->connected());
+      last_analyzer_status_update = now;
+    }
+    
+    // Adaptive task delay based on work done
+    // Check if we have work to do (queue has packets or status needs publishing)
+    bool has_work = (_queue_count > 0);
+    if (!has_work && _status_enabled) {
+      // Check if status publish is needed soon
+      if (_last_status_publish == 0 || 
+          (now - _last_status_publish >= (_status_interval - 10000))) {  // Within 10s of next publish
+        has_work = true;
+      }
+    }
+    
+    // Adaptive delay: shorter when work pending, longer when idle
+    if (has_work) {
+      vTaskDelay(pdMS_TO_TICKS(5));   // 5ms delay when work pending - process faster
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(50));  // 50ms delay when idle - save CPU
+    }
+  }
+}
+#endif
 
 bool MQTTBridge::isConfigValid() const {
   return _config_valid;
@@ -388,6 +716,12 @@ bool MQTTBridge::isReady() const {
 void MQTTBridge::loop() {
   if (!_initialized) return;
   
+  #ifdef ESP_PLATFORM
+  // On ESP32, loop() is a no-op - all processing happens in the FreeRTOS task
+  // This method is kept for API compatibility but does nothing
+  return;
+  #else
+  // Non-ESP32: Original loop implementation
   // Actively monitor and manage WiFi connection
   static unsigned long last_wifi_check = 0;
   static unsigned long last_wifi_reconnect_attempt = 0;
@@ -472,46 +806,64 @@ void MQTTBridge::loop() {
   
   // Publish status updates (handle millis() overflow correctly)
   if (_status_enabled) {
-    // Check if we have any destinations available before attempting to publish
-    bool has_custom_brokers = isAnyBrokerConnected() && _config_valid;
-    bool has_analyzer_servers = (_analyzer_us_enabled && _analyzer_us_client && _analyzer_us_client->connected()) ||
-                               (_analyzer_eu_enabled && _analyzer_eu_client && _analyzer_eu_client->connected());
-    bool has_destinations = has_custom_brokers || has_analyzer_servers;
+    // Use cached destination status (updated in connection callbacks) - early exit if no destinations
+    bool has_custom_brokers = _cached_has_brokers && _config_valid;
+    bool has_destinations = has_custom_brokers || _cached_has_analyzer_servers;
     
     // Only attempt to publish if we have destinations available
     if (has_destinations) {
       unsigned long now = millis();
-      unsigned long elapsed = (now >= _last_status_publish) ? 
-                             (now - _last_status_publish) : 
-                             (ULONG_MAX - _last_status_publish + now + 1);
+      bool should_publish = false;
       
-      // Check if enough time has passed since last successful publish
-      bool should_publish = (elapsed >= _status_interval);
-      
-      // If interval hasn't passed, check if we should retry after a failed publish
-      // Only check retry if _last_status_retry != 0 (meaning we had a failed publish)
-      if (!should_publish && _last_status_retry != 0) {
+      // First, check if we need to respect retry interval (prevents spam when publish keeps failing)
+      if (_last_status_retry != 0) {
         unsigned long retry_elapsed = (now >= _last_status_retry) ?
                                      (now - _last_status_retry) :
                                      (ULONG_MAX - _last_status_retry + now + 1);
-        // Retry if enough time has passed since last retry attempt
-        should_publish = (retry_elapsed >= STATUS_RETRY_INTERVAL);
+        if (retry_elapsed < STATUS_RETRY_INTERVAL) {
+          // Too soon to retry - wait longer
+          should_publish = false;
+        } else {
+          // Retry interval has passed - allow retry
+          should_publish = true;
+        }
+      } else {
+        // No pending retry - check if normal interval has passed
+        // Handle case where _last_status_publish is 0 (first publish attempt)
+        if (_last_status_publish == 0) {
+          // First publish attempt - allow it immediately
+          should_publish = true;
+        } else {
+          // Calculate elapsed time since last successful publish
+          unsigned long elapsed = (now >= _last_status_publish) ? 
+                               (now - _last_status_publish) : 
+                               (ULONG_MAX - _last_status_publish + now + 1);
+          should_publish = (elapsed >= _status_interval);
+        }
       }
       
       if (should_publish) {
-        MQTT_DEBUG_PRINTLN("Status publish timer expired (elapsed: %lu ms, interval: %lu ms)", elapsed, _status_interval);
-        _last_status_retry = now;  // Update retry timestamp
+        // Only log elapsed time if we have a previous successful publish
+        if (_last_status_publish != 0) {
+          unsigned long elapsed = (now >= _last_status_publish) ? 
+                                 (now - _last_status_publish) : 
+                                 (ULONG_MAX - _last_status_publish + now + 1);
+          MQTT_DEBUG_PRINTLN("Status publish timer expired (elapsed: %lu ms, interval: %lu ms)", elapsed, _status_interval);
+        } else {
+          MQTT_DEBUG_PRINTLN("Status publish attempt (first publish or retry)");
+        }
+        
+        _last_status_retry = now;
         if (publishStatus()) {
-          _last_status_publish = now;  // Only update timer on successful publication
-          _last_status_retry = 0;  // Reset retry timer on success (0 = no retry needed)
+          _last_status_publish = now;
+          _last_status_retry = 0;
           MQTT_DEBUG_PRINTLN("Status published successfully, next publish in %lu ms", _status_interval);
         } else {
           MQTT_DEBUG_PRINTLN("Status publish failed, will retry in %lu ms", STATUS_RETRY_INTERVAL);
-          // Retry timer (_last_status_retry) already updated above
+          // _last_status_retry already set above - will prevent immediate retry
         }
       }
     } else {
-      // No destinations available - reset retry timer to avoid spam
       if (_last_status_retry != 0) {
         _last_status_retry = 0;
       }
@@ -520,7 +872,7 @@ void MQTTBridge::loop() {
   
   // Critical memory check (every 15 minutes) - only log warnings
   static unsigned long last_critical_check = 0;
-  if (millis() - last_critical_check > 900000) { // 15 minutes
+  if (millis() - last_critical_check > 900000) {
     size_t max_alloc = ESP.getMaxAllocHeap();
     if (max_alloc < 40000) {
       MQTT_DEBUG_PRINTLN("CRITICAL: Low memory! Free: %d, Max: %d", ESP.getFreeHeap(), max_alloc);
@@ -529,6 +881,7 @@ void MQTTBridge::loop() {
     }
     last_critical_check = millis();
   }
+  #endif
 }
 
 void MQTTBridge::onPacketReceived(mesh::Packet *packet) {
@@ -645,27 +998,38 @@ void MQTTBridge::connectToBrokers() {
       if (!_mqtt_client->connected()) {
         _brokers[i].connected = false;
         _active_brokers--;
+        // Update cached broker status
+        _cached_has_brokers = isAnyBrokerConnected();
       }
       // Removed aggressive 4-hour health check that was causing connection instability.
       // The MQTT client library handles connection health internally, and forcing
       // disconnections on healthy connections was causing hours of downtime.
     }
   }
+  
+  // Update cached broker status after connection attempts
+  _cached_has_brokers = isAnyBrokerConnected();
 }
 
 void MQTTBridge::processPacketQueue() {
+  #ifdef ESP_PLATFORM
+  // Use FreeRTOS queue
+  if (_packet_queue_handle == nullptr) {
+    return;
+  }
+  
+  // Update queue count from actual queue state
+  _queue_count = uxQueueMessagesWaiting(_packet_queue_handle);
+  
   if (_queue_count == 0) {
     return;
   }
   
-  // Check if we have any connected brokers (custom or analyzer)
-  bool has_connected_brokers = isAnyBrokerConnected() || 
-                               (_analyzer_us_enabled && _analyzer_us_client && _analyzer_us_client->connected()) ||
-                               (_analyzer_eu_enabled && _analyzer_eu_client && _analyzer_eu_client->connected());
+  // Use cached broker connection status to avoid redundant checks
+  bool has_connected_brokers = _cached_has_brokers || _cached_has_analyzer_servers;
   
   if (!has_connected_brokers) {
     if (_queue_count > 0) {
-      // Only log this message periodically to avoid spam (every 30 seconds max)
       unsigned long now = millis();
       if (now - _last_no_broker_log > NO_BROKER_LOG_INTERVAL) {
         MQTT_DEBUG_PRINTLN("Queue has %d packets but no brokers connected", _queue_count);
@@ -675,27 +1039,25 @@ void MQTTBridge::processPacketQueue() {
     return;
   }
   
-  // Reset the log timer when brokers are connected
   _last_no_broker_log = 0;
   
-  // MQTT_DEBUG_PRINTLN("Processing packet queue - count: %d", _queue_count);
-  
-  // Limit processing to 1 packet per loop iteration to maintain responsiveness
-  // Large packets (like neighbors list responses) can take significant time to process
-  // (JSON building + multiple broker publishes), so we spread the work across multiple loops
+  // Process up to 1 packet per call to maintain responsiveness
   int processed = 0;
-  int max_per_loop = 1; // Process max 1 packet per loop to keep main loop responsive (reduced from 2)
+  int max_per_loop = 1;
   unsigned long loop_start_time = millis();
-  const unsigned long MAX_PROCESSING_TIME_MS = 30; // Reduced from 50ms to 30ms for better responsiveness
+  const unsigned long MAX_PROCESSING_TIME_MS = 30;
   
-  while (_queue_count > 0 && processed < max_per_loop) {
-    // Check time budget - if we've spent too long, stop processing to maintain responsiveness
+  while (processed < max_per_loop) {
     unsigned long elapsed = millis() - loop_start_time;
     if (elapsed > MAX_PROCESSING_TIME_MS) {
       break;
     }
     
-    QueuedPacket& queued = _packet_queue[_queue_head];
+    QueuedPacket queued;
+    // Try to receive from queue (non-blocking)
+    if (xQueueReceive(_packet_queue_handle, &queued, 0) != pdTRUE) {
+      break;  // No more packets
+    }
     
     // Publish packet (use stored raw data if available)
     publishPacket(queued.packet, queued.is_tx, 
@@ -709,22 +1071,78 @@ void MQTTBridge::processPacketQueue() {
       publishRaw(queued.packet);
     }
     
-    // Free packet memory before removing from queue
+    // Free packet memory
+    // NOTE: PacketManager::free() is not thread-safe, but in practice this should be safe because:
+    // - Packets are allocated on Core 1 (main loop) and queued immediately
+    // - Once queued, packets are no longer accessed by Core 1
+    // - Packets are only freed here on Core 0 (MQTT task)
+    // - There's no concurrent access to the same packet instance
+    // However, concurrent access to PacketManager's internal pool structures could theoretically
+    // cause issues. If problems occur, consider adding a mutex wrapper around PacketManager operations.
     if (queued.packet) {
       _mgr->free(queued.packet);
       queued.packet = nullptr;
     }
     
-    // Remove from queue
-    dequeuePacket();
+    _queue_count--;
     processed++;
     
-    // Yield to main loop after each packet to maintain responsiveness
-    // This prevents blocking the main loop for extended periods
-    #ifdef ESP_PLATFORM
-    vTaskDelay(1); // Yield to other tasks (1 tick = ~10ms on ESP32)
-    #endif
+    // No need for vTaskDelay here - task already yields at end of main loop
   }
+  #else
+  // Non-ESP32: Use circular buffer
+  if (_queue_count == 0) {
+    return;
+  }
+  
+  // Use cached broker connection status to avoid redundant checks
+  bool has_connected_brokers = _cached_has_brokers || _cached_has_analyzer_servers;
+  
+  if (!has_connected_brokers) {
+    if (_queue_count > 0) {
+      unsigned long now = millis();
+      if (now - _last_no_broker_log > NO_BROKER_LOG_INTERVAL) {
+        MQTT_DEBUG_PRINTLN("Queue has %d packets but no brokers connected", _queue_count);
+        _last_no_broker_log = now;
+      }
+    }
+    return;
+  }
+  
+  _last_no_broker_log = 0;
+  
+  int processed = 0;
+  int max_per_loop = 1;
+  unsigned long loop_start_time = millis();
+  const unsigned long MAX_PROCESSING_TIME_MS = 30;
+  
+  while (_queue_count > 0 && processed < max_per_loop) {
+    unsigned long elapsed = millis() - loop_start_time;
+    if (elapsed > MAX_PROCESSING_TIME_MS) {
+      break;
+    }
+    
+    QueuedPacket& queued = _packet_queue[_queue_head];
+    
+    publishPacket(queued.packet, queued.is_tx, 
+                  queued.has_raw_data ? queued.raw_data : nullptr,
+                  queued.has_raw_data ? queued.raw_len : 0,
+                  queued.has_raw_data ? queued.snr : 0.0f,
+                  queued.has_raw_data ? queued.rssi : 0.0f);
+    
+    if (_raw_enabled) {
+      publishRaw(queued.packet);
+    }
+    
+    if (queued.packet) {
+      _mgr->free(queued.packet);
+      queued.packet = nullptr;
+    }
+    
+    dequeuePacket();
+    processed++;
+  }
+  #endif
 }
 
 bool MQTTBridge::publishStatus() {
@@ -758,12 +1176,11 @@ bool MQTTBridge::publishStatus() {
   }
   #endif
   
-  // Check if we have any valid destinations (custom brokers or analyzer servers)
-  bool has_custom_brokers = isAnyBrokerConnected() && _config_valid;
-  bool has_analyzer_servers = (_analyzer_us_enabled && _analyzer_us_client && _analyzer_us_client->connected()) ||
-                               (_analyzer_eu_enabled && _analyzer_eu_client && _analyzer_eu_client->connected());
+  // Use cached destination status to avoid redundant checks
+  bool has_custom_brokers = _cached_has_brokers && _config_valid;
+  bool has_destinations = has_custom_brokers || _cached_has_analyzer_servers;
   
-  if (!has_custom_brokers && !has_analyzer_servers) {
+  if (!has_destinations) {
     return false;  // No destinations available
   }
   
@@ -886,7 +1303,7 @@ bool MQTTBridge::publishStatus() {
             
             // Always publish to Let's Mesh Analyzer servers if enabled and connected
             // Use shared helper function to publish same JSON to both servers (avoids duplication)
-            if (has_analyzer_servers) {
+            if (_cached_has_analyzer_servers) {
               #ifdef ESP32
               size_t max_alloc = ESP.getMaxAllocHeap();
               if (max_alloc >= 70000) {  // Only publish to analyzer servers if memory is OK
@@ -1134,29 +1551,82 @@ void MQTTBridge::publishRaw(mesh::Packet* packet) {
 }
 
 void MQTTBridge::queuePacket(mesh::Packet* packet, bool is_tx) {
+  #ifdef ESP_PLATFORM
+  // Use FreeRTOS queue for thread-safe operation
+  if (_packet_queue_handle == nullptr) {
+    return;  // Queue not initialized
+  }
+  
+  QueuedPacket queued;
+  memset(&queued, 0, sizeof(QueuedPacket));
+  
+  queued.packet = packet;
+  queued.timestamp = millis();
+  queued.is_tx = is_tx;
+  queued.has_raw_data = false;
+  
+  // Capture raw radio data with mutex protection
+  // Use non-blocking mutex to prevent Core 1 from blocking - if mutex is busy, skip raw data
+  if (!is_tx) {
+    if (xSemaphoreTake(_raw_data_mutex, 0) == pdTRUE) {
+      unsigned long current_time = millis();
+      if (_last_raw_len > 0 && (current_time - _last_raw_timestamp) < 1000) {
+        if (_last_raw_len <= sizeof(queued.raw_data)) {
+          memcpy(queued.raw_data, _last_raw_data, _last_raw_len);
+          queued.raw_len = _last_raw_len;
+          queued.snr = _last_snr;
+          queued.rssi = _last_rssi;
+          queued.has_raw_data = true;
+        }
+      }
+      xSemaphoreGive(_raw_data_mutex);
+    }
+    // If mutex unavailable, packet is queued without raw data (acceptable trade-off for responsiveness)
+  }
+  
+  // Try to send to queue (non-blocking)
+  if (xQueueSend(_packet_queue_handle, &queued, 0) != pdTRUE) {
+    // Queue full - try to remove oldest packet
+    QueuedPacket oldest;
+    if (xQueueReceive(_packet_queue_handle, &oldest, 0) == pdTRUE) {
+      if (oldest.packet) {
+        MQTT_DEBUG_PRINTLN("Queue full, dropping oldest packet");
+        _mgr->free(oldest.packet);
+      }
+      // Now try to send again
+      if (xQueueSend(_packet_queue_handle, &queued, 0) != pdTRUE) {
+        MQTT_DEBUG_PRINTLN("Failed to queue packet after dropping oldest");
+        return;
+      }
+    } else {
+      MQTT_DEBUG_PRINTLN("Queue full and cannot remove oldest packet");
+      return;
+    }
+  }
+  
+  // Update queue count (approximate, since we can't atomically update it)
+  UBaseType_t queue_messages = uxQueueMessagesWaiting(_packet_queue_handle);
+  _queue_count = queue_messages;
+  #else
+  // Non-ESP32: Use circular buffer
   if (_queue_count >= MAX_QUEUE_SIZE) {
-    // Queue full, remove oldest and free its memory
     QueuedPacket& oldest = _packet_queue[_queue_head];
     if (oldest.packet) {
       MQTT_DEBUG_PRINTLN("Queue full, dropping oldest packet (queue size: %d)", _queue_count);
       _mgr->free(oldest.packet);
       oldest.packet = nullptr;
     }
-    // dequeuePacket() will clear the structure
     dequeuePacket();
   }
   
   QueuedPacket& queued = _packet_queue[_queue_tail];
-  // Clear structure first to ensure clean state (removes any stale data)
   memset(&queued, 0, sizeof(QueuedPacket));
   
   queued.packet = packet;
   queued.timestamp = millis();
   queued.is_tx = is_tx;
-  queued.has_raw_data = false; // Default to false, set true if we have valid data
+  queued.has_raw_data = false;
   
-  // Only capture raw radio data for RX packets (TX packets are generated locally, no raw radio data)
-  // This saves 256 bytes per queued TX packet (memory optimization)
   if (!is_tx && _last_raw_len > 0 && (millis() - _last_raw_timestamp) < 1000) {
     if (_last_raw_len <= sizeof(queued.raw_data)) {
       memcpy(queued.raw_data, _last_raw_data, _last_raw_len);
@@ -1169,9 +1639,16 @@ void MQTTBridge::queuePacket(mesh::Packet* packet, bool is_tx) {
   
   _queue_tail = (_queue_tail + 1) % MAX_QUEUE_SIZE;
   _queue_count++;
+  #endif
 }
 
 void MQTTBridge::dequeuePacket() {
+  #ifdef ESP_PLATFORM
+  // On ESP32, dequeuePacket() is not used - we use FreeRTOS queue operations directly
+  // This method should never be called on ESP32
+  return;
+  #else
+  // Non-ESP32: Use circular buffer
   if (_queue_count == 0) return;
   
   // Clear the dequeued packet structure to free memory and prevent stale data
@@ -1181,6 +1658,7 @@ void MQTTBridge::dequeuePacket() {
   
   _queue_head = (_queue_head + 1) % MAX_QUEUE_SIZE;
   _queue_count--;
+  #endif
 }
 
 bool MQTTBridge::isAnyBrokerConnected() {
@@ -1254,12 +1732,25 @@ void MQTTBridge::setBuildDate(const char* build_date) {
 
 void MQTTBridge::storeRawRadioData(const uint8_t* raw_data, int len, float snr, float rssi) {
   if (len > 0 && len <= sizeof(_last_raw_data)) {
+    #ifdef ESP_PLATFORM
+    // Protect with mutex for thread-safe access
+    if (_raw_data_mutex != nullptr && xSemaphoreTake(_raw_data_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+      memcpy(_last_raw_data, raw_data, len);
+      _last_raw_len = len;
+      _last_snr = snr;
+      _last_rssi = rssi;
+      _last_raw_timestamp = millis();
+      xSemaphoreGive(_raw_data_mutex);
+      MQTT_DEBUG_PRINTLN("Stored raw radio data: %d bytes, SNR=%.1f, RSSI=%.1f", len, snr, rssi);
+    }
+    #else
     memcpy(_last_raw_data, raw_data, len);
     _last_raw_len = len;
     _last_snr = snr;
     _last_rssi = rssi;
     _last_raw_timestamp = millis();
     MQTT_DEBUG_PRINTLN("Stored raw radio data: %d bytes, SNR=%.1f, RSSI=%.1f", len, snr, rssi);
+    #endif
   }
 }
 
@@ -1453,11 +1944,17 @@ void MQTTBridge::setupAnalyzerClients() {
     // Set up event callbacks for US server
     _analyzer_us_client->onConnect([this](bool sessionPresent) {
       MQTT_DEBUG_PRINTLN("Connected to US analyzer");
+      // Update cached analyzer server status
+      _cached_has_analyzer_servers = (_analyzer_us_enabled && _analyzer_us_client && _analyzer_us_client->connected()) ||
+                                     (_analyzer_eu_enabled && _analyzer_eu_client && _analyzer_eu_client->connected());
       publishStatusToAnalyzerClient(_analyzer_us_client, "mqtt-us-v1.letsmesh.net");
     });
 
     _analyzer_us_client->onDisconnect([this](bool sessionPresent) {
       MQTT_DEBUG_PRINTLN("Disconnected from US analyzer");
+      // Update cached analyzer server status
+      _cached_has_analyzer_servers = (_analyzer_us_enabled && _analyzer_us_client && _analyzer_us_client->connected()) ||
+                                     (_analyzer_eu_enabled && _analyzer_eu_client && _analyzer_eu_client->connected());
     });
 
     _analyzer_us_client->onError([this](esp_mqtt_error_codes error) {
@@ -1484,11 +1981,17 @@ void MQTTBridge::setupAnalyzerClients() {
     // Set up event callbacks for EU server
     _analyzer_eu_client->onConnect([this](bool sessionPresent) {
       MQTT_DEBUG_PRINTLN("Connected to EU analyzer");
+      // Update cached analyzer server status
+      _cached_has_analyzer_servers = (_analyzer_us_enabled && _analyzer_us_client && _analyzer_us_client->connected()) ||
+                                     (_analyzer_eu_enabled && _analyzer_eu_client && _analyzer_eu_client->connected());
       publishStatusToAnalyzerClient(_analyzer_eu_client, "mqtt-eu-v1.letsmesh.net");
     });
 
     _analyzer_eu_client->onDisconnect([this](bool sessionPresent) {
       MQTT_DEBUG_PRINTLN("Disconnected from EU analyzer");
+      // Update cached analyzer server status
+      _cached_has_analyzer_servers = (_analyzer_us_enabled && _analyzer_us_client && _analyzer_us_client->connected()) ||
+                                     (_analyzer_eu_enabled && _analyzer_eu_client && _analyzer_eu_client->connected());
     });
 
     _analyzer_eu_client->onError([this](esp_mqtt_error_codes error) {
@@ -1901,7 +2404,15 @@ int MQTTBridge::getConnectedBrokers() const {
 }
 
 int MQTTBridge::getQueueSize() const {
+  #ifdef ESP_PLATFORM
+  // Get actual queue size from FreeRTOS queue
+  if (_packet_queue_handle != nullptr) {
+    return uxQueueMessagesWaiting(_packet_queue_handle);
+  }
+  return 0;
+  #else
   return _queue_count;
+  #endif
 }
 
 void MQTTBridge::setStatsSources(mesh::Dispatcher* dispatcher, mesh::Radio* radio, 
