@@ -356,12 +356,12 @@ public:
   // Let's Mesh Analyzer methods
   void setupAnalyzerServers();
   bool createAuthToken();
-  void publishToAnalyzerServers(const char* topic, const char* payload, bool retained = false);
+  bool publishToAnalyzerServers(const char* topic, const char* payload, bool retained = false);  // Returns true if at least one publish succeeded
   
   // PsychicMqttClient WebSocket methods
   void setupAnalyzerClients();
   void maintainAnalyzerConnections();
-  void publishToAnalyzerClient(PsychicMqttClient* client, const char* topic, const char* payload, bool retained = false);
+  bool publishToAnalyzerClient(PsychicMqttClient* client, const char* topic, const char* payload, bool retained = false);  // Returns true if publish succeeded
   void publishStatusToAnalyzerClient(PsychicMqttClient* client, const char* server_name);
   
   /**

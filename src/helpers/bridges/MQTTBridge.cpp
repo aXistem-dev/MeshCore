@@ -868,8 +868,64 @@ void MQTTBridge::loop() {
         _last_status_retry = 0;
       }
     }
+    
+    // Check if status hasn't been published successfully for too long
+    // If status publishes have been failing for > 10 minutes, force full MQTT reinitialization
+    if (_status_enabled && _last_status_publish != 0) {
+      unsigned long time_since_last_success = (now >= _last_status_publish) ?
+                                              (now - _last_status_publish) :
+                                              (ULONG_MAX - _last_status_publish + now + 1);
+      const unsigned long MAX_FAILURE_TIME_MS = 600000;  // 10 minutes
+      
+      if (time_since_last_success > MAX_FAILURE_TIME_MS) {
+        static unsigned long last_reinit_log = 0;
+        if (now - last_reinit_log > 300000) {  // Log every 5 minutes max
+          MQTT_DEBUG_PRINTLN("CRITICAL: Status publish has been failing for %lu ms (>%lu ms), forcing MQTT session reinitialization",
+                             time_since_last_success, MAX_FAILURE_TIME_MS);
+          last_reinit_log = now;
+        }
+        
+        // Force full MQTT session reinitialization
+        // Disconnect all MQTT clients
+        if (_mqtt_client && _mqtt_client->connected()) {
+          _mqtt_client->disconnect();
+          #ifdef ESP_PLATFORM
+          vTaskDelay(pdMS_TO_TICKS(100));  // Brief delay to allow disconnect
+          #else
+          delay(100);  // Brief delay to allow disconnect
+          #endif
+        }
+        
+        // Disconnect analyzer clients
+        if (_analyzer_us_client && _analyzer_us_client->connected()) {
+          _analyzer_us_client->disconnect();
+        }
+        if (_analyzer_eu_client && _analyzer_eu_client->connected()) {
+          _analyzer_eu_client->disconnect();
+        }
+        
+        // Reset all broker connection states
+        for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
+          if (_brokers[i].enabled) {
+            _brokers[i].connected = false;
+            _brokers[i].last_attempt = 0;  // Allow immediate reconnect
+          }
+        }
+        _active_brokers = 0;
+        _cached_has_brokers = false;
+        _cached_has_analyzer_servers = false;
+        
+        // Reset status publish timestamp to allow fresh attempt after reconnection
+        _last_status_publish = 0;
+        _last_status_retry = 0;
+        
+        MQTT_DEBUG_PRINTLN("MQTT session reinitialized - reconnection will be attempted on next loop");
+      }
+    }
   }
+  #endif
   
+  #ifdef ESP_PLATFORM
   // Critical memory check (every 15 minutes) - only log warnings
   static unsigned long last_critical_check = 0;
   if (millis() - last_critical_check > 900000) {
@@ -1174,13 +1230,13 @@ bool MQTTBridge::publishStatus() {
     return false;
   }
   
-  // Memory pressure check: Skip status publishes when heap is severely fragmented
-  // Status publishes are less critical than packet publishes, so we can skip them more aggressively
+  // Memory pressure check: Use same threshold as packet publishes for consistency
+  // Status publishes should not be skipped more aggressively than packets
   #ifdef ESP32
   unsigned long now = millis();
   if (now - _last_memory_check > 5000) {  // Check every 5 seconds
     size_t max_alloc = ESP.getMaxAllocHeap();
-    if (max_alloc < 70000) {  // Less than 70KB max alloc = moderate fragmentation
+    if (max_alloc < 60000) {  // Less than 60KB max alloc = severe fragmentation (same as packets)
       static unsigned long last_status_skip_log = 0;
       if (now - last_status_skip_log > 300000) {  // Log every 5 minutes
         MQTT_DEBUG_PRINTLN("MQTT: Skipping status publish due to memory pressure (Max alloc: %d)", max_alloc);
@@ -1201,25 +1257,8 @@ bool MQTTBridge::publishStatus() {
     return false;  // No destinations available
   }
   
-  // Final verification: ensure client is actually connected before attempting publish
-  // This catches cases where connection state got out of sync
-  if (has_custom_brokers && _mqtt_client && !_mqtt_client->connected()) {
-    // Client says disconnected but our state says connected - fix the state
-    MQTT_DEBUG_PRINTLN("Status publish: Client disconnected but state says connected - fixing state");
-    for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
-      if (_brokers[i].enabled && _brokers[i].connected) {
-        _brokers[i].connected = false;
-        _active_brokers--;
-        _brokers[i].last_attempt = 0;  // Allow immediate reconnect
-      }
-    }
-    _cached_has_brokers = false;
-    has_custom_brokers = false;
-    has_destinations = has_custom_brokers || _cached_has_analyzer_servers;
-    if (!has_destinations) {
-      return false;  // No destinations after fixing state
-    }
-  }
+  // Don't do aggressive pre-check like before - if packets are publishing successfully,
+  // the connection is likely fine. The actual publish attempt will handle connection issues.
   
   // Status messages with stats can be larger (~400-500 bytes), so increase buffer size
   char json_buffer[768];  // Increased from 512 to accommodate stats object
@@ -1300,25 +1339,36 @@ bool MQTTBridge::publishStatus() {
             size_t json_len = strlen(json_buffer); // Cache length to avoid multiple strlen() calls
             
             // Publish to all connected custom brokers
-            // Double-check client is actually connected before attempting publish
-            if (_config_valid && _mqtt_client && _mqtt_client->connected()) {
+            // Use same logic as packet publishes for consistency
+            if (_config_valid && _mqtt_client) {
+              // Share the same broker URI tracking as packet publishes to avoid sync issues
               // Track last broker URI to avoid calling setServer() unnecessarily (memory optimization)
               // setServer() may allocate memory, so we only call it when the broker changes
-              static char last_broker_uri_status[128] = "";
+              static char last_broker_uri_shared[128] = "";
               
               for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
                 // Verify broker is actually connected (state might be stale)
-                if (_brokers[i].enabled && _brokers[i].connected && _mqtt_client->connected()) {
+                if (_brokers[i].enabled && _brokers[i].connected) {
+                  // Check connection state right before publish (like packet publishes do)
+                  if (!_mqtt_client->connected()) {
+                    // Connection lost - mark as disconnected but don't disconnect here
+                    // (packet publishes handle this more gracefully)
+                    _brokers[i].connected = false;
+                    _active_brokers--;
+                    _brokers[i].last_attempt = 0;
+                    _cached_has_brokers = isAnyBrokerConnected();
+                    continue;
+                  }
                   
                   // Build broker URI
                   char broker_uri[128];
                   snprintf(broker_uri, sizeof(broker_uri), "mqtt://%s:%d", _brokers[i].host, _brokers[i].port);
                   
                   // Only call setServer() if broker URI changed (reduces memory allocations)
-                  if (strcmp(broker_uri, last_broker_uri_status) != 0) {
+                  if (strcmp(broker_uri, last_broker_uri_shared) != 0) {
                     _mqtt_client->setServer(broker_uri);
-                    strncpy(last_broker_uri_status, broker_uri, sizeof(last_broker_uri_status) - 1);
-                    last_broker_uri_status[sizeof(last_broker_uri_status) - 1] = '\0';
+                    strncpy(last_broker_uri_shared, broker_uri, sizeof(last_broker_uri_shared) - 1);
+                    last_broker_uri_shared[sizeof(last_broker_uri_shared) - 1] = '\0';
                   }
                   
                   // Publish with timeout check - don't block if connection is slow
@@ -1345,17 +1395,30 @@ bool MQTTBridge::publishStatus() {
                   }
                 }
               }
+            } else if (_config_valid) {
+              // Connection state is out of sync - mark all brokers as disconnected
+              // (Same logic as packet publishes)
+              for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
+                if (_brokers[i].enabled && _brokers[i].connected) {
+                  _brokers[i].connected = false;
+                  _active_brokers--;
+                }
+              }
+              _cached_has_brokers = false;
             }
             
             // Always publish to Let's Mesh Analyzer servers if enabled and connected
             // Use shared helper function to publish same JSON to both servers (avoids duplication)
+            // Use same memory threshold as main check (60000) for consistency
             if (_cached_has_analyzer_servers) {
               #ifdef ESP32
               size_t max_alloc = ESP.getMaxAllocHeap();
-              if (max_alloc >= 70000) {  // Only publish to analyzer servers if memory is OK
+              if (max_alloc >= 60000) {  // Same threshold as main memory check
               #endif
-                publishToAnalyzerServers(topic, json_buffer, true);  // retained=true for status
-                published = true;
+                // publishToAnalyzerServers returns true if at least one publish succeeded
+                if (publishToAnalyzerServers(topic, json_buffer, true)) {  // retained=true for status
+                  published = true;
+                }
               #ifdef ESP32
               }
               #endif
@@ -1931,18 +1994,26 @@ bool MQTTBridge::createAuthToken() {
   return us_token_created || eu_token_created;
 }
 
-void MQTTBridge::publishToAnalyzerServers(const char* topic, const char* payload, bool retained) {
-  if (!_analyzer_us_enabled && !_analyzer_eu_enabled) return;
+bool MQTTBridge::publishToAnalyzerServers(const char* topic, const char* payload, bool retained) {
+  if (!_analyzer_us_enabled && !_analyzer_eu_enabled) return false;
+  
+  bool published = false;
   
   // Publish to US server if enabled
   if (_analyzer_us_enabled && _analyzer_us_client) {
-    publishToAnalyzerClient(_analyzer_us_client, topic, payload, retained);
+    if (publishToAnalyzerClient(_analyzer_us_client, topic, payload, retained)) {
+      published = true;
+    }
   }
   
   // Publish to EU server if enabled
   if (_analyzer_eu_enabled && _analyzer_eu_client) {
-    publishToAnalyzerClient(_analyzer_eu_client, topic, payload, retained);
+    if (publishToAnalyzerClient(_analyzer_eu_client, topic, payload, retained)) {
+      published = true;
+    }
   }
+  
+  return published;  // Return true if at least one publish succeeded
 }
 
 // Google Trust Services - GTS Root R4
@@ -2071,9 +2142,9 @@ void MQTTBridge::setupAnalyzerClients() {
   }
 }
 
-void MQTTBridge::publishToAnalyzerClient(PsychicMqttClient* client, const char* topic, const char* payload, bool retained) {
+bool MQTTBridge::publishToAnalyzerClient(PsychicMqttClient* client, const char* topic, const char* payload, bool retained) {
   if (!client) {
-    return; // Don't log null client - this is expected if analyzer is disabled
+    return false; // Don't log null client - this is expected if analyzer is disabled
   }
   
   if (!client->connected()) {
@@ -2092,7 +2163,7 @@ void MQTTBridge::publishToAnalyzerClient(PsychicMqttClient* client, const char* 
     if (should_log) {
       MQTT_DEBUG_PRINTLN("PsychicMqttClient not connected - skipping publish to topic: %s", topic);
     }
-    return;
+    return false;
   }
   
   // Reset log timer when connected
@@ -2104,8 +2175,16 @@ void MQTTBridge::publishToAnalyzerClient(PsychicMqttClient* client, const char* 
   
   int result = client->publish(topic, 1, retained, payload, strlen(payload));
   if (result <= 0) {
-    MQTT_DEBUG_PRINTLN("Analyzer publish failed (result=%d)", result);
+    static unsigned long last_analyzer_publish_fail_log = 0;
+    unsigned long now = millis();
+    if (now - last_analyzer_publish_fail_log > 60000) { // Log every minute max
+      MQTT_DEBUG_PRINTLN("Analyzer publish failed (result=%d)", result);
+      last_analyzer_publish_fail_log = now;
+    }
+    return false;
   }
+  
+  return true;  // Publish succeeded
 }
 
 void MQTTBridge::publishStatusToAnalyzerClient(PsychicMqttClient* client, const char* server_name) {
