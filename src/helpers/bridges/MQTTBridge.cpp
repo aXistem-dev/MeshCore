@@ -236,7 +236,7 @@ void MQTTBridge::begin() {
   #define MQTT_TASK_CORE 0
   #endif
   #ifndef MQTT_TASK_STACK_SIZE
-  #define MQTT_TASK_STACK_SIZE 8192
+  #define MQTT_TASK_STACK_SIZE 8192  // Reverted: 6144 was too small, caused boot loop after NTP sync
   #endif
   #ifndef MQTT_TASK_PRIORITY
   #define MQTT_TASK_PRIORITY 1
@@ -469,9 +469,7 @@ void MQTTBridge::mqttTaskLoop() {
     if (!wifi_status_initialized) {
       last_wifi_status = current_wifi_status;
       wifi_status_initialized = true;
-      if (current_wifi_status == WL_CONNECTED && !_ntp_synced) {
-        syncTimeWithNTP();
-      }
+      // Don't sync here - let the pending flag or transition handler do it
     }
     
     // Check WiFi status every 10 seconds for faster detection
@@ -500,9 +498,8 @@ void MQTTBridge::mqttTaskLoop() {
           WiFi.setTxPower(WIFI_POWER_11dBm);
           #endif
           
-          if (!_ntp_synced) {
-            syncTimeWithNTP();
-          }
+          // NTP sync will be handled by _ntp_sync_pending flag from WiFi event handler
+          // This prevents multiple simultaneous syncs
         }
         last_wifi_status = WL_CONNECTED;
       } else {
@@ -1473,9 +1470,14 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
   
   // Size-adaptive buffer: estimate needed size based on packet size
   // Most packets are <100 bytes (need ~400 byte JSON), large packets need ~1500 bytes
+  // Optimized: Use 1024 bytes for most packets, only 2048 for very large packets (>200 bytes)
   int packet_size = packet->getRawLength();
-  size_t json_buffer_size = (packet_size > 150) ? 2048 : 1024;
-  char json_buffer[2048]; // Always allocate max, but pass actual needed size to builders
+  size_t json_buffer_size = (packet_size > 200) ? 2048 : 1024;
+  // Allocate buffer based on actual needed size to save stack memory
+  char json_buffer[1024]; // Default to 1024, will handle large packets separately if needed
+  char json_buffer_large[2048]; // Only used for large packets
+  char* active_buffer = (packet_size > 200) ? json_buffer_large : json_buffer;
+  size_t active_buffer_size = (packet_size > 200) ? 2048 : 1024;
   char origin_id[65];
   
   // Use actual device ID
@@ -1484,24 +1486,23 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
   
   // Build packet message using raw radio data if provided
   // Use size-adaptive buffer size based on actual packet size
-  size_t buffer_size = (packet->getRawLength() > 150) ? 2048 : 1024;
   int len;
   if (raw_data && raw_len > 0) {
     // Use provided raw radio data
     len = MQTTMessageBuilder::buildPacketJSONFromRaw(
       raw_data, raw_len, packet, is_tx, _origin, origin_id, 
-      snr, rssi, _timezone, json_buffer, buffer_size
+      snr, rssi, _timezone, active_buffer, active_buffer_size
     );
   } else if (_last_raw_len > 0 && (millis() - _last_raw_timestamp) < 1000) {
     // Fallback to global raw radio data (within 1 second of packet)
     len = MQTTMessageBuilder::buildPacketJSONFromRaw(
       _last_raw_data, _last_raw_len, packet, is_tx, _origin, origin_id, 
-      _last_snr, _last_rssi, _timezone, json_buffer, buffer_size
+      _last_snr, _last_rssi, _timezone, active_buffer, active_buffer_size
     );
   } else {
     // Fallback to reconstructed packet data
     len = MQTTMessageBuilder::buildPacketJSON(
-      packet, is_tx, _origin, origin_id, _timezone, json_buffer, buffer_size
+      packet, is_tx, _origin, origin_id, _timezone, active_buffer, active_buffer_size
     );
   }
   
@@ -1509,7 +1510,7 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
     // Build topic string once and reuse (optimization: avoid redundant snprintf calls)
     char topic[128];
     snprintf(topic, sizeof(topic), "meshcore/%s/%s/packets", _iata, _device_id);
-    size_t json_len = strlen(json_buffer); // Cache length to avoid multiple strlen() calls
+    size_t json_len = strlen(active_buffer); // Cache length to avoid multiple strlen() calls
     
     // Publish to custom brokers (only if config is valid)
     // Double-check client is actually connected before attempting publish
@@ -1534,7 +1535,7 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
           
           // Publish with timeout check - don't block if connection is slow
           // This prevents blocking the main loop when MQTT broker is slow or unresponsive
-          int publish_result = _mqtt_client->publish(topic, 1, false, json_buffer, json_len); // qos=1, retained=false
+          int publish_result = _mqtt_client->publish(topic, 1, false, active_buffer, json_len); // qos=1, retained=false
           if (publish_result <= 0) {
             // Publish failed - connection may be stale, force disconnect and mark for reconnect
             static unsigned long last_publish_fail_log = 0;
@@ -1599,8 +1600,12 @@ void MQTTBridge::publishRaw(mesh::Packet* packet) {
     return;
   }
   
-  // Large packets need larger buffer for raw JSON too
-  char json_buffer[2048];
+  // Size-adaptive buffer for raw JSON: use 1024 for most packets, 2048 for large ones
+  int packet_size = packet->getRawLength();
+  char json_buffer[1024]; // Default to 1024, will handle large packets separately if needed
+  char json_buffer_large[2048]; // Only used for large packets
+  char* active_buffer = (packet_size > 200) ? json_buffer_large : json_buffer;
+  size_t active_buffer_size = (packet_size > 200) ? 2048 : 1024;
   char origin_id[65];
   
   // Use actual device ID
@@ -1609,14 +1614,14 @@ void MQTTBridge::publishRaw(mesh::Packet* packet) {
   
   // Build raw message
   int len = MQTTMessageBuilder::buildRawJSON(
-    packet, _origin, origin_id, _timezone, json_buffer, sizeof(json_buffer)
+    packet, _origin, origin_id, _timezone, active_buffer, active_buffer_size
   );
   
   if (len > 0) {
     // Build topic string once and reuse (optimization: avoid redundant snprintf calls)
     char topic[128];
     snprintf(topic, sizeof(topic), "meshcore/%s/%s/raw", _iata, _device_id);
-    size_t json_len = strlen(json_buffer); // Cache length to avoid multiple strlen() calls
+    size_t json_len = strlen(active_buffer); // Cache length to avoid multiple strlen() calls
     
     // Publish to custom brokers (only if config is valid)
     // Double-check client is actually connected before attempting publish
@@ -1640,7 +1645,7 @@ void MQTTBridge::publishRaw(mesh::Packet* packet) {
           }
           
           // Publish with timeout check - don't block if connection is slow
-          int publish_result = _mqtt_client->publish(topic, 1, false, json_buffer, json_len); // qos=1, retained=false
+          int publish_result = _mqtt_client->publish(topic, 1, false, active_buffer, json_len); // qos=1, retained=false
           if (publish_result <= 0) {
             // Publish failed - connection may be stale, force disconnect and mark for reconnect
             static unsigned long last_raw_publish_fail_log = 0;
@@ -1668,10 +1673,10 @@ void MQTTBridge::publishRaw(mesh::Packet* packet) {
     #ifdef ESP32
     size_t max_alloc = ESP.getMaxAllocHeap();
     if (max_alloc >= 60000) {  // Only publish to analyzer servers if memory is OK
-      publishToAnalyzerServers(topic, json_buffer, false);
+      publishToAnalyzerServers(topic, active_buffer, false);
     }
     #else
-    publishToAnalyzerServers(topic, json_buffer, false);
+    publishToAnalyzerServers(topic, active_buffer, false);
     #endif
   }
 }
@@ -2571,6 +2576,21 @@ void MQTTBridge::syncTimeWithNTP() {
     return;
   }
   
+  // Prevent multiple simultaneous NTP syncs
+  // Check if we're already synced and sync was recent (within last 5 seconds)
+  unsigned long now = millis();
+  if (_ntp_synced && (now - _last_ntp_sync) < 5000) {
+    // Already synced recently, skip
+    return;
+  }
+  
+  // Set flag to prevent concurrent syncs
+  static bool sync_in_progress = false;
+  if (sync_in_progress) {
+    return;  // Another sync is already in progress
+  }
+  sync_in_progress = true;
+  
   MQTT_DEBUG_PRINTLN("Syncing time with NTP...");
   
   // Test DNS resolution before attempting NTP sync
@@ -2602,6 +2622,7 @@ void MQTTBridge::syncTimeWithNTP() {
     bool was_ntp_synced = _ntp_synced;
     _ntp_synced = true;
     _last_ntp_sync = millis();
+    sync_in_progress = false;  // Clear sync flag
     
     MQTT_DEBUG_PRINTLN("Time synced: %lu", epochTime);
     
@@ -2641,6 +2662,8 @@ void MQTTBridge::syncTimeWithNTP() {
       }
     }
     
+    sync_in_progress = false;  // Clear sync flag on failure too
+    
     // Set timezone from string (with DST support) - only if changed
     static char last_timezone[64] = "";
     if (strcmp(_prefs->timezone_string, last_timezone) != 0) {
@@ -2677,6 +2700,7 @@ void MQTTBridge::syncTimeWithNTP() {
     (void)local_timeinfo;
   } else {
     MQTT_DEBUG_PRINTLN("NTP sync failed");
+    sync_in_progress = false;  // Clear sync flag on failure
   }
   
   _ntp_client.end();
@@ -2815,12 +2839,14 @@ void MQTTBridge::getClientVersion(char* buffer, size_t buffer_size) const {
 void MQTTBridge::optimizeMqttClientConfig(PsychicMqttClient* client, bool is_analyzer_client) {
   if (!client) return;
   
-  // Buffer size selection:
-  // - Analyzer clients: Need 1024 bytes for CONNECT message with 768-byte JWT tokens
-  //   (CONNECT message: ~10 bytes overhead + 70 bytes username + 768 bytes password = ~850+ bytes)
-  // - Main client: Can use 768 bytes (smaller than default 1024, but safe for regular publishes)
-  //   Most JSON messages are <500 bytes, but we need headroom for CONNECT message too
-  int buffer_size = is_analyzer_client ? 1024 : 768;
+  // Buffer size selection (optimized for memory):
+  // - Analyzer clients: Need 896 bytes for CONNECT message with 768-byte JWT tokens
+  //   (CONNECT message: ~10 bytes overhead + 70 bytes username + 768 bytes password = ~850 bytes)
+  //   Reduced from 1024 to 896 (128 bytes saved) - still safe with ~46 bytes headroom
+  // - Main client: Can use 640 bytes (smaller than default 768, but safe for regular publishes)
+  //   Most JSON messages are <500 bytes, CONNECT messages are smaller without JWT tokens
+  //   Reduced from 768 to 640 (128 bytes saved) - still safe with ~140 bytes headroom
+  int buffer_size = is_analyzer_client ? 896 : 640;
   
   client->setBufferSize(buffer_size);
   
