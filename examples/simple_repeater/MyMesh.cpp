@@ -260,7 +260,7 @@ int MyMesh::handleRequest(ClientInfo *sender, uint32_t sender_timestamp, uint8_t
     stats.n_direct_dups = ((SimpleMeshTables *)getTables())->getNumDirectDups();
     stats.n_flood_dups = ((SimpleMeshTables *)getTables())->getNumFloodDups();
     stats.total_rx_air_time_secs = getReceiveAirTime() / 1000;
-
+    stats.n_recv_errors = radio_driver.getPacketsRecvErrors();
     memcpy(&reply_data[4], &stats, sizeof(stats));
 
     return 4 + sizeof(stats); //  reply_len
@@ -788,7 +788,7 @@ void MyMesh::onControlDataRecv(mesh::Packet* packet) {
 MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondClock &ms, mesh::RNG &rng,
                mesh::RTCClock &rtc, mesh::MeshTables &tables)
     : mesh::Mesh(radio, ms, rng, rtc, *new StaticPoolPacketManager(32), tables),
-      _cli(board, rtc, sensors, &_prefs, this), telemetry(MAX_PACKET_PAYLOAD - 4), region_map(key_store), temp_map(key_store),
+      _cli(board, rtc, sensors, acl, &_prefs, this), telemetry(MAX_PACKET_PAYLOAD - 4), region_map(key_store), temp_map(key_store),
       discover_limiter(4, 120),  // max 4 every 2 minutes
       anon_limiter(4, 180)   // max 4 every 3 minutes
 #if defined(WITH_RS232_BRIDGE)
@@ -884,7 +884,7 @@ void MyMesh::begin(FILESYSTEM *fs) {
   StrHelper::strncpy(_prefs.mqtt_origin, _prefs.node_name, sizeof(_prefs.mqtt_origin));
   MESH_DEBUG_PRINTLN("MQTT origin set to device name: %s", _prefs.mqtt_origin);
 
-  acl.load(_fs);
+  acl.load(_fs, self_id);
   // TODO: key_store.begin();
   region_map.load(_fs);
 
@@ -951,10 +951,14 @@ bool MyMesh::formatFileSystem() {
 #endif
 }
 
-void MyMesh::sendSelfAdvertisement(int delay_millis) {
+void MyMesh::sendSelfAdvertisement(int delay_millis, bool flood) {
   mesh::Packet *pkt = createSelfAdvert();
   if (pkt) {
-    sendFlood(pkt, delay_millis);
+    if (flood) {
+      sendFlood(pkt, delay_millis);
+    } else {
+      sendZeroHop(pkt, delay_millis);
+    }
   } else {
     MESH_DEBUG_PRINTLN("ERROR: unable to create advertisement packet!");
   }
@@ -1065,7 +1069,6 @@ void MyMesh::formatPacketStatsReply(char *reply) {
 }
 
 void MyMesh::saveIdentity(const mesh::LocalIdentity &new_id) {
-  self_id = new_id;
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
   IdentityStore store(*_fs, "");
 #elif defined(ESP32)
@@ -1075,7 +1078,7 @@ void MyMesh::saveIdentity(const mesh::LocalIdentity &new_id) {
 #else
 #error "need to define saveIdentity()"
 #endif
-  store.save("_main", self_id);
+  store.save("_main", new_id);
 }
 
 void MyMesh::clearStats() {
@@ -1166,8 +1169,8 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
 
     const char* parts[4];
     int n = mesh::Utils::parseTextParts(command, parts, 4, ' ');
-    if (n == 1 && sender_timestamp == 0) {
-      region_map.exportTo(Serial);
+    if (n == 1) {
+      region_map.exportTo(reply, 160);
     } else if (n >= 2 && strcmp(parts[1], "load") == 0) {
       temp_map.resetFrom(region_map);   // rebuild regions in a temp instance
       memset(load_stack, 0, sizeof(load_stack));
@@ -1239,6 +1242,25 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
         }
       } else {
         strcpy(reply, "Err - not found");
+      }
+    } else if (n >= 3 && strcmp(parts[1], "list") == 0) {
+      uint8_t mask = 0;
+      bool invert = false;
+      
+      if (strcmp(parts[2], "allowed") == 0) {
+        mask = REGION_DENY_FLOOD;
+        invert = false;  // list regions that DON'T have DENY flag
+      } else if (strcmp(parts[2], "denied") == 0) {
+        mask = REGION_DENY_FLOOD;
+        invert = true;   // list regions that DO have DENY flag
+      } else {
+        strcpy(reply, "Err - use 'allowed' or 'denied'");
+        return;
+      }
+      
+      int len = region_map.exportNamesTo(reply, 160, mask, invert);
+      if (len == 0) {
+        strcpy(reply, "-none-");
       }
     } else {
       strcpy(reply, "Err - ??");

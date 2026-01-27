@@ -608,7 +608,7 @@ void MyMesh::onAckRecv(mesh::Packet *packet, uint32_t ack_crc) {
 MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondClock &ms, mesh::RNG &rng,
                mesh::RTCClock &rtc, mesh::MeshTables &tables)
     : mesh::Mesh(radio, ms, rng, rtc, *new StaticPoolPacketManager(32), tables),
-      _cli(board, rtc, sensors, &_prefs, this), telemetry(MAX_PACKET_PAYLOAD - 4)
+      _cli(board, rtc, sensors, acl, &_prefs, this), telemetry(MAX_PACKET_PAYLOAD - 4)
 #ifdef WITH_MQTT_BRIDGE
       , bridge(&_prefs, _mgr, &rtc, &self_id)
 #endif
@@ -690,7 +690,7 @@ void MyMesh::begin(FILESYSTEM *fs) {
   // load persisted prefs
   _cli.loadPrefs(_fs);
 
-  acl.load(_fs);
+  acl.load(_fs, self_id);
 
   radio_set_params(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_set_tx_power(_prefs.tx_power_dbm);
@@ -763,10 +763,14 @@ bool MyMesh::formatFileSystem() {
 #endif
 }
 
-void MyMesh::sendSelfAdvertisement(int delay_millis) {
+void MyMesh::sendSelfAdvertisement(int delay_millis, bool flood) {
   mesh::Packet *pkt = createSelfAdvert();
   if (pkt) {
-    sendFlood(pkt, delay_millis);
+    if (flood) {
+      sendFlood(pkt, delay_millis);
+    } else {
+      sendZeroHop(pkt, delay_millis);
+    }
   } else {
     MESH_DEBUG_PRINTLN("ERROR: unable to create advertisement packet!");
   }
@@ -808,7 +812,6 @@ void MyMesh::setTxPower(uint8_t power_dbm) {
 }
 
 void MyMesh::saveIdentity(const mesh::LocalIdentity &new_id) {
-  self_id = new_id;
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
   IdentityStore store(*_fs, "");
 #elif defined(ESP32)
@@ -818,7 +821,7 @@ void MyMesh::saveIdentity(const mesh::LocalIdentity &new_id) {
 #else
 #error "need to define saveIdentity()"
 #endif
-  store.save("_main", self_id);
+  store.save("_main", new_id);
 }
 
 void MyMesh::clearStats() {
