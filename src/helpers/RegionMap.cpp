@@ -7,12 +7,12 @@
 class BufStream : public Stream {
 public:
   BufStream(char *buf, size_t max)
-    : _buf(buf), _max(max), _pos(0) {
-    if (_max > 0) _buf[0] = 0;
+    : _buf(buf), _max_size(max), _pos(0) {
+    if (_max_size > 0) _buf[0] = 0;
   }
 
   size_t write(uint8_t c) override {
-    if (_pos + 1 >= _max) return 0;
+    if (_pos + 1 >= _max_size) return 0;
     _buf[_pos++] = c;
     _buf[_pos] = 0;
     return 1;
@@ -36,7 +36,7 @@ public:
 
 private:
   char *_buf;
-  size_t _max;
+  size_t _max_size;
   size_t _pos;
 };
 
