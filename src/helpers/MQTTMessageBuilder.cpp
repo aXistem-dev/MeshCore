@@ -21,7 +21,8 @@ int MQTTMessageBuilder::buildStatusMessage(
   int queue_len,
   int noise_floor,
   int tx_air_secs,
-  int rx_air_secs
+  int rx_air_secs,
+  int recv_errors
 ) {
   // Use StaticJsonDocument to avoid heap fragmentation (fixed-size stack allocation)
   StaticJsonDocument<768> doc;  // Increased size to accommodate stats
@@ -38,7 +39,7 @@ int MQTTMessageBuilder::buildStatusMessage(
   
   // Add stats object if any stats are provided
   if (battery_mv >= 0 || uptime_secs >= 0 || errors >= 0 || queue_len >= 0 || 
-      noise_floor > -999 || tx_air_secs >= 0 || rx_air_secs >= 0) {
+      noise_floor > -999 || tx_air_secs >= 0 || rx_air_secs >= 0 || recv_errors >= 0) {
     JsonObject stats = root.createNestedObject("stats");
     
     if (battery_mv >= 0) {
@@ -61,6 +62,9 @@ int MQTTMessageBuilder::buildStatusMessage(
     }
     if (rx_air_secs >= 0) {
       stats["rx_air_secs"] = rx_air_secs;
+    }
+    if (recv_errors >= 0) {
+      stats["recv_errors"] = recv_errors;
     }
   }
   

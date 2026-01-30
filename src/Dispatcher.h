@@ -76,6 +76,11 @@ public:
 
   virtual float getLastRSSI() const { return 0; }
   virtual float getLastSNR() const { return 0; }
+
+  /**
+   * \returns  number of receive errors (e.g. CRC failures) since last reset; 0 if not tracked.
+  */
+  virtual uint32_t getPacketsRecvErrors() const { return 0; }
 };
 
 /**

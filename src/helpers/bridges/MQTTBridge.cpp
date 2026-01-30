@@ -1290,6 +1290,7 @@ bool MQTTBridge::publishStatus() {
   int noise_floor = -999;
   int tx_air_secs = -1;
   int rx_air_secs = -1;
+  int recv_errors = -1;
   
   if (_board) {
     battery_mv = _board->getBattMilliVolts();
@@ -1304,6 +1305,7 @@ bool MQTTBridge::publishStatus() {
   }
   if (_radio) {
     noise_floor = (int16_t)_radio->getNoiseFloor();
+    recv_errors = (int)_radio->getPacketsRecvErrors();
   }
   
   // Build status message with stats
@@ -1324,7 +1326,8 @@ bool MQTTBridge::publishStatus() {
     _queue_count,  // Use current queue length
     noise_floor,
     tx_air_secs,
-    rx_air_secs
+    rx_air_secs,
+    recv_errors
   );
   
           if (len > 0) {
@@ -2247,6 +2250,7 @@ void MQTTBridge::publishStatusToAnalyzerClient(PsychicMqttClient* client, const 
   int noise_floor = -999;
   int tx_air_secs = -1;
   int rx_air_secs = -1;
+  int recv_errors = -1;
   
   if (_board) {
     battery_mv = _board->getBattMilliVolts();
@@ -2261,6 +2265,7 @@ void MQTTBridge::publishStatusToAnalyzerClient(PsychicMqttClient* client, const 
   }
   if (_radio) {
     noise_floor = (int16_t)_radio->getNoiseFloor();
+    recv_errors = (int)_radio->getPacketsRecvErrors();
   }
   
   // Build status message using MQTTMessageBuilder with stats
@@ -2281,7 +2286,8 @@ void MQTTBridge::publishStatusToAnalyzerClient(PsychicMqttClient* client, const 
     _queue_count,  // Use current queue length
     noise_floor,
     tx_air_secs,
-    rx_air_secs
+    rx_air_secs,
+    recv_errors
   );
   
   if (len > 0) {

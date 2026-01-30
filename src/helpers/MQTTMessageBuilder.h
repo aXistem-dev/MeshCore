@@ -37,6 +37,7 @@ public:
    * @param noise_floor Noise floor in dBm (optional, -999 to omit)
    * @param tx_air_secs TX air time in seconds (optional, -1 to omit)
    * @param rx_air_secs RX air time in seconds (optional, -1 to omit)
+   * @param recv_errors Radio receive/CRC errors (optional, -1 to omit)
    * @return Length of JSON string, or 0 on error
    */
   static int buildStatusMessage(
@@ -56,7 +57,8 @@ public:
     int queue_len = -1,
     int noise_floor = -999,
     int tx_air_secs = -1,
-    int rx_air_secs = -1
+    int rx_air_secs = -1,
+    int recv_errors = -1
   );
 
   /**
