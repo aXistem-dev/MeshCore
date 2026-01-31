@@ -6,7 +6,7 @@ permissions:
 on:
   push:
     branches:
-      - dev-settingsscreen
+      - dev-slunsecore
   workflow_dispatch:
     inputs:
       version:
@@ -49,31 +49,52 @@ jobs:
           echo "$ALL_VERSIONS"
           echo ""
 
-          HIGHEST_VERSION=$(echo "$ALL_VERSIONS" | tail -1)
-          echo "Highest version found: $HIGHEST_VERSION"
+          HIGHEST_TAG_VERSION=$(echo "$ALL_VERSIONS" | tail -1)
+          echo "Highest tag version found: $HIGHEST_TAG_VERSION"
+          echo ""
+
+          # Extract version from source code (from MyMesh.h files)
+          echo "Extracting version from source code..."
+          SOURCE_VERSIONS=$(grep -r 'FIRMWARE_VERSION.*"v[0-9]' examples/ 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/^v//' | sort -V | uniq | tail -1 || echo "")
+
+          if [ -n "$SOURCE_VERSIONS" ]; then
+            echo "Source code version found: $SOURCE_VERSIONS"
+          else
+            echo "No version found in source code"
+          fi
           echo ""
 
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            # For manual dispatch, use input if provided, otherwise use tag-based or default
             INPUT_VERSION="${{ github.event.inputs.version }}"
             if [ -n "$INPUT_VERSION" ] && [ "$INPUT_VERSION" != "" ]; then
               VERSION="$INPUT_VERSION"
               echo "Using manual input version: $VERSION"
-            elif [ -n "$HIGHEST_VERSION" ]; then
-              VERSION="$HIGHEST_VERSION"
+            elif [ -n "$SOURCE_VERSIONS" ]; then
+              VERSION="$SOURCE_VERSIONS"
+              echo "Using version from source code: $VERSION"
+            elif [ -n "$HIGHEST_TAG_VERSION" ]; then
+              VERSION="$HIGHEST_TAG_VERSION"
               echo "Using highest version from tags: $VERSION"
             else
               VERSION="1.11.0"
-              echo "No input or tags found, using default: $VERSION"
+              echo "No input, source, or tags found, using default: $VERSION"
             fi
           else
-            # For push events, use tag-based or default
-            if [ -z "$HIGHEST_VERSION" ]; then
-              VERSION="1.11.0"
-              echo "No version tags found, using default: $VERSION"
+            if [ -n "$SOURCE_VERSIONS" ]; then
+              if [ -n "$HIGHEST_TAG_VERSION" ]; then
+                HIGHER_VERSION=$(printf '%s\n' "$SOURCE_VERSIONS" "$HIGHEST_TAG_VERSION" | sort -V | tail -1)
+                VERSION="$HIGHER_VERSION"
+                echo "Comparing source ($SOURCE_VERSIONS) vs tag ($HIGHEST_TAG_VERSION), using: $VERSION"
+              else
+                VERSION="$SOURCE_VERSIONS"
+                echo "Using version from source code: $VERSION"
+              fi
+            elif [ -n "$HIGHEST_TAG_VERSION" ]; then
+              VERSION="$HIGHEST_TAG_VERSION"
+              echo "Using highest version from tags: $VERSION"
             else
-              VERSION="$HIGHEST_VERSION"
-              echo "Found highest version from tags: $VERSION"
+              VERSION="1.11.0"
+              echo "No source or tags found, using default: $VERSION"
             fi
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
@@ -98,9 +119,21 @@ jobs:
           COMMIT_HASH="${{ steps.commit.outputs.commit_hash }}"
           VERSION="${{ steps.version.outputs.version }}"
 
+          echo "Using version: ${VERSION}"
+          echo "Using commit hash: ${COMMIT_HASH}"
+          echo "FIRMWARE_VERSION env var: ${FIRMWARE_VERSION}"
+
+          # Create a wrapper function that calls build.sh but prevents it from cleaning out/
+          build_firmware_safe() {
+            sed '/^rm -rf out$/,/^mkdir -p out$/d' build.sh > /tmp/build-safe.sh
+            chmod +x /tmp/build-safe.sh
+            /tmp/build-safe.sh "$@"
+            rm -f /tmp/build-safe.sh
+          }
+
           # Function to rename firmware files
           # build.sh creates files with pattern: target-version-commithash.ext
-          # We want: newname-version-dev-settingsscreen-commithash.ext
+          # We want: newname-version-dev-slunsecore-commithash.ext
           rename_firmware() {
             local TARGET=$1
             local NEW_NAME=$2
@@ -108,63 +141,45 @@ jobs:
             
             echo ""
             echo "=== Renaming firmware: ${TARGET}${EXT} ==="
-            echo "Looking for files matching: out/${TARGET}*${COMMIT_HASH}${EXT}"
-            
-            # First, list all files in out/ to see what we have
+            echo "Looking for files matching: out/${TARGET}*${EXT}"
+
             echo "All files in out/ before rename:"
             ls -1 out/ 2>/dev/null | grep -i "${TARGET}" || echo "  (none found)"
-            
+
             local FOUND=false
-            
-            # Try multiple patterns to find the file
-            # Pattern 1: exact match with commit hash
-            for file in out/${TARGET}*${COMMIT_HASH}${EXT}; do
-              if [ -f "$file" ] && [[ "$file" != *"dev-settingsscreen"* ]]; then
-                NEW_FILE="out/${NEW_NAME}-${VERSION}-dev-settingsscreen-${COMMIT_HASH}${EXT}"
+
+            for file in out/${TARGET}*${EXT}; do
+              if [ -f "$file" ] && [[ "$file" != *"dev-slunsecore"* ]]; then
+                FILENAME=$(basename "$file")
+                ACTUAL_COMMIT=$(echo "$FILENAME" | grep -oE '[a-f0-9]{7}' | tail -1 || echo "${COMMIT_HASH}")
+                NEW_FILE="out/${NEW_NAME}-${VERSION}-dev-slunsecore-${ACTUAL_COMMIT}${EXT}"
                 mv "$file" "$NEW_FILE"
-                echo "✓ Renamed: $(basename $file) -> $(basename $NEW_FILE)"
+                echo "✓ Renamed: $FILENAME -> $(basename $NEW_FILE)"
                 FOUND=true
                 break
               fi
             done
-            
-            # Pattern 2: try case-insensitive match
+
             if [ "$FOUND" = false ]; then
-              for file in out/*${COMMIT_HASH}${EXT}; do
-                if [ -f "$file" ] && [[ "$file" != *"dev-settingsscreen"* ]]; then
-                  # Check if filename contains TARGET (case-insensitive)
-                  if echo "$(basename $file)" | grep -qi "${TARGET}"; then
-                    NEW_FILE="out/${NEW_NAME}-${VERSION}-dev-settingsscreen-${COMMIT_HASH}${EXT}"
-                    mv "$file" "$NEW_FILE"
-                    echo "✓ Renamed (case-insensitive): $(basename $file) -> $(basename $NEW_FILE)"
-                    FOUND=true
-                    break
-                  fi
-                fi
-              done
-            fi
-            
-            # Pattern 3: find any file with the extension that hasn't been renamed yet
-            if [ "$FOUND" = false ]; then
-              # Try to find any file matching the pattern (case-insensitive, flexible)
+              echo "Trying case-insensitive match..."
               for file in out/*${EXT}; do
-                if [ -f "$file" ] && [[ "$file" != *"dev-settingsscreen"* ]]; then
+                if [ -f "$file" ] && [[ "$file" != *"dev-slunsecore"* ]]; then
                   FILENAME=$(basename "$file")
-                  # Check if filename contains TARGET (case-insensitive) and COMMIT_HASH
-                  if echo "$FILENAME" | grep -qi "${TARGET}" && echo "$FILENAME" | grep -q "${COMMIT_HASH}"; then
-                    NEW_FILE="out/${NEW_NAME}-${VERSION}-dev-settingsscreen-${COMMIT_HASH}${EXT}"
+                  if echo "$FILENAME" | grep -qi "${TARGET}"; then
+                    ACTUAL_COMMIT=$(echo "$FILENAME" | grep -oE '[a-f0-9]{7}' | tail -1 || echo "${COMMIT_HASH}")
+                    NEW_FILE="out/${NEW_NAME}-${VERSION}-dev-slunsecore-${ACTUAL_COMMIT}${EXT}"
                     mv "$file" "$NEW_FILE"
-                    echo "✓ Renamed (flexible match): $FILENAME -> $(basename $NEW_FILE)"
+                    echo "✓ Renamed (case-insensitive): $FILENAME -> $(basename $NEW_FILE)"
                     FOUND=true
                     break
                   fi
                 fi
               done
             fi
-            
+
             if [ "$FOUND" = false ]; then
               echo "✗ WARNING: Could not find file to rename for ${TARGET}${EXT}"
-              echo "  Looking for files matching: out/${TARGET}*${COMMIT_HASH}${EXT}"
+              echo "  Looking for files matching: out/${TARGET}*${EXT}"
               echo "  Files in out/ matching ${TARGET}:"
               ls -1 out/*${TARGET}* 2>/dev/null | head -5 || echo "    (none found)"
               echo "  All files in out/:"
@@ -177,7 +192,7 @@ jobs:
           echo "=========================================="
           echo "Building RAK_4631_companion_radio_ble..."
           echo "=========================================="
-          ./build.sh build-firmware RAK_4631_companion_radio_ble
+          build_firmware_safe build-firmware RAK_4631_companion_radio_ble
           echo "Files created:"
           ls -lh out/RAK_4631_companion_radio_ble* 2>/dev/null || echo "  (none)"
           rename_firmware "RAK_4631_companion_radio_ble" "RAK_4631_companion_radio_ble" ".zip"
@@ -188,7 +203,7 @@ jobs:
           echo "=========================================="
           echo "Building RAK_4631_companion_radio_usb..."
           echo "=========================================="
-          ./build.sh build-firmware RAK_4631_companion_radio_usb
+          build_firmware_safe build-firmware RAK_4631_companion_radio_usb
           echo "Files created:"
           ls -lh out/RAK_4631_companion_radio_usb* 2>/dev/null || echo "  (none)"
           rename_firmware "RAK_4631_companion_radio_usb" "RAK_4631_companion_radio_usb" ".zip"
@@ -199,7 +214,7 @@ jobs:
           echo "=========================================="
           echo "Building Heltec_v3_companion_radio_ble..."
           echo "=========================================="
-          ./build.sh build-firmware Heltec_v3_companion_radio_ble
+          build_firmware_safe build-firmware Heltec_v3_companion_radio_ble
           echo "Files created:"
           ls -lh out/Heltec_v3_companion_radio_ble* 2>/dev/null || echo "  (none)"
           rename_firmware "Heltec_v3_companion_radio_ble" "heltec_v3_companion_radio_ble" ".bin"
@@ -210,7 +225,7 @@ jobs:
           echo "=========================================="
           echo "Building Heltec_v3_companion_radio_usb..."
           echo "=========================================="
-          ./build.sh build-firmware Heltec_v3_companion_radio_usb
+          build_firmware_safe build-firmware Heltec_v3_companion_radio_usb
           echo "Files created:"
           ls -lh out/Heltec_v3_companion_radio_usb* 2>/dev/null || echo "  (none)"
           rename_firmware "Heltec_v3_companion_radio_usb" "heltec_v3_companion_radio_usb" ".bin"
@@ -221,7 +236,7 @@ jobs:
           echo "=========================================="
           echo "Building heltec_v4_companion_radio_ble..."
           echo "=========================================="
-          ./build.sh build-firmware heltec_v4_companion_radio_ble
+          build_firmware_safe build-firmware heltec_v4_companion_radio_ble
           echo "Files created:"
           ls -lh out/heltec_v4_companion_radio_ble* 2>/dev/null || echo "  (none)"
           rename_firmware "heltec_v4_companion_radio_ble" "heltec_v4_companion_radio_ble" ".bin"
@@ -232,7 +247,7 @@ jobs:
           echo "=========================================="
           echo "Building heltec_v4_companion_radio_usb..."
           echo "=========================================="
-          ./build.sh build-firmware heltec_v4_companion_radio_usb
+          build_firmware_safe build-firmware heltec_v4_companion_radio_usb
           echo "Files created:"
           ls -lh out/heltec_v4_companion_radio_usb* 2>/dev/null || echo "  (none)"
           rename_firmware "heltec_v4_companion_radio_usb" "heltec_v4_companion_radio_usb" ".bin"
@@ -242,18 +257,18 @@ jobs:
           echo ""
           echo "=== Verification: Expected files ==="
           EXPECTED_FILES=(
-            "RAK_4631_companion_radio_ble-${VERSION}-dev-settingsscreen-${COMMIT_HASH}.zip"
-            "RAK_4631_companion_radio_ble-${VERSION}-dev-settingsscreen-${COMMIT_HASH}.uf2"
-            "RAK_4631_companion_radio_usb-${VERSION}-dev-settingsscreen-${COMMIT_HASH}.zip"
-            "RAK_4631_companion_radio_usb-${VERSION}-dev-settingsscreen-${COMMIT_HASH}.uf2"
-            "heltec_v3_companion_radio_ble-${VERSION}-dev-settingsscreen-${COMMIT_HASH}.bin"
-            "heltec_v3_companion_radio_ble-${VERSION}-dev-settingsscreen-${COMMIT_HASH}-merged.bin"
-            "heltec_v3_companion_radio_usb-${VERSION}-dev-settingsscreen-${COMMIT_HASH}.bin"
-            "heltec_v3_companion_radio_usb-${VERSION}-dev-settingsscreen-${COMMIT_HASH}-merged.bin"
-            "heltec_v4_companion_radio_ble-${VERSION}-dev-settingsscreen-${COMMIT_HASH}.bin"
-            "heltec_v4_companion_radio_ble-${VERSION}-dev-settingsscreen-${COMMIT_HASH}-merged.bin"
-            "heltec_v4_companion_radio_usb-${VERSION}-dev-settingsscreen-${COMMIT_HASH}.bin"
-            "heltec_v4_companion_radio_usb-${VERSION}-dev-settingsscreen-${COMMIT_HASH}-merged.bin"
+            "RAK_4631_companion_radio_ble-${VERSION}-dev-slunsecore-${COMMIT_HASH}.zip"
+            "RAK_4631_companion_radio_ble-${VERSION}-dev-slunsecore-${COMMIT_HASH}.uf2"
+            "RAK_4631_companion_radio_usb-${VERSION}-dev-slunsecore-${COMMIT_HASH}.zip"
+            "RAK_4631_companion_radio_usb-${VERSION}-dev-slunsecore-${COMMIT_HASH}.uf2"
+            "heltec_v3_companion_radio_ble-${VERSION}-dev-slunsecore-${COMMIT_HASH}.bin"
+            "heltec_v3_companion_radio_ble-${VERSION}-dev-slunsecore-${COMMIT_HASH}-merged.bin"
+            "heltec_v3_companion_radio_usb-${VERSION}-dev-slunsecore-${COMMIT_HASH}.bin"
+            "heltec_v3_companion_radio_usb-${VERSION}-dev-slunsecore-${COMMIT_HASH}-merged.bin"
+            "heltec_v4_companion_radio_ble-${VERSION}-dev-slunsecore-${COMMIT_HASH}.bin"
+            "heltec_v4_companion_radio_ble-${VERSION}-dev-slunsecore-${COMMIT_HASH}-merged.bin"
+            "heltec_v4_companion_radio_usb-${VERSION}-dev-slunsecore-${COMMIT_HASH}.bin"
+            "heltec_v4_companion_radio_usb-${VERSION}-dev-slunsecore-${COMMIT_HASH}-merged.bin"
           )
 
           MISSING_FILES=()
@@ -319,14 +334,14 @@ jobs:
         if: steps.check_build.outputs.file_count > 0
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "dev-settingsscreen-${{ steps.commit.outputs.commit_hash }}"
-          name: "Settings Screen Build - ${{ steps.version.outputs.version }}"
+          tag_name: "dev-slunsecore-${{ steps.commit.outputs.commit_hash }}"
+          name: "SlunseCore Settings Screen Build - ${{ steps.version.outputs.version }}"
           body: |
-            ## Settings Screen Firmware Build
+            ## SlunseCore Settings Screen Firmware Build
 
             **Version:** ${{ steps.version.outputs.version }}
             **Commit:** ${{ steps.commit.outputs.commit_hash }}
-            **Branch:** dev-settingsscreen
+            **Branch:** dev-slunsecore
 
             ### Built Firmwares
 
@@ -339,13 +354,14 @@ jobs:
 
             ### Features
 
+            - SlunseCore boot screen and branding
             - Screen Always On setting
             - Screen Brightness control (Dim, Low, Normal, Bright)
             - Share position in adverts toggle
             - Screensaver with clock
             - Timezone selection
 
-            **Note:** This is an automated build from the dev-settingsscreen branch.
+            **Note:** This is an automated build from the dev-slunsecore branch.
           draft: false
           prerelease: true
           files: out/*

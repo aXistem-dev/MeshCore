@@ -6,7 +6,6 @@
 #define SSD1306_NO_SPLASH
 #include <Adafruit_SSD1306.h>
 #include <Fonts/FreeMono18pt7b.h>
-#include <Fonts/FreeMono24pt7b.h>
 
 #ifndef PIN_OLED_RESET
   #define PIN_OLED_RESET        21 // Reset pin # (or -1 if sharing Arduino reset pin)

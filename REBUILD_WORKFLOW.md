@@ -1,239 +1,130 @@
-# Rebuild Workflow for dev-settingsscreen
+# Rebuild Workflow for dev-slunsecore
 
-This document explains how to maintain and build your custom firmware with the settings screen changes on top of the latest upstream main branch.
+This document explains how to maintain and build SlunseCore firmware (settings screen, boot screen, timezone, screensaver) on top of the latest upstream main branch.
 
 ## Overview
 
 The workflow ensures that:
-1. Your `dev-settingsscreen` branch always builds on top of the latest `main` from upstream
-2. Upstream changes are automatically synced to `origin/main`
-3. Your feature branch is rebased onto the updated main
-4. Firmware is built with your custom changes
+1. Your `dev-slunsecore` branch builds on top of the latest `main` from upstream
+2. Upstream changes are synced to `origin/main`
+3. Your SlunseCore customizations are merged into `dev-slunsecore`
+4. GitHub Actions builds settings screen firmwares on push to `dev-slunsecore`
+
+## Simple 2-Step Process
+
+```bash
+# Step 1: Update dev-slunsecore with latest upstream
+./update-dev-slunsecore.sh   # or ./rebuild-with-settings.sh
+
+# Step 2: Push to trigger GitHub Actions build
+git push origin dev-slunsecore
+```
+
+GitHub Actions will detect version from source, build all settings screen targets, and create a release.
 
 ## Scripts
 
-### 1. `rebuild-with-settings.sh` (Manual/Interactive)
+### 1. `update-dev-slunsecore.sh` (Primary)
 
-Full-featured script for manual rebuilds with detailed output.
+**Usage:** `./update-dev-slunsecore.sh`
 
-**Usage:**
-```bash
-cd MeshCore
-./rebuild-with-settings.sh
-```
+Fetches upstream, syncs main, merges main into dev-slunsecore. After running, push manually to trigger build.
 
-**What it does:**
-1. Checks if upstream/main has new commits
-2. Updates origin/main from upstream
-3. Rebases dev-settingsscreen onto main
-4. Builds firmware for RAK_4631_companion_radio_ble
-5. Optionally pushes the rebased branch
+### 2. `rebuild-with-settings.sh` (Manual)
 
-**Configuration:**
-Edit the script to change:
-- `BUILD_TARGET`: Change the firmware target to build
-- `AUTO_PUSH`: Set to `true` to automatically push after rebase
+**Usage:** `./rebuild-with-settings.sh` or `AUTO_PUSH=true ./rebuild-with-settings.sh`
 
-### 2. `auto-rebuild-settings.sh` (Automated)
+Syncs upstream/main to origin/main, merges main into dev-slunsecore, optionally pushes.
 
-Lightweight script for automation (cron, CI/CD, etc.)
+### 3. `auto-rebuild-settings.sh` (Automation)
 
-**Usage:**
-```bash
-# Basic usage
-./auto-rebuild-settings.sh
+**Usage:** `./auto-rebuild-settings.sh` or `./auto-rebuild-settings.sh --push`
 
-# With auto-push enabled
-./auto-rebuild-settings.sh --push
+Calls update-dev-slunsecore.sh if present, otherwise fetches and merges; optionally pushes.
 
-# With custom build target
-./auto-rebuild-settings.sh --build-target Heltec_v3_companion_radio_ble
-```
-
-**What it does:**
-1. Fetches from upstream
-2. Updates main if needed
-3. Rebases feature branch if needed
-4. Builds firmware
-5. Exits with appropriate status codes
-
-## Workflow Options
-
-### Option 1: Manual Rebuild (Recommended for testing)
-
-Run `rebuild-with-settings.sh` whenever you want to:
-- Test your changes against the latest upstream
-- Build firmware with latest upstream + your changes
-- Update your branch before pushing
-
-```bash
-cd MeshCore
-./rebuild-with-settings.sh
-```
-
-### Option 2: Automated Rebuild (Cron/CI)
-
-Set up a cron job or CI pipeline to automatically rebuild when upstream updates.
-
-**Cron example (daily at 2 AM):**
-```bash
-0 2 * * * cd /path/to/MeshCore && ./auto-rebuild-settings.sh --push >> /var/log/meshcore-rebuild.log 2>&1
-```
-
-**GitHub Actions example:**
-```yaml
-name: Auto Rebuild Settings Screen
-on:
-  schedule:
-    - cron: '0 2 * * *'  # Daily at 2 AM
-  workflow_dispatch:  # Manual trigger
-
-jobs:
-  rebuild:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Setup PlatformIO
-        uses: platformio/setup-platformio@v1
-      - name: Rebuild with settings
-        run: ./auto-rebuild-settings.sh --push
-```
-
-### Option 3: Integration with sync-all-repos.sh
-
-Modify your `sync-all-repos.sh` to automatically rebuild after syncing MeshCore:
-
-```bash
-# At the end of sync_repo function, after syncing MeshCore:
-if [ "$repo_dir" = "MeshCore" ] && [ "$was_updated" = true ]; then
-    echo -e "  ${YELLOW}Triggering rebuild with settings screen...${NC}"
-    cd "$repo_path"
-    ./auto-rebuild-settings.sh --push
-fi
-```
-
-## Git Workflow
-
-### Branch Structure
+## Branch Strategy
 
 ```
 upstream/main  ──────────────┐
                               │
 origin/main    ───────────────┼───┐
                               │   │
-                              │   └───> dev-settingsscreen (your changes)
-                              │
+                              │   └───> dev-slunsecore (SlunseCore: settings + boot screen)
+                              │           ↓ (push triggers)
+                              │       GitHub Actions (auto-builds)
                               └───> (other branches)
 ```
 
-### Rebase vs Merge
+- **`main`**: Synced with upstream (no customizations)
+- **`dev-slunsecore`**: Working branch (latest main + SlunseCore features: settings menu, boot screen, timezone, screensaver)
 
-This workflow uses **rebase** to keep a clean, linear history:
-- ✅ Clean history (no merge commits)
-- ✅ Easier to see your changes
-- ✅ Easier to maintain
+## Workflow Options
 
-**If conflicts occur:**
-1. Resolve conflicts manually
+### Option 1: Manual Update
+
+```bash
+./update-dev-slunsecore.sh   # or rebuild-with-settings.sh
+git log --oneline -5
+git push origin dev-slunsecore
+```
+
+### Option 2: Automated (Cron)
+
+```bash
+0 2 * * * cd /path/to/MeshCore && ./auto-rebuild-settings.sh --push >> /var/log/meshcore-update.log 2>&1
+```
+
+### Option 3: Integration with sync-all-repos.sh
+
+See `sync-integration-example.sh` for a snippet that updates dev-slunsecore after syncing MeshCore.
+
+## Merge Conflicts
+
+If merge fails:
+1. Resolve conflicts in the affected files
 2. `git add <resolved-files>`
-3. `git rebase --continue`
-4. Re-run the build script
+3. `git commit -m "Resolve conflicts with upstream"`
+4. `git push origin dev-slunsecore`
 
-## Configuration
+## What Gets Built
 
-### Change Build Target
+When you push to `dev-slunsecore`, GitHub Actions (build-settingsscreen-releases.yml):
 
-Edit the `BUILD_TARGET` variable in either script:
-```bash
-BUILD_TARGET="RAK_4631_companion_radio_ble"  # Change this
-```
+1. **Detects version** from source code
+2. **Builds 6 firmware targets** (RAK_4631 BLE/USB, Heltec v3/v4 BLE/USB)
+3. **Creates release** with files named `device-version-dev-slunsecore-commithash.ext`
 
-### Enable Auto-Push
+## Version Detection
 
-In `rebuild-with-settings.sh`:
-```bash
-AUTO_PUSH=true  # Change from false
-```
-
-Or use `--push` flag with `auto-rebuild-settings.sh`:
-```bash
-./auto-rebuild-settings.sh --push
-```
-
-### Multiple Build Targets
-
-Modify the build step to build multiple targets:
-```bash
-# In rebuild-with-settings.sh, replace the build step with:
-for target in "RAK_4631_companion_radio_ble" "Heltec_v3_companion_radio_ble"; do
-    echo -e "\n${YELLOW}Building $target...${NC}"
-    ./build.sh build-firmware "$target"
-done
-```
+- Extracts version from source (`FIRMWARE_VERSION` in examples)
+- Compares with git tags; uses the higher version
 
 ## Troubleshooting
 
-### Rebase Conflicts
+### Merge Conflicts
 
-If rebase fails with conflicts:
-1. Resolve conflicts in the affected files
-2. `git add <resolved-files>`
-3. `git rebase --continue`
-4. Re-run the build script
+Resolve, `git add`, `git commit`, then `git push origin dev-slunsecore`.
 
 ### Build Failures
 
-If build fails:
-1. Check PlatformIO environment configuration
-2. Verify all dependencies are installed
-3. Check for compilation errors in the output
-4. Ensure you're on the correct branch
+Check GitHub Actions: https://github.com/axistem-dev/MeshCore/actions
 
 ### Upstream Sync Issues
 
-If upstream sync fails:
-1. Check network connectivity
-2. Verify upstream remote is configured: `git remote -v`
-3. Check upstream repository access
+If upstream sync fails: check network, verify `git remote -v` has upstream, check repository access.
 
 ## Best Practices
 
-1. **Always test locally** before pushing
-2. **Review changes** after rebase to ensure nothing broke
-3. **Keep commits clean** - use `git rebase -i` to clean up if needed
-4. **Tag releases** - tag your built firmware versions
-5. **Document changes** - keep notes on what your branch adds/modifies
+1. **Review changes** after merge before pushing
+2. **Test locally** if possible; GitHub Actions will build on push
+3. **Keep dev-slunsecore** as the single branch for SlunseCore features
+4. **Document changes** – note what your branch adds/modifies
 
-## Example Workflow
+## Quick Reference
 
-```bash
-# 1. Daily sync (runs automatically via cron)
-./sync-all-repos.sh
-
-# 2. Manual rebuild when needed
-cd MeshCore
-./rebuild-with-settings.sh
-
-# 3. Test the firmware
-# Flash to device and test
-
-# 4. If everything works, push (if AUTO_PUSH=false)
-git push origin dev-settingsscreen --force-with-lease
-```
-
-## Integration with Existing Sync Script
-
-To integrate with your existing `sync-all-repos.sh`, add this at the end of the `sync_repo` function:
-
-```bash
-# After syncing MeshCore, rebuild with settings screen
-if [ "$repo_dir" = "MeshCore" ] && [ "$was_updated" = true ]; then
-    echo -e "\n${BLUE}🔄 Triggering rebuild with settings screen...${NC}"
-    if [ -f "$repo_path/auto-rebuild-settings.sh" ]; then
-        cd "$repo_path"
-        ./auto-rebuild-settings.sh --push
-        cd "$BASE_DIR"
-    fi
-fi
-```
-
+| Action | Command |
+|--------|---------|
+| Update dev-slunsecore | `./update-dev-slunsecore.sh` or `./rebuild-with-settings.sh` |
+| Push to build | `git push origin dev-slunsecore` |
+| Check builds | https://github.com/axistem-dev/MeshCore/actions |
+| Sync upstream | `git fetch upstream && git checkout main && git merge upstream/main && git push origin main` |
