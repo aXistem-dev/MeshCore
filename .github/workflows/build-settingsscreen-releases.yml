@@ -1,0 +1,352 @@
+name: Build Settings Screen Releases
+
+permissions:
+  contents: write
+
+on:
+  push:
+    branches:
+      - dev-settingsscreen
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Firmware version (e.g., 1.11.0)"
+        required: false
+        default: "1.11.0"
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch full history for commit hash
+
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-environment
+
+      - name: Get Version
+        id: version
+        run: |
+          # Fetch all tags to ensure we have the latest
+          echo "Fetching all tags..."
+          git fetch --tags --force 2>/dev/null || true
+
+          # Debug: List all tags
+          echo "All tags:"
+          git tag | head -20
+          echo ""
+
+          # Extract version from all tags and find the highest version
+          # Tags are in format: companion-v1.11.0, repeater-v1.11.0, room-server-v1.11.0, etc.
+          # Also handle tags like: v1.11.0, 1.11.0, etc.
+          # We want to find the highest version number across all tags
+          echo "Extracting versions from tags..."
+          ALL_VERSIONS=$(git tag | grep -oE '(v?[0-9]+\.[0-9]+\.[0-9]+)' | sed 's/^v//' | sort -V | uniq)
+          echo "Found versions:"
+          echo "$ALL_VERSIONS"
+          echo ""
+
+          HIGHEST_VERSION=$(echo "$ALL_VERSIONS" | tail -1)
+          echo "Highest version found: $HIGHEST_VERSION"
+          echo ""
+
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            # For manual dispatch, use input if provided, otherwise use tag-based or default
+            INPUT_VERSION="${{ github.event.inputs.version }}"
+            if [ -n "$INPUT_VERSION" ] && [ "$INPUT_VERSION" != "" ]; then
+              VERSION="$INPUT_VERSION"
+              echo "Using manual input version: $VERSION"
+            elif [ -n "$HIGHEST_VERSION" ]; then
+              VERSION="$HIGHEST_VERSION"
+              echo "Using highest version from tags: $VERSION"
+            else
+              VERSION="1.11.0"
+              echo "No input or tags found, using default: $VERSION"
+            fi
+          else
+            # For push events, use tag-based or default
+            if [ -z "$HIGHEST_VERSION" ]; then
+              VERSION="1.11.0"
+              echo "No version tags found, using default: $VERSION"
+            else
+              VERSION="$HIGHEST_VERSION"
+              echo "Found highest version from tags: $VERSION"
+            fi
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Final version: $VERSION"
+
+      - name: Get Commit Hash
+        id: commit
+        run: |
+          COMMIT_HASH=$(git rev-parse --short HEAD)
+          echo "commit_hash=$COMMIT_HASH" >> $GITHUB_OUTPUT
+          echo "Commit hash: $COMMIT_HASH"
+
+      - name: Clean Output Directory
+        run: |
+          rm -rf out
+          mkdir -p out
+
+      - name: Build All Firmwares
+        env:
+          FIRMWARE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          COMMIT_HASH="${{ steps.commit.outputs.commit_hash }}"
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Function to rename firmware files
+          # build.sh creates files with pattern: target-version-commithash.ext
+          # We want: newname-version-dev-settingsscreen-commithash.ext
+          rename_firmware() {
+            local TARGET=$1
+            local NEW_NAME=$2
+            local EXT=$3
+            
+            echo ""
+            echo "=== Renaming firmware: ${TARGET}${EXT} ==="
+            echo "Looking for files matching: out/${TARGET}*${COMMIT_HASH}${EXT}"
+            
+            # First, list all files in out/ to see what we have
+            echo "All files in out/ before rename:"
+            ls -1 out/ 2>/dev/null | grep -i "${TARGET}" || echo "  (none found)"
+            
+            local FOUND=false
+            
+            # Try multiple patterns to find the file
+            # Pattern 1: exact match with commit hash
+            for file in out/${TARGET}*${COMMIT_HASH}${EXT}; do
+              if [ -f "$file" ] && [[ "$file" != *"dev-settingsscreen"* ]]; then
+                NEW_FILE="out/${NEW_NAME}-${VERSION}-dev-settingsscreen-${COMMIT_HASH}${EXT}"
+                mv "$file" "$NEW_FILE"
+                echo "✓ Renamed: $(basename $file) -> $(basename $NEW_FILE)"
+                FOUND=true
+                break
+              fi
+            done
+            
+            # Pattern 2: try case-insensitive match
+            if [ "$FOUND" = false ]; then
+              for file in out/*${COMMIT_HASH}${EXT}; do
+                if [ -f "$file" ] && [[ "$file" != *"dev-settingsscreen"* ]]; then
+                  # Check if filename contains TARGET (case-insensitive)
+                  if echo "$(basename $file)" | grep -qi "${TARGET}"; then
+                    NEW_FILE="out/${NEW_NAME}-${VERSION}-dev-settingsscreen-${COMMIT_HASH}${EXT}"
+                    mv "$file" "$NEW_FILE"
+                    echo "✓ Renamed (case-insensitive): $(basename $file) -> $(basename $NEW_FILE)"
+                    FOUND=true
+                    break
+                  fi
+                fi
+              done
+            fi
+            
+            # Pattern 3: find any file with the extension that hasn't been renamed yet
+            if [ "$FOUND" = false ]; then
+              # Try to find any file matching the pattern (case-insensitive, flexible)
+              for file in out/*${EXT}; do
+                if [ -f "$file" ] && [[ "$file" != *"dev-settingsscreen"* ]]; then
+                  FILENAME=$(basename "$file")
+                  # Check if filename contains TARGET (case-insensitive) and COMMIT_HASH
+                  if echo "$FILENAME" | grep -qi "${TARGET}" && echo "$FILENAME" | grep -q "${COMMIT_HASH}"; then
+                    NEW_FILE="out/${NEW_NAME}-${VERSION}-dev-settingsscreen-${COMMIT_HASH}${EXT}"
+                    mv "$file" "$NEW_FILE"
+                    echo "✓ Renamed (flexible match): $FILENAME -> $(basename $NEW_FILE)"
+                    FOUND=true
+                    break
+                  fi
+                fi
+              done
+            fi
+            
+            if [ "$FOUND" = false ]; then
+              echo "✗ WARNING: Could not find file to rename for ${TARGET}${EXT}"
+              echo "  Looking for files matching: out/${TARGET}*${COMMIT_HASH}${EXT}"
+              echo "  Files in out/ matching ${TARGET}:"
+              ls -1 out/*${TARGET}* 2>/dev/null | head -5 || echo "    (none found)"
+              echo "  All files in out/:"
+              ls -1 out/ 2>/dev/null | head -10 || echo "    (directory empty)"
+            fi
+          }
+
+          # Build RAK_4631_companion_radio_ble (nRF52 - creates .zip and .uf2)
+          echo ""
+          echo "=========================================="
+          echo "Building RAK_4631_companion_radio_ble..."
+          echo "=========================================="
+          ./build.sh build-firmware RAK_4631_companion_radio_ble
+          echo "Files created:"
+          ls -lh out/RAK_4631_companion_radio_ble* 2>/dev/null || echo "  (none)"
+          rename_firmware "RAK_4631_companion_radio_ble" "RAK_4631_companion_radio_ble" ".zip"
+          rename_firmware "RAK_4631_companion_radio_ble" "RAK_4631_companion_radio_ble" ".uf2"
+
+          # Build RAK_4631_companion_radio_usb (nRF52 - creates .zip and .uf2)
+          echo ""
+          echo "=========================================="
+          echo "Building RAK_4631_companion_radio_usb..."
+          echo "=========================================="
+          ./build.sh build-firmware RAK_4631_companion_radio_usb
+          echo "Files created:"
+          ls -lh out/RAK_4631_companion_radio_usb* 2>/dev/null || echo "  (none)"
+          rename_firmware "RAK_4631_companion_radio_usb" "RAK_4631_companion_radio_usb" ".zip"
+          rename_firmware "RAK_4631_companion_radio_usb" "RAK_4631_companion_radio_usb" ".uf2"
+
+          # Build Heltec_v3_companion_radio_ble (ESP32 - creates .bin and -merged.bin)
+          echo ""
+          echo "=========================================="
+          echo "Building Heltec_v3_companion_radio_ble..."
+          echo "=========================================="
+          ./build.sh build-firmware Heltec_v3_companion_radio_ble
+          echo "Files created:"
+          ls -lh out/Heltec_v3_companion_radio_ble* 2>/dev/null || echo "  (none)"
+          rename_firmware "Heltec_v3_companion_radio_ble" "heltec_v3_companion_radio_ble" ".bin"
+          rename_firmware "Heltec_v3_companion_radio_ble" "heltec_v3_companion_radio_ble" "-merged.bin"
+
+          # Build Heltec_v3_companion_radio_usb (ESP32 - creates .bin and -merged.bin)
+          echo ""
+          echo "=========================================="
+          echo "Building Heltec_v3_companion_radio_usb..."
+          echo "=========================================="
+          ./build.sh build-firmware Heltec_v3_companion_radio_usb
+          echo "Files created:"
+          ls -lh out/Heltec_v3_companion_radio_usb* 2>/dev/null || echo "  (none)"
+          rename_firmware "Heltec_v3_companion_radio_usb" "heltec_v3_companion_radio_usb" ".bin"
+          rename_firmware "Heltec_v3_companion_radio_usb" "heltec_v3_companion_radio_usb" "-merged.bin"
+
+          # Build heltec_v4_companion_radio_ble (ESP32 - creates .bin and -merged.bin)
+          echo ""
+          echo "=========================================="
+          echo "Building heltec_v4_companion_radio_ble..."
+          echo "=========================================="
+          ./build.sh build-firmware heltec_v4_companion_radio_ble
+          echo "Files created:"
+          ls -lh out/heltec_v4_companion_radio_ble* 2>/dev/null || echo "  (none)"
+          rename_firmware "heltec_v4_companion_radio_ble" "heltec_v4_companion_radio_ble" ".bin"
+          rename_firmware "heltec_v4_companion_radio_ble" "heltec_v4_companion_radio_ble" "-merged.bin"
+
+          # Build heltec_v4_companion_radio_usb (ESP32 - creates .bin and -merged.bin)
+          echo ""
+          echo "=========================================="
+          echo "Building heltec_v4_companion_radio_usb..."
+          echo "=========================================="
+          ./build.sh build-firmware heltec_v4_companion_radio_usb
+          echo "Files created:"
+          ls -lh out/heltec_v4_companion_radio_usb* 2>/dev/null || echo "  (none)"
+          rename_firmware "heltec_v4_companion_radio_usb" "heltec_v4_companion_radio_usb" ".bin"
+          rename_firmware "heltec_v4_companion_radio_usb" "heltec_v4_companion_radio_usb" "-merged.bin"
+
+          # Verify all expected files are present
+          echo ""
+          echo "=== Verification: Expected files ==="
+          EXPECTED_FILES=(
+            "RAK_4631_companion_radio_ble-${VERSION}-dev-settingsscreen-${COMMIT_HASH}.zip"
+            "RAK_4631_companion_radio_ble-${VERSION}-dev-settingsscreen-${COMMIT_HASH}.uf2"
+            "RAK_4631_companion_radio_usb-${VERSION}-dev-settingsscreen-${COMMIT_HASH}.zip"
+            "RAK_4631_companion_radio_usb-${VERSION}-dev-settingsscreen-${COMMIT_HASH}.uf2"
+            "heltec_v3_companion_radio_ble-${VERSION}-dev-settingsscreen-${COMMIT_HASH}.bin"
+            "heltec_v3_companion_radio_ble-${VERSION}-dev-settingsscreen-${COMMIT_HASH}-merged.bin"
+            "heltec_v3_companion_radio_usb-${VERSION}-dev-settingsscreen-${COMMIT_HASH}.bin"
+            "heltec_v3_companion_radio_usb-${VERSION}-dev-settingsscreen-${COMMIT_HASH}-merged.bin"
+            "heltec_v4_companion_radio_ble-${VERSION}-dev-settingsscreen-${COMMIT_HASH}.bin"
+            "heltec_v4_companion_radio_ble-${VERSION}-dev-settingsscreen-${COMMIT_HASH}-merged.bin"
+            "heltec_v4_companion_radio_usb-${VERSION}-dev-settingsscreen-${COMMIT_HASH}.bin"
+            "heltec_v4_companion_radio_usb-${VERSION}-dev-settingsscreen-${COMMIT_HASH}-merged.bin"
+          )
+
+          MISSING_FILES=()
+          for expected in "${EXPECTED_FILES[@]}"; do
+            if [ ! -f "out/${expected}" ]; then
+              MISSING_FILES+=("$expected")
+              echo "MISSING: $expected"
+            else
+              echo "FOUND: $expected"
+            fi
+          done
+
+          if [ ${#MISSING_FILES[@]} -gt 0 ]; then
+            echo ""
+            echo "WARNING: ${#MISSING_FILES[@]} expected file(s) are missing!"
+            echo "This may indicate a build or rename issue."
+          else
+            echo ""
+            echo "SUCCESS: All expected files are present!"
+          fi
+
+      - name: List Built Files
+        run: |
+          echo "Built firmware files:"
+          ls -lh out/ || echo "No files found in out/"
+          echo ""
+          echo "All files in out/ directory:"
+          find out -type f -name "*" | sort
+
+      - name: Check Build Success
+        id: check_build
+        run: |
+          FILE_COUNT=$(find out -type f \( -name "*.zip" -o -name "*.bin" -o -name "*.uf2" \) | wc -l || echo "0")
+          echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
+          if [ "$FILE_COUNT" -eq 0 ]; then
+            echo "ERROR: No firmware files were built!"
+            exit 1
+          fi
+          echo "Successfully built $FILE_COUNT firmware file(s)"
+          echo ""
+          echo "Files that will be attached to release:"
+          find out -type f \( -name "*.zip" -o -name "*.bin" -o -name "*.uf2" \) | sort
+
+      - name: Upload Workflow Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: settingsscreen-firmwares
+          path: out/*
+          retention-days: 30
+
+      - name: List Files Before Release
+        run: |
+          echo "=== Files in out/ directory before release ==="
+          find out -type f | sort
+          echo ""
+          echo "=== File count by type ==="
+          echo "ZIP files: $(find out -name '*.zip' | wc -l)"
+          echo "BIN files: $(find out -name '*.bin' | wc -l)"
+          echo "UF2 files: $(find out -name '*.uf2' | wc -l)"
+          echo "Total: $(find out -type f | wc -l)"
+
+      - name: Create or Update Release
+        if: steps.check_build.outputs.file_count > 0
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "dev-settingsscreen-${{ steps.commit.outputs.commit_hash }}"
+          name: "Settings Screen Build - ${{ steps.version.outputs.version }}"
+          body: |
+            ## Settings Screen Firmware Build
+
+            **Version:** ${{ steps.version.outputs.version }}
+            **Commit:** ${{ steps.commit.outputs.commit_hash }}
+            **Branch:** dev-settingsscreen
+
+            ### Built Firmwares
+
+            - RAK_4631_companion_radio_ble
+            - RAK_4631_companion_radio_usb
+            - Heltec_v3_companion_radio_ble
+            - Heltec_v3_companion_radio_usb
+            - Heltec_v4_companion_radio_ble
+            - Heltec_v4_companion_radio_usb
+
+            ### Features
+
+            - Screen Always On setting
+            - Screen Brightness control (Dim, Low, Normal, Bright)
+            - Share position in adverts toggle
+            - Screensaver with clock
+            - Timezone selection
+
+            **Note:** This is an automated build from the dev-settingsscreen branch.
+          draft: false
+          prerelease: true
+          files: out/*
+          fail_on_unmatched_files: false

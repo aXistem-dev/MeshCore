@@ -1190,6 +1190,7 @@ public:
     display.setColor(DisplayDriver::LIGHT);
     
     // Use FreeMonoBold18pt7b font for clock (bold monospace is perfect for time display)
+    extern const GFXfont FreeMonoBold18pt7b;
     display.setCustomFont((void*)&FreeMonoBold18pt7b);
     
     // Get current time and format as HH:MM
