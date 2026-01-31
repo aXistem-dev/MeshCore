@@ -2,6 +2,9 @@
 #include <helpers/TxtDataHelpers.h>
 #include "../MyMesh.h"
 #include "target.h"
+#ifdef WIFI_SSID
+  #include <WiFi.h>
+#endif
 #include <RTClib.h>
 #include <Fonts/FreeMonoBold18pt7b.h>
 
@@ -133,44 +136,32 @@ class HomeScreen : public UIScreen {
 
 
   void renderBatteryIndicator(DisplayDriver& display, uint16_t batteryMilliVolts) {
-    // Check if charging (USB connected) - voltage >= 4.4V
-    const int chargingThreshold = 4400; // 4.4V in millivolts
-    bool isCharging = batteryMilliVolts >= chargingThreshold;
-    
-    char battStr[6];
-    int textWidth;
-    int textX;
-    int textY = 0;
-    
-    if (isCharging) {
-      // Show charging indicator
-      strcpy(battStr, "CHG");
-      textWidth = display.getTextWidth(battStr);
-      textX = display.width() - textWidth - 2; // Position near top-right corner
-      display.setColor(DisplayDriver::GREEN);
-    } else {
-      // Convert millivolts to percentage
-      const int minMilliVolts = 3000; // Minimum voltage (e.g., 3.0V)
-      const int maxMilliVolts = 4200; // Maximum voltage (e.g., 4.2V)
-      int batteryPercentage = ((batteryMilliVolts - minMilliVolts) * 100) / (maxMilliVolts - minMilliVolts);
-      if (batteryPercentage < 0) batteryPercentage = 0; // Clamp to 0%
-      if (batteryPercentage > 100) batteryPercentage = 100; // Clamp to 100%
+#ifndef BATT_MIN_MILLIVOLTS
+  #define BATT_MIN_MILLIVOLTS 3000
+#endif
+#ifndef BATT_MAX_MILLIVOLTS
+  #define BATT_MAX_MILLIVOLTS 4200
+#endif
+    const int minMilliVolts = BATT_MIN_MILLIVOLTS;
+    const int maxMilliVolts = BATT_MAX_MILLIVOLTS;
+    int batteryPercentage = ((batteryMilliVolts - minMilliVolts) * 100) / (maxMilliVolts - minMilliVolts);
+    if (batteryPercentage < 0) batteryPercentage = 0;
+    if (batteryPercentage > 100) batteryPercentage = 100;
 
-      // Display battery percentage as text in top-right corner
-      sprintf(battStr, "%d%%", batteryPercentage);
-      textWidth = display.getTextWidth(battStr);
-      textX = display.width() - textWidth - 2; // Position near top-right corner
-      
-      // Choose color based on battery level
-      if (batteryPercentage > 50) {
-        display.setColor(DisplayDriver::GREEN);
-      } else if (batteryPercentage > 20) {
-        display.setColor(DisplayDriver::YELLOW);
-      } else {
-        display.setColor(DisplayDriver::RED);
-      }
+    char battStr[6];
+    sprintf(battStr, "%d%%", batteryPercentage);
+    int textWidth = display.getTextWidth(battStr);
+    int textX = display.width() - textWidth - 2;
+    int textY = 0;
+
+    if (batteryPercentage > 50) {
+      display.setColor(DisplayDriver::GREEN);
+    } else if (batteryPercentage > 20) {
+      display.setColor(DisplayDriver::YELLOW);
+    } else {
+      display.setColor(DisplayDriver::RED);
     }
-    
+
     display.setCursor(textX, textY);
     display.print(battStr);
   }
@@ -180,7 +171,7 @@ class HomeScreen : public UIScreen {
   bool sensors_scroll = false;
   int sensors_scroll_offset = 0;
   int next_sensors_refresh = 0;
-
+  
   void refresh_sensors() {
     if (millis() > next_sensors_refresh) {
       sensors_lpp.reset();
@@ -246,10 +237,17 @@ public:
       sprintf(tmp, "MSG: %d", _task->getMsgCount());
       display.drawTextCentered(display.width() / 2, 20, tmp);
 
+      #ifdef WIFI_SSID
+        IPAddress ip = WiFi.localIP();
+        snprintf(tmp, sizeof(tmp), "IP: %d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+        display.setTextSize(1);
+        display.drawTextCentered(display.width() / 2, 54, tmp); 
+      #endif
       if (_task->hasConnection()) {
         display.setColor(DisplayDriver::GREEN);
         display.setTextSize(1);
         display.drawTextCentered(display.width() / 2, 43, "< Connected >");
+
       } else if (the_mesh.getBLEPin() != 0) { // BT pin
         display.setColor(DisplayDriver::RED);
         display.setTextSize(2);
@@ -1246,6 +1244,19 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #endif
 
   _node_prefs = node_prefs;
+
+#if ENV_INCLUDE_GPS == 1
+  // Apply GPS preferences from stored prefs
+  if (_sensors != NULL && _node_prefs != NULL) {
+    _sensors->setSettingValue("gps", _node_prefs->gps_enabled ? "1" : "0");
+    if (_node_prefs->gps_interval > 0) {
+      char interval_str[12];  // Max: 24 hours = 86400 seconds (5 digits + null)
+      sprintf(interval_str, "%u", _node_prefs->gps_interval);
+      _sensors->setSettingValue("gps_interval", interval_str);
+    }
+  }
+#endif
+
   if (_display != NULL) {
     _display->turnOn();
     // Apply saved brightness setting
@@ -1323,18 +1334,20 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
 
   if (_display != NULL) {
     if (!_display->isOn()) {
-      _display->turnOn();
-      // Apply saved brightness setting when display turns on
-      if (_node_prefs) {
-        // Validate and fix corrupted values (defensive programming)
-        if (_node_prefs->screen_brightness > 3) {
-          _node_prefs->screen_brightness = 2;  // Default to Normal
+      if (!hasConnection()) {
+        _display->turnOn();
+        if (_node_prefs) {
+          if (_node_prefs->screen_brightness > 3) {
+            _node_prefs->screen_brightness = 2;
+          }
+          _display->setBrightness(_node_prefs->screen_brightness);
         }
-        _display->setBrightness(_node_prefs->screen_brightness);
       }
     }
-    _auto_off = millis() + AUTO_OFF_MILLIS;  // extend the auto-off timer
-    _next_refresh = 100;  // trigger refresh
+    if (_display->isOn()) {
+      _auto_off = millis() + AUTO_OFF_MILLIS;
+      _next_refresh = 100;
+    }
   }
 }
 
@@ -1618,13 +1631,15 @@ void UITask::toggleGPS() {
       if (strcmp(_sensors->getSettingName(i), "gps") == 0) {
         if (strcmp(_sensors->getSettingValue(i), "1") == 0) {
           _sensors->setSettingValue("gps", "0");
+          _node_prefs->gps_enabled = 0;
           notify(UIEventType::ack);
-          showAlert("GPS: Disabled", 800);
         } else {
           _sensors->setSettingValue("gps", "1");
+          _node_prefs->gps_enabled = 1;
           notify(UIEventType::ack);
-          showAlert("GPS: Enabled", 800);
         }
+        the_mesh.savePrefs();
+        showAlert(_node_prefs->gps_enabled ? "GPS: Enabled" : "GPS: Disabled", 800);
         _next_refresh = 0;
         break;
       }
@@ -1638,13 +1653,12 @@ void UITask::toggleBuzzer() {
     if (buzzer.isQuiet()) {
       buzzer.quiet(false);
       notify(UIEventType::ack);
-      showAlert("Buzzer: ON", 800);
     } else {
       buzzer.quiet(true);
-      showAlert("Buzzer: OFF", 800);
     }
     _node_prefs->buzzer_quiet = buzzer.isQuiet();
     the_mesh.savePrefs();
+    showAlert(buzzer.isQuiet() ? "Buzzer: OFF" : "Buzzer: ON", 800);
     _next_refresh = 0;  // trigger refresh
   #endif
 }

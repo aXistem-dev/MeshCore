@@ -65,6 +65,7 @@ void DataStore::begin() {
 
 #if defined(ESP32)
   #include <SPIFFS.h>
+  #include <nvs_flash.h>
 #elif defined(RP2040_PLATFORM)
   #include <LittleFS.h>
 #elif defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -172,7 +173,9 @@ bool DataStore::formatFileSystem() {
 #elif defined(RP2040_PLATFORM)
   return LittleFS.format();
 #elif defined(ESP32)
-  return ((fs::SPIFFSFS *)_fs)->format();
+  bool fs_success = ((fs::SPIFFSFS *)_fs)->format();
+  esp_err_t nvs_err = nvs_flash_erase(); // no need to reinit, will be done by reboot
+  return fs_success && (nvs_err == ESP_OK);
 #else
   #error "need to implement format()"
 #endif
@@ -194,7 +197,10 @@ void DataStore::loadPrefs(NodePrefs& prefs, double& node_lat, double& node_lon) 
     savePrefs(prefs, node_lat, node_lon);                // save to new filename
     _fs->remove("/node_prefs"); // remove old
   } else {
-    // No preferences file exists - set defaults for new fields
+    // No preferences file exists - set defaults for new fields (dev + SlunseCore)
+    prefs.gps_enabled = 0;
+    prefs.gps_interval = 0;
+    prefs.autoadd_config = 0;
     prefs.screen_always_on = 0;  // default to OFF
     prefs.screen_brightness = 2;  // default to Normal
     prefs.screen_screensaver = 0;  // default to OFF
@@ -228,30 +234,37 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& no
     file.read(pad, 2);                                                                     // 78
     file.read((uint8_t *)&_prefs.ble_pin, sizeof(_prefs.ble_pin));                         // 80
     file.read((uint8_t *)&_prefs.buzzer_quiet, sizeof(_prefs.buzzer_quiet));               // 84
-    // screen_always_on is a new field - read it if available, otherwise default to 0
+    // dev: gps_enabled, gps_interval, autoadd_config
+    if (file.available() >= sizeof(_prefs.gps_enabled) + sizeof(_prefs.gps_interval) + sizeof(_prefs.autoadd_config)) {
+      file.read((uint8_t *)&_prefs.gps_enabled, sizeof(_prefs.gps_enabled));                 // 85
+      file.read((uint8_t *)&_prefs.gps_interval, sizeof(_prefs.gps_interval));               // 86
+      file.read((uint8_t *)&_prefs.autoadd_config, sizeof(_prefs.autoadd_config));           // 87
+    } else {
+      _prefs.gps_enabled = 0;
+      _prefs.gps_interval = 0;
+      _prefs.autoadd_config = 0;
+    }
+    // SlunseCore: screen_always_on, screen_brightness, screen_screensaver, timezone_offset_minutes
     if (file.available() >= sizeof(_prefs.screen_always_on)) {
-      file.read((uint8_t *)&_prefs.screen_always_on, sizeof(_prefs.screen_always_on));      // 85
+      file.read((uint8_t *)&_prefs.screen_always_on, sizeof(_prefs.screen_always_on));
     } else {
-      _prefs.screen_always_on = 0;  // default to off for old preference files
+      _prefs.screen_always_on = 0;
     }
-    // screen_brightness is a new field - read it if available, otherwise default to 2 (Normal)
     if (file.available() >= sizeof(_prefs.screen_brightness)) {
-      file.read((uint8_t *)&_prefs.screen_brightness, sizeof(_prefs.screen_brightness));    // 86
-      if (_prefs.screen_brightness > 3) _prefs.screen_brightness = 2;  // Validate range (0-3)
+      file.read((uint8_t *)&_prefs.screen_brightness, sizeof(_prefs.screen_brightness));
+      if (_prefs.screen_brightness > 3) _prefs.screen_brightness = 2;
     } else {
-      _prefs.screen_brightness = 2;  // default to Normal for old preference files
+      _prefs.screen_brightness = 2;
     }
-    // screen_screensaver is a new field - read it if available, otherwise default to 0 (off)
     if (file.available() >= sizeof(_prefs.screen_screensaver)) {
-      file.read((uint8_t *)&_prefs.screen_screensaver, sizeof(_prefs.screen_screensaver));    // 87
+      file.read((uint8_t *)&_prefs.screen_screensaver, sizeof(_prefs.screen_screensaver));
     } else {
-      _prefs.screen_screensaver = 0;  // default to off for old preference files
+      _prefs.screen_screensaver = 0;
     }
-    // timezone_offset_minutes is a new field - read it if available, otherwise default to 0 (UTC)
     if (file.available() >= sizeof(_prefs.timezone_offset_minutes)) {
-      file.read((uint8_t *)&_prefs.timezone_offset_minutes, sizeof(_prefs.timezone_offset_minutes));    // 88-89
+      file.read((uint8_t *)&_prefs.timezone_offset_minutes, sizeof(_prefs.timezone_offset_minutes));
     } else {
-      _prefs.timezone_offset_minutes = 0;  // default to UTC for old preference files
+      _prefs.timezone_offset_minutes = 0;
     }
 
     file.close();
@@ -285,10 +298,13 @@ void DataStore::savePrefs(const NodePrefs& _prefs, double node_lat, double node_
     file.write(pad, 2);                                                                     // 78
     file.write((uint8_t *)&_prefs.ble_pin, sizeof(_prefs.ble_pin));                         // 80
     file.write((uint8_t *)&_prefs.buzzer_quiet, sizeof(_prefs.buzzer_quiet));               // 84
-    file.write((uint8_t *)&_prefs.screen_always_on, sizeof(_prefs.screen_always_on));        // 85
-    file.write((uint8_t *)&_prefs.screen_brightness, sizeof(_prefs.screen_brightness));       // 86
-    file.write((uint8_t *)&_prefs.screen_screensaver, sizeof(_prefs.screen_screensaver));       // 87
-    file.write((uint8_t *)&_prefs.timezone_offset_minutes, sizeof(_prefs.timezone_offset_minutes));       // 88-89
+    file.write((uint8_t *)&_prefs.gps_enabled, sizeof(_prefs.gps_enabled));                 // 85
+    file.write((uint8_t *)&_prefs.gps_interval, sizeof(_prefs.gps_interval));               // 86
+    file.write((uint8_t *)&_prefs.autoadd_config, sizeof(_prefs.autoadd_config));           // 87
+    file.write((uint8_t *)&_prefs.screen_always_on, sizeof(_prefs.screen_always_on));
+    file.write((uint8_t *)&_prefs.screen_brightness, sizeof(_prefs.screen_brightness));
+    file.write((uint8_t *)&_prefs.screen_screensaver, sizeof(_prefs.screen_screensaver));
+    file.write((uint8_t *)&_prefs.timezone_offset_minutes, sizeof(_prefs.timezone_offset_minutes));
 
     file.close();
   }
