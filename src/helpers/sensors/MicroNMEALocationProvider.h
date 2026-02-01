@@ -49,7 +49,33 @@ class MicroNMEALocationProvider : public LocationProvider {
     long next_check = 0;
     long time_valid = 0;
 
+    #ifdef PIN_USER_LED
+        bool _led_on = false;
+        unsigned long _led_last_toggle = 0;
+    #endif
+
+
 public :
+    #ifdef PIN_USER_LED
+        void ledOn() {
+            digitalWrite(PIN_USER_LED, HIGH);
+            _led_on = true;
+        }
+
+        void ledOff() {
+            digitalWrite(PIN_USER_LED, LOW);
+            _led_on = false;
+        }
+
+        void ledBlink(unsigned long interval_ms) {
+            if (millis() - _led_last_toggle >= interval_ms) {
+                _led_last_toggle = millis();
+                _led_on = !_led_on;
+                digitalWrite(PIN_USER_LED, _led_on ? HIGH : LOW);
+            }
+        }
+    #endif
+
     MicroNMEALocationProvider(Stream& ser, mesh::RTCClock* clock = NULL, int pin_reset = GPS_RESET, int pin_en = GPS_EN,RefCountedDigitalPin* peripher_power=NULL) :
     _gps_serial(&ser), nmea(_nmeaBuffer, sizeof(_nmeaBuffer)), _pin_reset(pin_reset), _pin_en(pin_en), _clock(clock), _peripher_power(peripher_power) {
         if (_pin_reset != -1) {
