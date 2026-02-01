@@ -1,0 +1,95 @@
+# Build all SlunseCore images (companion, room-server, repeater) on push to slunsecore.
+# Creates releases: sc-companion-vX.Y.Z, sc-room-server-vX.Y.Z, sc-repeater-vX.Y.Z
+# Version is read from FIRMWARE_VERSION in examples/companion_radio/MyMesh.h.
+
+name: Build All SlunseCore Releases
+
+permissions:
+  contents: write
+
+on:
+  push:
+    branches:
+      - slunsecore
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Get version from source
+        id: get_version
+        run: |
+          V=$(grep -h 'FIRMWARE_VERSION' examples/companion_radio/MyMesh.h examples/simple_sensor/SensorMesh.h 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          if [ -z "$V" ]; then V="v0.0.0"; fi
+          echo "version=$V" >> $GITHUB_OUTPUT
+          echo "Using version: $V"
+
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-environment
+
+      - name: Clean output directory
+        run: rm -rf out && mkdir -p out
+
+      - name: Build Companion firmwares
+        env:
+          FIRMWARE_VERSION: ${{ steps.get_version.outputs.version }}
+          BUILD_BRANCH: slunsecore
+        run: /usr/bin/env bash build.sh build-companion-firmwares
+
+      - name: Create Release sc-companion
+        id: release_companion
+        uses: softprops/action-gh-release@v2
+        continue-on-error: true
+        with:
+          tag_name: sc-companion-${{ steps.get_version.outputs.version }}
+          name: SlunseCore Companion Firmware ${{ steps.get_version.outputs.version }}
+          body: "Built from branch slunsecore. See latest commits."
+          draft: true
+          files: out/*
+          make_latest: false
+
+      - name: Clean output directory
+        run: rm -rf out && mkdir -p out
+
+      - name: Build Room Server firmwares
+        env:
+          FIRMWARE_VERSION: ${{ steps.get_version.outputs.version }}
+          BUILD_BRANCH: slunsecore
+        run: /usr/bin/env bash build.sh build-room-server-firmwares
+
+      - name: Create Release sc-room-server
+        uses: softprops/action-gh-release@v2
+        continue-on-error: true
+        with:
+          tag_name: sc-room-server-${{ steps.get_version.outputs.version }}
+          name: SlunseCore Room Server Firmware ${{ steps.get_version.outputs.version }}
+          body: "Built from branch slunsecore. See latest commits."
+          draft: true
+          files: out/*
+          make_latest: false
+
+      - name: Clean output directory
+        run: rm -rf out && mkdir -p out
+
+      - name: Build Repeater firmwares
+        env:
+          FIRMWARE_VERSION: ${{ steps.get_version.outputs.version }}
+          BUILD_BRANCH: slunsecore
+        run: /usr/bin/env bash build.sh build-repeater-firmwares
+
+      - name: Create Release sc-repeater
+        uses: softprops/action-gh-release@v2
+        continue-on-error: true
+        with:
+          tag_name: sc-repeater-${{ steps.get_version.outputs.version }}
+          name: SlunseCore Repeater Firmware ${{ steps.get_version.outputs.version }}
+          body: "Built from branch slunsecore. See latest commits."
+          draft: true
+          files: out/*
+          make_latest: false

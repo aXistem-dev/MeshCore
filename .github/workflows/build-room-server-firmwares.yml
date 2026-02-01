@@ -9,11 +9,11 @@ on:
       branch:
         description: "Branch to build from"
         required: true
-        default: "dev-slunsecore"
+        default: "slunsecore"
         type: choice
         options:
-          - dev-slunsecore
           - slunsecore
+          - dev-slunsecore
   push:
     tags:
       - "sc-room-server-*"
