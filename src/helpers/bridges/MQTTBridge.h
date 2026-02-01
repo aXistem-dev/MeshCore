@@ -31,6 +31,23 @@
 #ifdef WITH_MQTT_BRIDGE
 
 /**
+ * ACL callback interface for remote command authorization
+ */
+class MQTTBridgeACLCallbacks {
+public:
+  virtual bool hasACL() = 0;  // Does this variant have ACL support?
+  virtual bool isPublicKeyAdmin(const uint8_t* pubkey, size_t key_len) = 0;
+};
+
+/**
+ * Command execution callback interface
+ */
+class MQTTBridgeCommandExecutor {
+public:
+  virtual void handleCommand(uint32_t sender_timestamp, const char* command, char* reply) = 0;
+};
+
+/**
  * @brief Bridge implementation using MQTT protocol for packet transport
  *
  * This bridge enables mesh packet transport over MQTT, allowing repeaters to
@@ -137,6 +154,12 @@ private:
   // Let's Mesh Analyzer support
   bool _analyzer_us_enabled;
   bool _analyzer_eu_enabled;
+  
+  // Memory pressure degraded mode - temporarily disable one analyzer to save memory
+  bool _degraded_mode;              // Currently in degraded mode
+  bool _degraded_disabled_us;       // True if US was disabled, false if EU was disabled
+  bool _prefs_had_us_enabled;       // User's original US preference (to restore)
+  bool _prefs_had_eu_enabled;       // User's original EU preference (to restore)
   char _auth_token_us[768]; // JWT token for US server authentication (increased for owner/client fields)
   char _auth_token_eu[768]; // JWT token for EU server authentication (increased for owner/client fields)
   char _analyzer_username[70]; // Username in format v1_{UPPERCASE_PUBLIC_KEY}
@@ -198,6 +221,8 @@ private:
   static void mqttTask(void* parameter);
   void mqttTaskLoop();  // Main loop for MQTT task
   void initializeWiFiInTask();  // WiFi initialization moved to task
+  void checkMemoryPressure();    // Check and handle memory-based degraded mode
+  bool shouldPreferUSServer();   // IATA-based heuristic for server selection
   #endif
   void publishPacket(mesh::Packet* packet, bool is_tx, 
                      const uint8_t* raw_data = nullptr, int raw_len = 0, 
@@ -212,6 +237,146 @@ private:
   bool isMQTTConfigValid();
   void checkConfigurationMismatch(); // Check for bridge.source/mqtt.tx mismatch
   bool isIATAValid() const;  // Check if IATA code is configured
+  
+  // Remote serial commands via MQTT
+  void setupCommandSubscription();
+  void onCommandMessage(char* topic, uint8_t* payload, unsigned int length);
+  void publishErrorResponse(const char* error_msg);
+  void publishSignedResponse(const char* command, const char* response, bool success);
+  bool isTimeValid();
+  bool isAuthorized(const uint8_t* pubkey, size_t key_len);
+  char _command_topic[128];  // "meshcore/{IATA}/{DEVICE_ID}/serial/commands"
+  char _response_topic[128]; // "meshcore/{IATA}/{DEVICE_ID}/serial/responses"
+  
+  // Security structures
+  struct NonceTracker {
+    static const int MAX_NONCES = 10;
+    char recent_nonces[MAX_NONCES][48];  // Last 10 nonces (UUID format = 36 chars + null)
+    uint8_t nonce_index;
+    
+    NonceTracker() : nonce_index(0) {
+      memset(recent_nonces, 0, sizeof(recent_nonces));
+    }
+    
+    bool isNonceUsed(const char* nonce) {
+      for (int i = 0; i < MAX_NONCES; i++) {
+        if (strcmp(recent_nonces[i], nonce) == 0) {
+          return true;  // Nonce already used
+        }
+      }
+      return false;
+    }
+    
+    void addNonce(const char* nonce) {
+      strncpy(recent_nonces[nonce_index], nonce, 47);
+      recent_nonces[nonce_index][47] = '\0';
+      nonce_index = (nonce_index + 1) % MAX_NONCES;  // Circular buffer
+    }
+  };
+  
+  struct RateLimiter {
+    static const int MAX_TRACKED_KEYS = 20;
+    unsigned long last_command_time[MAX_TRACKED_KEYS];
+    uint8_t tracked_keys[MAX_TRACKED_KEYS][PUB_KEY_SIZE];
+    uint8_t num_tracked;
+    
+    RateLimiter() : num_tracked(0) {
+      memset(last_command_time, 0, sizeof(last_command_time));
+      memset(tracked_keys, 0, sizeof(tracked_keys));
+    }
+    
+    bool isRateLimited(const uint8_t* pubkey) {
+      // Find or add key
+      int idx = findKeyIndex(pubkey);
+      if (idx < 0) {
+        idx = addKey(pubkey);
+        if (idx < 0) return false;  // Couldn't add key
+      }
+      
+      unsigned long now = millis();
+      if (now - last_command_time[idx] < 1000) {  // 1 second minimum
+        return true;  // Rate limited
+      }
+      last_command_time[idx] = now;
+      return false;
+    }
+    
+  private:
+    int findKeyIndex(const uint8_t* pubkey) {
+      for (int i = 0; i < num_tracked; i++) {
+        if (memcmp(tracked_keys[i], pubkey, PUB_KEY_SIZE) == 0) {
+          return i;
+        }
+      }
+      return -1;
+    }
+    
+    int addKey(const uint8_t* pubkey) {
+      if (num_tracked >= MAX_TRACKED_KEYS) {
+        // Evict oldest (simple round-robin)
+        int oldest = 0;
+        for (int i = 1; i < MAX_TRACKED_KEYS; i++) {
+          if (last_command_time[i] < last_command_time[oldest]) {
+            oldest = i;
+          }
+        }
+        memcpy(tracked_keys[oldest], pubkey, PUB_KEY_SIZE);
+        last_command_time[oldest] = 0;
+        return oldest;
+      }
+      memcpy(tracked_keys[num_tracked], pubkey, PUB_KEY_SIZE);
+      last_command_time[num_tracked] = 0;
+      return num_tracked++;
+    }
+  };
+  
+  struct CommandBlacklist {
+    static const int MAX_BLACKLISTED_COMMANDS = 20;
+    const char* blacklist[MAX_BLACKLISTED_COMMANDS];
+    int count;
+    
+    CommandBlacklist() : count(0) {
+      // Default blacklisted commands - sensitive credentials and admin settings
+      blacklist[count++] = "get wifi.pwd";     // WiFi password
+      blacklist[count++] = "set mqtt.admin";   // Admin public key (security-critical)
+    }
+    
+    bool isCommandBlacklisted(const char* command) {
+      // Check if command starts with any blacklisted prefix
+      for (int i = 0; i < count; i++) {
+        if (strncmp(command, blacklist[i], strlen(blacklist[i])) == 0) {
+          return true;
+        }
+      }
+      return false;
+    }
+  };
+  
+  NonceTracker _nonce_tracker;
+  RateLimiter _rate_limiter;
+  CommandBlacklist _command_blacklist;
+  
+  static const unsigned long COMMAND_EXECUTION_TIMEOUT_MS = 5000;
+  
+  // Store nonce from current command for response (as request_id)
+  char _current_command_nonce[48];  // UUID format = 36 chars + null
+  
+  // Mutex to prevent parallel command processing from multiple MQTT clients
+#ifdef ESP_PLATFORM
+  SemaphoreHandle_t _command_mutex;
+#endif
+  
+  // Deferred command processing - queue command in callback, process in loop
+  struct PendingCommand {
+    char payload[768];  // JWT token (base64 header + payload + signature)
+    unsigned int length;
+    bool pending;
+  };
+  PendingCommand _pending_command;
+  
+  // Callback interfaces
+  MQTTBridgeACLCallbacks* _acl_callbacks;
+  MQTTBridgeCommandExecutor* _command_executor;
   
 public:
   /**
@@ -407,6 +572,20 @@ public:
    */
   void setStatsSources(mesh::Dispatcher* dispatcher, mesh::Radio* radio, 
                        mesh::MainBoard* board, mesh::MillisecondClock* ms);
+
+  /**
+   * Set ACL callback interface for remote command authorization
+   * 
+   * @param callbacks Callback interface for ACL checking (can be NULL if ACL not available)
+   */
+  void setACLCallbacks(MQTTBridgeACLCallbacks* callbacks);
+  
+  /**
+   * Set command execution callback for remote command handling
+   * 
+   * @param executor Callback interface for command execution
+   */
+  void setCommandExecutor(MQTTBridgeCommandExecutor* executor);
 
 private:
   /**
