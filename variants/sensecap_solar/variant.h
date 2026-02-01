@@ -26,8 +26,17 @@
 #define LED_RED                 (PINS_COUNT)
 #define LED_GREEN               (12)
 #define LED_BLUE                (11)
+#define LED_WHITE               (15)
 
 #define LED_STATE_ON            (1)     // State when LED is litted
+
+// User LED (White)
+#define PIN_USER_LED            (15)
+#define LED_USER                PIN_USER_LED
+
+#define LED_USER_ON             (1)
+#define LED_USER_OFF            (0)
+
 
 // Buttons
 #define PIN_BUTTON1             (13)
