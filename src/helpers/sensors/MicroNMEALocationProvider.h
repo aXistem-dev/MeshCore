@@ -33,6 +33,11 @@
     #endif
 #endif
 
+#ifdef PIN_USER_LED
+    #define HAS_USER_LED
+#endif
+
+
 class MicroNMEALocationProvider : public LocationProvider {
     char _nmeaBuffer[100];
     MicroNMEA nmea;
@@ -59,11 +64,17 @@ public :
 
     void begin() override {
         if (_peripher_power) _peripher_power->claim();
+
         if (_pin_en != -1) {
             digitalWrite(_pin_en, PIN_GPS_EN_ACTIVE);
         }
-        if (_pin_reset != -1) {
-            digitalWrite(_pin_reset, !GPS_RESET_FORCE);
+
+    #ifdef HAS_USER_LED
+        digitalWrite(PIN_USER_LED, HIGH);
+    #endif
+
+    if (_pin_reset != -1) {
+        digitalWrite(_pin_reset, !GPS_RESET_FORCE);
         }
     }
 
@@ -79,6 +90,11 @@ public :
         if (_pin_en != -1) {
             digitalWrite(_pin_en, !PIN_GPS_EN_ACTIVE);
         }
+
+    #ifdef HAS_USER_LED
+        digitalWrite(PIN_USER_LED, LOW);
+    #endif
+
         if (_peripher_power) _peripher_power->release();  
     }
 
