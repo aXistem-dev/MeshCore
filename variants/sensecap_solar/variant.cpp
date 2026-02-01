@@ -61,6 +61,10 @@ void initVariant() {
     pinMode(LED_BLUE, OUTPUT);
     digitalWrite(LED_BLUE, LOW);
 
+    pinMode(PIN_USER_LED, OUTPUT);
+    digitalWrite(PIN_USER_LED, LED_USER_OFF);
+
+
 #ifdef ENV_INCLUDE_GPS
     // Initialize GPS enable pin (GPS will be powered on/off by sensor manager)
     pinMode(PIN_GPS_EN, OUTPUT);
