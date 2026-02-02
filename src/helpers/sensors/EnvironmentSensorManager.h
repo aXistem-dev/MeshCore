@@ -43,8 +43,12 @@ public:
   #if ENV_INCLUDE_GPS
   EnvironmentSensorManager(LocationProvider &location): _location(&location){};
   LocationProvider* getLocationProvider() { return _location; }
+  bool getGpsActive() const { return gps_active; }
+  bool getGpsValid() const { return gps_active && _location && _location->isValid(); }
   #else
   EnvironmentSensorManager(){};
+  bool getGpsActive() const { return false; }
+  bool getGpsValid() const { return false; }
   #endif
   bool begin() override;
   bool querySensors(uint8_t requester_permissions, CayenneLPP& telemetry) override;
