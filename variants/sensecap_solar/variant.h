@@ -30,8 +30,8 @@
 #define LED_STATE_ON            (1)     // State when LED is litted
 
 // Buttons
-#define PIN_BUTTON1             (13)
-#define PIN_BUTTON2             (20)
+#define PIN_BUTTON1             (13) // PWR Button
+#define PIN_BUTTON2             (20) // USR Button
 
 #define VBAT_ENABLE             (19)    // Output LOW to enable reading of the BAT voltage.
 
@@ -81,5 +81,11 @@
 
 #define EXTERNAL_FLASH_DEVICES P25Q16H
 #define EXTERNAL_FLASH_USE_QSPI
+
+#ifdef NRF52_POWER_MANAGEMENT
+#define PWRMGT_VOLTAGE_BOOTLOCK 0   // Disabled; user shutdown only
+#define PWRMGT_LPCOMP_AIN       7
+#define PWRMGT_LPCOMP_REFSEL    2
+#endif
 
 #endif
