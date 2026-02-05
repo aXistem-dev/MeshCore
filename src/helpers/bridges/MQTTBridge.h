@@ -190,6 +190,8 @@ private:
   mesh::MillisecondClock* _ms;    // For uptime
   
   // Internal methods
+  void ensureMainMqttClient();  // Create main MQTT client if _config_valid and _mqtt_client is null (e.g. after reinit)
+  void recreateMqttClientsForFragmentationRecovery();  // Disconnect, delete, recreate all MQTT clients to recover max_alloc
   void connectToBrokers();
   void processPacketQueue();
   bool publishStatus();  // Returns true if status was successfully published

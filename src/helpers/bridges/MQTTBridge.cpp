@@ -6,6 +6,7 @@
 
 #ifdef ESP_PLATFORM
 #include <esp_wifi.h>
+#include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
@@ -48,8 +49,27 @@ static bool isWiFiConfigValid(const NodePrefs* prefs) {
 // Time (millis()) when WiFi was last seen connected; 0 when disconnected. Used for get wifi.status uptime.
 static unsigned long s_wifi_connected_at = 0;
 
+#ifdef MQTT_MEMORY_DEBUG
+// #region agent log
+static void agentLogHeap(const char* location, const char* message, const char* hypothesisId,
+                         size_t free_h, size_t max_alloc, unsigned long internal_free, unsigned long spiram_free) {
+  char buf[320];
+  snprintf(buf, sizeof(buf),
+          "{\"sessionId\":\"debug-session\",\"location\":\"%s\",\"message\":\"%s\",\"hypothesisId\":\"%s\","
+          "\"data\":{\"free\":%u,\"max_alloc\":%u,\"internal_free\":%lu,\"spiram_free\":%lu},\"timestamp\":%lu}",
+          location, message, hypothesisId, (unsigned)free_h, (unsigned)max_alloc, internal_free, spiram_free,
+          (unsigned long)millis());
+  Serial.println(buf);
+}
+// #endregion
+#endif
+
 // Singleton for formatMqttStatusReply (set in begin(), cleared in end())
 static MQTTBridge* s_mqtt_bridge_instance = nullptr;
+
+// Only force-disconnect main broker after this many consecutive publish failures (reduces heap fragmentation from disconnect/reconnect storms)
+static const int MAIN_CLIENT_DISCONNECT_FAILURE_THRESHOLD = 3;
+static int s_consecutive_main_publish_failures = 0;
 
 unsigned long MQTTBridge::getWifiConnectedAtMillis() {
   return s_wifi_connected_at;
@@ -489,9 +509,29 @@ void MQTTBridge::mqttTaskLoop() {
   vTaskDelay(pdMS_TO_TICKS(1000));
   
   // Main task loop
+  #ifdef MQTT_MEMORY_DEBUG
+  static unsigned long last_agent_log = 0;
+  #endif
   while (true) {
     // Run the main MQTT bridge loop logic
     // This replaces the original loop() method but runs in the task
+    
+    #ifdef MQTT_MEMORY_DEBUG
+    // #region agent log
+    unsigned long now_loop = millis();
+    if (now_loop - last_agent_log >= 60000) {
+      last_agent_log = now_loop;
+      size_t free_h = ESP.getFreeHeap();
+      size_t max_alloc = ESP.getMaxAllocHeap();
+      unsigned long internal_f = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+      unsigned long spiram_f = 0;
+      #ifdef BOARD_HAS_PSRAM
+      spiram_f = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+      #endif
+      agentLogHeap("MQTTBridge.cpp:505", "mqtt_loop_60s", "H5", free_h, max_alloc, internal_f, spiram_f);
+    }
+    // #endregion
+    #endif
     
     // Actively monitor and manage WiFi connection
     static unsigned long last_wifi_check = 0;
@@ -675,14 +715,37 @@ void MQTTBridge::mqttTaskLoop() {
       }
     }
     
-    // Critical memory check (every 15 minutes) - only log warnings
+    // Critical memory check (every 15 minutes) - log warnings and run fragmentation recovery on ESP32
     static unsigned long last_critical_check = 0;
+    static unsigned long last_fragmentation_recovery = 0;
     if (now - last_critical_check > 900000) {
+      size_t free_h = ESP.getFreeHeap();
       size_t max_alloc = ESP.getMaxAllocHeap();
+      #ifdef MQTT_MEMORY_DEBUG
+      // #region agent log
+      unsigned long internal_f = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+      unsigned long spiram_f = 0;
+      #ifdef BOARD_HAS_PSRAM
+      spiram_f = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+      #endif
+      agentLogHeap("MQTTBridge.cpp:716", "critical_memory_check", "H1_H4", free_h, max_alloc, internal_f, spiram_f);
+      // #endregion
+      #endif
       if (max_alloc < 40000) {
-        MQTT_DEBUG_PRINTLN("CRITICAL: Low memory! Free: %d, Max: %d", ESP.getFreeHeap(), max_alloc);
+        MQTT_DEBUG_PRINTLN("CRITICAL: Low memory! Free: %d, Max: %d", (int)free_h, (int)max_alloc);
       } else if (max_alloc < 60000) {
-        MQTT_DEBUG_PRINTLN("WARNING: Memory pressure. Free: %d, Max: %d", ESP.getFreeHeap(), max_alloc);
+        MQTT_DEBUG_PRINTLN("WARNING: Memory pressure. Free: %d, Max: %d", (int)free_h, (int)max_alloc);
+      }
+      // Log active MQTT client count (we never have more than 3: main + US analyzer + EU analyzer)
+      int n_main = (_mqtt_client != nullptr) ? 1 : 0;
+      int n_us = (_analyzer_us_client != nullptr) ? 1 : 0;
+      int n_eu = (_analyzer_eu_client != nullptr) ? 1 : 0;
+      MQTT_DEBUG_PRINTLN("MQTT clients active: %d (main=%d us=%d eu=%d)", n_main + n_us + n_eu, n_main, n_us, n_eu);
+      // Proactive fragmentation recovery: recreate MQTT clients to recover max_alloc. Throttle once per 5 min.
+      if (max_alloc < 58000 && (now - last_fragmentation_recovery) > 300000) {
+        last_fragmentation_recovery = now;
+        MQTT_DEBUG_PRINTLN("Fragmentation recovery: recreating MQTT clients (max_alloc=%d)", (int)max_alloc);
+        recreateMqttClientsForFragmentationRecovery();
       }
       last_critical_check = now;
     }
@@ -954,57 +1017,46 @@ void MQTTBridge::loop() {
           last_reinit_log = now;
         }
         
-        // Force full MQTT session reinitialization
-        // Disconnect all MQTT clients
-        if (_mqtt_client && _mqtt_client->connected()) {
-          _mqtt_client->disconnect();
-          #ifdef ESP_PLATFORM
-          vTaskDelay(pdMS_TO_TICKS(100));  // Brief delay to allow disconnect
-          #else
-          delay(100);  // Brief delay to allow disconnect
-          #endif
-        }
-        
-        // Disconnect analyzer clients
-        if (_analyzer_us_client && _analyzer_us_client->connected()) {
-          _analyzer_us_client->disconnect();
-        }
-        if (_analyzer_eu_client && _analyzer_eu_client->connected()) {
-          _analyzer_eu_client->disconnect();
-        }
-        
-        // Reset all broker connection states
-        for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
-          if (_brokers[i].enabled) {
-            _brokers[i].connected = false;
-            _brokers[i].last_attempt = 0;  // Allow immediate reconnect after full reinit
-          }
-        }
-        _active_brokers = 0;
-        _cached_has_brokers = false;
-        _cached_has_analyzer_servers = false;
-        
-        // Reset status publish timestamp to allow fresh attempt after reconnection
+        recreateMqttClientsForFragmentationRecovery();
         _last_status_publish = 0;
         _last_status_retry = 0;
-        
-        MQTT_DEBUG_PRINTLN("MQTT session reinitialized - reconnection will be attempted on next loop");
+        MQTT_DEBUG_PRINTLN("MQTT session reinitialized (clients recreated) - reconnection on next loop");
       }
     }
   }
   #endif
   
   #ifdef ESP_PLATFORM
-  // Critical memory check (every 15 minutes) - only log warnings
+  // Critical memory check (every 15 minutes) - log warnings and optionally recover from fragmentation
   static unsigned long last_critical_check = 0;
-  if (millis() - last_critical_check > 900000) {
+  static unsigned long last_fragmentation_recovery = 0;
+  unsigned long now_crit = millis();
+  if (now_crit - last_critical_check > 900000) {
+    size_t free_h = ESP.getFreeHeap();
     size_t max_alloc = ESP.getMaxAllocHeap();
+    #ifdef MQTT_MEMORY_DEBUG
+    // #region agent log
+    unsigned long internal_f = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    unsigned long spiram_f = 0;
+    #ifdef BOARD_HAS_PSRAM
+    spiram_f = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    #endif
+    agentLogHeap("MQTTBridge.cpp:1015", "critical_memory_check", "H1_H4", free_h, max_alloc, internal_f, spiram_f);
+    // #endregion
+    #endif
     if (max_alloc < 40000) {
-      MQTT_DEBUG_PRINTLN("CRITICAL: Low memory! Free: %d, Max: %d", ESP.getFreeHeap(), max_alloc);
+      MQTT_DEBUG_PRINTLN("CRITICAL: Low memory! Free: %d, Max: %d", (int)free_h, (int)max_alloc);
     } else if (max_alloc < 60000) {
-      MQTT_DEBUG_PRINTLN("WARNING: Memory pressure. Free: %d, Max: %d", ESP.getFreeHeap(), max_alloc);
+      MQTT_DEBUG_PRINTLN("WARNING: Memory pressure. Free: %d, Max: %d", (int)free_h, (int)max_alloc);
     }
-    last_critical_check = millis();
+    // Proactive fragmentation recovery: if max_alloc collapsed (e.g. after poor WiFi then reconnect),
+    // recreate MQTT clients so they allocate fresh blocks. Throttle to once per 5 minutes.
+    if (max_alloc < 58000 && (now_crit - last_fragmentation_recovery) > 300000) {
+      last_fragmentation_recovery = now_crit;
+      MQTT_DEBUG_PRINTLN("Fragmentation recovery: recreating MQTT clients (max_alloc=%d)", (int)max_alloc);
+      recreateMqttClientsForFragmentationRecovery();
+    }
+    last_critical_check = now_crit;
   }
   #endif
 }
@@ -1063,7 +1115,75 @@ bool MQTTBridge::isIATAValid() const {
   return true;
 }
 
+void MQTTBridge::ensureMainMqttClient() {
+  if (!_config_valid || _mqtt_client != nullptr) return;
+  _mqtt_client = new PsychicMqttClient();
+  optimizeMqttClientConfig(_mqtt_client, false);
+  _mqtt_client->onConnect([this](bool sessionPresent) {
+    MQTT_DEBUG_PRINTLN("MQTT broker connected");
+    for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
+      if (_brokers[i].enabled && !_brokers[i].connected) {
+        _brokers[i].connected = true;
+        _active_brokers++;
+        _cached_has_brokers = isAnyBrokerConnected();
+        break;
+      }
+    }
+  });
+  _mqtt_client->onDisconnect([this](bool sessionPresent) {
+    MQTT_DEBUG_PRINTLN("MQTT broker disconnected");
+    for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
+      if (_brokers[i].connected) {
+        _brokers[i].connected = false;
+        _active_brokers--;
+        _cached_has_brokers = isAnyBrokerConnected();
+        break;
+      }
+    }
+  });
+  MQTT_DEBUG_PRINTLN("Main MQTT client recreated (fresh buffers)");
+}
+
+void MQTTBridge::recreateMqttClientsForFragmentationRecovery() {
+  // Disconnect, delete, and recreate all MQTT clients so they allocate fresh buffers.
+  // This can recover max_alloc when the internal heap was fragmented (e.g. after poor
+  // WiFi, failed publishes, and reconnect).
+  if (_mqtt_client) {
+    if (_mqtt_client->connected()) _mqtt_client->disconnect();
+    #ifdef ESP_PLATFORM
+    vTaskDelay(pdMS_TO_TICKS(100));
+    #else
+    delay(100);
+    #endif
+    delete _mqtt_client;
+    _mqtt_client = nullptr;
+  }
+  if (_analyzer_us_client) {
+    if (_analyzer_us_client->connected()) _analyzer_us_client->disconnect();
+    delete _analyzer_us_client;
+    _analyzer_us_client = nullptr;
+  }
+  if (_analyzer_eu_client) {
+    if (_analyzer_eu_client->connected()) _analyzer_eu_client->disconnect();
+    delete _analyzer_eu_client;
+    _analyzer_eu_client = nullptr;
+  }
+  for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
+    if (_brokers[i].enabled) {
+      _brokers[i].connected = false;
+      _brokers[i].initial_connect_done = false;
+      _brokers[i].last_attempt = 0;
+    }
+  }
+  _active_brokers = 0;
+  _cached_has_brokers = false;
+  _cached_has_analyzer_servers = false;
+  setupAnalyzerServers();
+}
+
 void MQTTBridge::connectToBrokers() {
+  // Recreate main client if it was deleted during reinit (allows fresh heap allocations)
+  ensureMainMqttClient();
   // Check if MQTT configuration is valid before attempting connection
   if (!_config_valid) {
     return;
@@ -1426,23 +1546,27 @@ bool MQTTBridge::publishStatus() {
                   int publish_result = _mqtt_client->publish(topic, 1, true, json_buffer, json_len);
                   if (publish_result > 0) {
                     published = true;
+                    s_consecutive_main_publish_failures = 0;
                   } else {
-                    // Publish failed - connection may be stale, force disconnect and mark for reconnect
+                    s_consecutive_main_publish_failures++;
+                    bool should_disconnect = (s_consecutive_main_publish_failures >= MAIN_CLIENT_DISCONNECT_FAILURE_THRESHOLD);
                     static unsigned long last_status_publish_fail_log = 0;
                     unsigned long now = millis();
-                    if (now - last_status_publish_fail_log > 60000) { // Log every minute max
-                      MQTT_DEBUG_PRINTLN("Status publish failed (result=%d), forcing broker %d reconnect", publish_result, i);
+                    if (now - last_status_publish_fail_log > 60000) {
+                      MQTT_DEBUG_PRINTLN("Status publish failed (result=%d), failures=%d%s", publish_result, s_consecutive_main_publish_failures,
+                                        should_disconnect ? ", forcing reconnect" : "");
                       last_status_publish_fail_log = now;
                     }
-                    // Force disconnect to trigger reconnection
-                    if (_mqtt_client->connected()) {
+                    if (should_disconnect && _mqtt_client->connected()) {
                       _mqtt_client->disconnect();
+                      s_consecutive_main_publish_failures = 0;
                     }
-                    _brokers[i].connected = false;
-                    _active_brokers--;
-                    _brokers[i].last_attempt = millis();  // Throttle reconnection (connectToBrokers will retry after MAIN_BROKER_RECONNECT_THROTTLE_MS)
-                    // Update cached broker status
-                    _cached_has_brokers = isAnyBrokerConnected();
+                    if (should_disconnect) {
+                      _brokers[i].connected = false;
+                      _active_brokers--;
+                      _brokers[i].last_attempt = millis();
+                      _cached_has_brokers = isAnyBrokerConnected();
+                    }
                   }
                 }
               }
@@ -1590,23 +1714,29 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
           // Publish with timeout check - don't block if connection is slow
           // This prevents blocking the main loop when MQTT broker is slow or unresponsive
           int publish_result = _mqtt_client->publish(topic, 1, false, active_buffer, json_len); // qos=1, retained=false
-          if (publish_result <= 0) {
-            // Publish failed - connection may be stale, force disconnect and mark for reconnect
+          if (publish_result > 0) {
+            s_consecutive_main_publish_failures = 0;
+          } else {
+            s_consecutive_main_publish_failures++;
+            // Only disconnect after several consecutive failures to avoid heap fragmentation from disconnect/reconnect storms
+            bool should_disconnect = (s_consecutive_main_publish_failures >= MAIN_CLIENT_DISCONNECT_FAILURE_THRESHOLD);
             static unsigned long last_publish_fail_log = 0;
             unsigned long now = millis();
-            if (now - last_publish_fail_log > 60000) { // Log every minute max
-              MQTT_DEBUG_PRINTLN("Publish failed (result=%d), forcing broker %d reconnect", publish_result, i);
+            if (now - last_publish_fail_log > 60000) {
+              MQTT_DEBUG_PRINTLN("Publish failed (result=%d), failures=%d%s", publish_result, s_consecutive_main_publish_failures,
+                                should_disconnect ? ", forcing reconnect" : "");
               last_publish_fail_log = now;
             }
-            // Force disconnect to trigger reconnection
-            if (_mqtt_client->connected()) {
+            if (should_disconnect && _mqtt_client->connected()) {
               _mqtt_client->disconnect();
+              s_consecutive_main_publish_failures = 0;
             }
-            _brokers[i].connected = false;
-            _active_brokers--;
-            _brokers[i].last_attempt = millis();  // Throttle reconnection (connectToBrokers will retry after MAIN_BROKER_RECONNECT_THROTTLE_MS)
-            // Update cached broker status
-            _cached_has_brokers = isAnyBrokerConnected();
+            if (should_disconnect) {
+              _brokers[i].connected = false;
+              _active_brokers--;
+              _brokers[i].last_attempt = millis();
+              _cached_has_brokers = isAnyBrokerConnected();
+            }
           }
         }
       }
@@ -1700,23 +1830,28 @@ void MQTTBridge::publishRaw(mesh::Packet* packet) {
           
           // Publish with timeout check - don't block if connection is slow
           int publish_result = _mqtt_client->publish(topic, 1, false, active_buffer, json_len); // qos=1, retained=false
-          if (publish_result <= 0) {
-            // Publish failed - connection may be stale, force disconnect and mark for reconnect
+          if (publish_result > 0) {
+            s_consecutive_main_publish_failures = 0;
+          } else {
+            s_consecutive_main_publish_failures++;
+            bool should_disconnect = (s_consecutive_main_publish_failures >= MAIN_CLIENT_DISCONNECT_FAILURE_THRESHOLD);
             static unsigned long last_raw_publish_fail_log = 0;
             unsigned long now = millis();
-            if (now - last_raw_publish_fail_log > 60000) { // Log every minute max
-              MQTT_DEBUG_PRINTLN("Raw publish failed (result=%d), forcing broker %d reconnect", publish_result, i);
+            if (now - last_raw_publish_fail_log > 60000) {
+              MQTT_DEBUG_PRINTLN("Raw publish failed (result=%d), failures=%d%s", publish_result, s_consecutive_main_publish_failures,
+                                should_disconnect ? ", forcing reconnect" : "");
               last_raw_publish_fail_log = now;
             }
-            // Force disconnect to trigger reconnection
-            if (_mqtt_client->connected()) {
+            if (should_disconnect && _mqtt_client->connected()) {
               _mqtt_client->disconnect();
+              s_consecutive_main_publish_failures = 0;
             }
-            _brokers[i].connected = false;
-            _active_brokers--;
-            _brokers[i].last_attempt = millis();  // Throttle reconnection (connectToBrokers will retry after MAIN_BROKER_RECONNECT_THROTTLE_MS)
-            // Update cached broker status
-            _cached_has_brokers = isAnyBrokerConnected();
+            if (should_disconnect) {
+              _brokers[i].connected = false;
+              _active_brokers--;
+              _brokers[i].last_attempt = millis();
+              _cached_has_brokers = isAnyBrokerConnected();
+            }
           }
         }
       }
@@ -2128,7 +2263,19 @@ void MQTTBridge::setupAnalyzerClients() {
   // Setup US server client (only if enabled and doesn't already exist)
   if (_analyzer_us_enabled && !_analyzer_us_client) {
     _analyzer_us_client = new PsychicMqttClient();
-    
+    #ifdef MQTT_MEMORY_DEBUG
+    // #region agent log
+    agentLogHeap("MQTTBridge.cpp:2142", "after_new_analyzer_us_client", "H4",
+                 ESP.getFreeHeap(), ESP.getMaxAllocHeap(),
+                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 #ifdef BOARD_HAS_PSRAM
+                 heap_caps_get_free_size(MALLOC_CAP_SPIRAM)
+                 #else
+                 0ul
+                 #endif
+                 );
+    // #endregion
+    #endif
     // Optimize MQTT client configuration for memory efficiency
     // Analyzer clients use 768-byte JWT tokens, need larger buffer for CONNECT message
     optimizeMqttClientConfig(_analyzer_us_client, true);
@@ -2165,7 +2312,19 @@ void MQTTBridge::setupAnalyzerClients() {
   // Setup EU server client (only if enabled and doesn't already exist)
   if (_analyzer_eu_enabled && !_analyzer_eu_client) {
     _analyzer_eu_client = new PsychicMqttClient();
-    
+    #ifdef MQTT_MEMORY_DEBUG
+    // #region agent log
+    agentLogHeap("MQTTBridge.cpp:2182", "after_new_analyzer_eu_client", "H4",
+                 ESP.getFreeHeap(), ESP.getMaxAllocHeap(),
+                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 #ifdef BOARD_HAS_PSRAM
+                 heap_caps_get_free_size(MALLOC_CAP_SPIRAM)
+                 #else
+                 0ul
+                 #endif
+                 );
+    // #endregion
+    #endif
     // Optimize MQTT client configuration for memory efficiency
     // Analyzer clients use 768-byte JWT tokens, need larger buffer for CONNECT message
     optimizeMqttClientConfig(_analyzer_eu_client, true);
@@ -2741,12 +2900,6 @@ void MQTTBridge::syncTimeWithNTP() {
       
       strncpy(last_timezone, _prefs->timezone_string, sizeof(last_timezone) - 1);
       last_timezone[sizeof(last_timezone) - 1] = '\0';
-      
-      // Force memory defragmentation after timezone recreation
-      void* temp = malloc(1024);
-      if (temp) {
-        free(temp);
-      }
     }
     
     // Get current time info
