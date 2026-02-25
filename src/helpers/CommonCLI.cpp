@@ -730,6 +730,17 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         bool valid = MQTTBridge::isConfigValid(_prefs);
         sprintf(reply, "> %s", valid ? "valid" : "invalid");
 #endif
+      } else if (memcmp(config, "bootloader.ver", 14) == 0) {
+      #ifdef NRF52_PLATFORM
+          char ver[32];
+          if (_board->getBootloaderVersion(ver, sizeof(ver))) {
+              sprintf(reply, "> %s", ver);
+          } else {
+              strcpy(reply, "> unknown");
+          }
+      #else
+          strcpy(reply, "ERROR: unsupported");
+      #endif
       } else if (memcmp(config, "adc.multiplier", 14) == 0) {
         float adc_mult = _board->getAdcMultiplier();
         if (adc_mult == 0.0f) {
