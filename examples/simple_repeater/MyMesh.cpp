@@ -368,7 +368,6 @@ int MyMesh::handleRequest(ClientInfo *sender, uint32_t sender_timestamp, uint8_t
         // sort by weakest to strongest
         qsort(sorted_neighbours, neighbours_count, sizeof(NeighbourInfo*), cmp_neighbours_weakest_to_strongest);
       }
-#endif
 
       // build results buffer
       int results_count = 0;
