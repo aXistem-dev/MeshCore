@@ -1,6 +1,5 @@
 #include "SensorMesh.h"
 #include <helpers/sensors/LPPDataHelpers.h>
-#include <helpers/sensors/WeatherStationSensorManager.h>
 
 // Verify we're using the correct target.h
 #ifndef WEATHER_STATION_BUILD
@@ -27,19 +26,7 @@ protected:
   }
 
   int querySeriesData(uint32_t start_secs_ago, uint32_t end_secs_ago, MinMaxAvg dest[], int max_num) override {
-    // Return rainfall statistics for the requested time interval
-    // Channel 2: Rainfall (LPP_DISTANCE type)
-    if (max_num >= 1) {
-      float min_rain, max_rain, avg_rain;
-      sensors.getRainfallStats(start_secs_ago, end_secs_ago, getRTCClock(), min_rain, max_rain, avg_rain);
-      
-      dest[0]._channel = TELEM_CHANNEL_SELF + 1;  // Channel 2
-      dest[0]._lpp_type = LPP_DISTANCE;
-      dest[0]._min = min_rain / 1000.0f;  // Convert mm to meters
-      dest[0]._max = max_rain / 1000.0f;
-      dest[0]._avg = avg_rain / 1000.0f;
-      return 1;
-    }
+    // Interval data is now computed by the receiver from cumulative rain tips
     return 0;
   }
 

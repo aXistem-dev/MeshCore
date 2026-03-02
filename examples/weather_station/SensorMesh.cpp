@@ -1,5 +1,4 @@
 #include "SensorMesh.h"
-#include <helpers/sensors/WeatherStationSensorManager.h>
 
 /* ------------------------------ Config -------------------------------- */
 
@@ -181,15 +180,8 @@ uint8_t SensorMesh::handleRequest(uint8_t perms, uint32_t sender_timestamp, uint
     telemetry.addVoltage(TELEM_CHANNEL_SELF, (float)board.getBattMilliVolts() / 1000.0f);
     
     // query other sensors -- target specific
-    // Pass RTC clock for time-based rainfall calculations
-    // Ensure TELEM_PERM_ENVIRONMENT is included in permissions for weather station sensors
     uint8_t sensor_perms = (0xFF & perm_mask) | TELEM_PERM_ENVIRONMENT;
-    WeatherStationSensorManager* ws_sensors = dynamic_cast<WeatherStationSensorManager*>(&sensors);
-    if (ws_sensors) {
-      ws_sensors->querySensors(sensor_perms, telemetry, getRTCClock());
-    } else {
-      sensors.querySensors(sensor_perms, telemetry);  // fallback for other sensor types
-    }
+    sensors.querySensors(sensor_perms, telemetry);
     // TODO: let requester know permissions they have:  telemetry.addPresence(TELEM_CHANNEL_SELF, perms);
 
     uint8_t tlen = telemetry.getSize();
@@ -712,7 +704,7 @@ void SensorMesh::onAckRecv(mesh::Packet* packet, uint32_t ack_crc) {
 
 SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::MeshTables& tables)
      : mesh::Mesh(radio, ms, rng, rtc, *new StaticPoolPacketManager(32), tables),
-      _cli(board, rtc, sensors, &_prefs, this), telemetry(MAX_PACKET_PAYLOAD - 4)
+      _cli(board, rtc, sensors, acl, &_prefs, this), telemetry(MAX_PACKET_PAYLOAD - 4)
 {
   next_local_advert = next_flood_advert = 0;
   dirty_contacts_expiry = 0;
@@ -753,7 +745,7 @@ void SensorMesh::begin(FILESYSTEM* fs) {
   // load persisted prefs
   _cli.loadPrefs(_fs);
 
-  acl.load(_fs);
+  acl.load(_fs, self_id);
 
   radio_set_params(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_set_tx_power(_prefs.tx_power_dbm);
@@ -805,10 +797,14 @@ void SensorMesh::applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t 
   revert_radio_at = futureMillis(2000 + timeout_mins*60*1000);   // schedule when to revert radio params
 }
 
-void SensorMesh::sendSelfAdvertisement(int delay_millis) {
+void SensorMesh::sendSelfAdvertisement(int delay_millis, bool flood) {
   mesh::Packet* pkt = createSelfAdvert();
   if (pkt) {
-    sendFlood(pkt, delay_millis);
+    if (flood) {
+      sendFlood(pkt, delay_millis);
+    } else {
+      sendZeroHop(pkt, delay_millis);
+    }
   } else {
     MESH_DEBUG_PRINTLN("ERROR: unable to create advertisement packet!");
   }
@@ -829,7 +825,7 @@ void SensorMesh::updateFloodAdvertTimer() {
   }
 }
 
-void SensorMesh::setTxPower(uint8_t power_dbm) {
+void SensorMesh::setTxPower(int8_t power_dbm) {
   radio_set_tx_power(power_dbm);
 }
 
@@ -910,13 +906,7 @@ void SensorMesh::loop() {
     telemetry.reset();
     telemetry.addVoltage(TELEM_CHANNEL_SELF, (float)board.getBattMilliVolts() / 1000.0f);
     // query other sensors -- target specific
-    // Pass RTC clock for time-based rainfall calculations
-    WeatherStationSensorManager* ws_sensors = dynamic_cast<WeatherStationSensorManager*>(&sensors);
-    if (ws_sensors) {
-      ws_sensors->querySensors(0xFF, telemetry, getRTCClock());  // allow all telemetry permissions
-    } else {
-      sensors.querySensors(0xFF, telemetry);  // fallback for other sensor types
-    }
+    sensors.querySensors(0xFF, telemetry);
 
     onSensorDataRead();
 

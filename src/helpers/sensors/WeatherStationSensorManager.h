@@ -28,98 +28,54 @@ class WeatherStationSensorManager : public SensorManager {
 protected:
   bool BME280_initialized = false;
   Adafruit_BME280 bme;
-  
-  // Rain gauge variables
+
+  // Rain gauge counter (cumulative since boot, receiver derives rate from successive samples)
   volatile unsigned long rainTips = 0;
-  
-  // Rainfall timestamp tracking (circular buffer)
-  // Store timestamps in milliseconds since boot (will convert to unix time when querying)
-  // Each tip = 0.2794mm
-  // Calculations for 24-hour periods:
-  //   Light rain (5mm/hr): 120mm/day = ~430 tips
-  //   Moderate (10mm/hr): 240mm/day = ~860 tips  
-  //   Heavy (50mm/hr): 1200mm/day = ~4298 tips
-  //   Very heavy (100mm/hr): 2400mm/day = ~8597 tips
-  //   Extreme (200mm/hr): 4800mm/day = ~17,194 tips
-  // Using 10000 tips = ~2794mm (2.8m) - covers most extreme 24h scenarios including tropical storms
-  static constexpr int MAX_RAIN_TIPS = 10000;  // Enough for extreme 24h rainfall scenarios
-  struct RainTip {
-    unsigned long timestamp_millis;  // millis() when tip occurred
-  };
-  RainTip rainTipHistory[MAX_RAIN_TIPS];
-  volatile int rainTipWriteIndex = 0;  // Next position to write (circular)
-  volatile int rainTipCount = 0;       // Number of tips stored
-  unsigned long lastMidnightMillis = 0;  // millis() at last midnight (updated in loop)
-  uint32_t lastMidnightUnix = 0;         // Unix timestamp of last midnight
-  
+
   // Anemometer variables
   volatile unsigned long windClicks = 0;
   volatile unsigned long lastWindTime = 0;
   unsigned long lastWindCalc = 0;
-  
-  // Wind speed history tracking (circular buffer)
-  // Store wind speed readings with timestamps for interval calculations
-  // Sample every 5 seconds to track averages and peaks
-  static constexpr int MAX_WIND_READINGS = 2880;  // 5 sec intervals * 60 * 24 = 2880 (24 hours)
+
+  // Wind speed history tracking (circular buffer for peak calculation)
+  // 5 minutes at 5-second intervals = 60 readings
+  static constexpr int MAX_WIND_READINGS = 60;
   struct WindReading {
-    float speed_kmh;              // Wind speed in km/h
-    unsigned long timestamp_millis;  // millis() when reading was taken
+    float speed_kmh;
+    unsigned long timestamp_millis;
   };
   WindReading windHistory[MAX_WIND_READINGS];
-  int windWriteIndex = 0;         // Next position to write (circular)
-  int windCount = 0;              // Number of readings stored
-  float peakWindSpeed_5min = 0.0f;  // Peak wind speed in last 5 minutes
-  unsigned long lastPeakUpdate = 0;  // Last time peak was updated
-  
+  int windWriteIndex = 0;
+  int windCount = 0;
+  float peakWindSpeed_5min = 0.0f;
+  unsigned long lastPeakUpdate = 0;
+
   // Wind vane calibration map
   static const VaneReading vaneMap[];
   static const int numVaneReadings;
-  
-  // Timezone offset (in seconds from UTC)
-  // Positive = east of UTC, negative = west of UTC
-  // Example: UTC+5:30 (India) = 19800, UTC-5 (EST) = -18000
-  int32_t timezone_offset_seconds = 0;
-  
+
   // Interrupt service routines (must be static or friend functions)
   static WeatherStationSensorManager* instance;
   static void rainISR();
   static void windISR();
-  
+
   // Helper functions (protected)
   float getWindSpeed();  // Get current momentary wind speed and store in history
   int getWindDirection() const;
-  
+
   // Wind speed calculation helpers
-  float getAverageWindSpeedForInterval(uint32_t start_unix, uint32_t end_unix, mesh::RTCClock* rtc) const;
-  float getPeakWindSpeed5Min(mesh::RTCClock* rtc) const;
   void updateWindSpeedHistory(float speed);
-  
-  // Rainfall calculation helpers
-  float getRainfallForInterval(uint32_t start_unix, uint32_t end_unix, mesh::RTCClock* rtc) const;
-  uint32_t getMidnightUnix(mesh::RTCClock* rtc) const;
-  
-public:
-  // Statistics helpers (for querySeriesData) - public so SensorMesh can call
-  void getRainfallStats(uint32_t start_secs_ago, uint32_t end_secs_ago, mesh::RTCClock* rtc, 
-                        float& min, float& max, float& avg) const;
-  
+  float getPeakWindSpeed5Min() const;
+
 public:
   WeatherStationSensorManager() {}
   bool begin() override;
   bool querySensors(uint8_t requester_permissions, CayenneLPP& telemetry) override;
-  bool querySensors(uint8_t requester_permissions, CayenneLPP& telemetry, mesh::RTCClock* rtc);
   void loop() override;
-  
-  // Settings interface
-  int getNumSettings() const override;
-  const char* getSettingName(int i) const override;
-  const char* getSettingValue(int i) const override;
-  bool setSettingValue(const char* name, const char* value) override;
-  
+
   // Direct access for calibration/debugging
   void resetRainfall() { rainTips = 0; }
   unsigned long getRainTips() const { return rainTips; }
   unsigned long getWindClicks() const { return windClicks; }
   float getRainfall() const { return rainTips * WEATHER_MM_PER_TIP; }
 };
-

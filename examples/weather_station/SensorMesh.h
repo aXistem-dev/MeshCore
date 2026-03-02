@@ -60,13 +60,13 @@ public:
   NodePrefs* getNodePrefs() { return &_prefs; }
   void savePrefs() override { _cli.savePrefs(_fs); }
   bool formatFileSystem() override;
-  void sendSelfAdvertisement(int delay_millis) override;
+  void sendSelfAdvertisement(int delay_millis, bool flood=true) override;
   void updateAdvertTimer() override;
   void updateFloodAdvertTimer() override;
   void setLoggingOn(bool enable) override {  }
   void eraseLogFile() override { }
   void dumpLogFile() override { }
-  void setTxPower(uint8_t power_dbm) override;
+  void setTxPower(int8_t power_dbm) override;
   void formatNeighborsReply(char *reply) override {
     strcpy(reply, "not supported");
   }
