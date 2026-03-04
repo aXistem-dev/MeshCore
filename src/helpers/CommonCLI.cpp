@@ -506,9 +506,13 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         strcpy(reply, "ERR: clock cannot go backwards");
       }
     } else if (memcmp(command, "memory", 6) == 0) {
+#ifdef ESP_PLATFORM
       sprintf(reply, "Free: %d, Min: %d, Max: %d, Queue: %d", 
               ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), 
               _callbacks->getQueueSize());
+#else
+      sprintf(reply, "Queue: %d", _callbacks->getQueueSize());
+#endif
     } else if (memcmp(command, "start ota", 9) == 0) {
       if (!_board->startOTAUpdate(_prefs->node_name, reply)) {
         strcpy(reply, "Error");
@@ -740,10 +744,10 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         uint8_t ps = _prefs->wifi_power_save;
         const char* ps_name = (ps == 1) ? "none" : (ps == 2) ? "max" : "min";
         sprintf(reply, "> %s", ps_name);
-      } else if (memcmp(config, "timezone", 8) == 0) {
-        sprintf(reply, "> %s", _prefs->timezone_string);
       } else if (memcmp(config, "timezone.offset", 15) == 0) {
         sprintf(reply, "> %d", _prefs->timezone_offset);
+      } else if (memcmp(config, "timezone", 8) == 0) {
+        sprintf(reply, "> %s", _prefs->timezone_string);
       } else if (memcmp(config, "mqtt.analyzer.us", 17) == 0) {
         sprintf(reply, "> %s", _prefs->mqtt_analyzer_us_enabled ? "on" : "off");
       } else if (memcmp(config, "mqtt.analyzer.eu", 17) == 0) {
