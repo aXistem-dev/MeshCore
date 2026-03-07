@@ -27,7 +27,7 @@ protected:
   bool gps_active = false;
   uint32_t gps_update_interval_sec = 1;  // Default 1 second
 
-  #if ENV_INCLUDE_GPS && defined(GPS_POWER_SAVE)
+  #if ENV_INCLUDE_GPS && GPS_POWER_SAVE_ACTIVE
   bool gps_setting = false;           // User intent: GPS on/off
   uint8_t gps_saver_mode = 1;         // 0=off, 1=bootonly, 2=periodic
   uint8_t gps_saver_hold = 15;       // 5–240 s
@@ -70,7 +70,7 @@ public:
   const char* getSettingValue(int i) const override;
   bool setSettingValue(const char* name, const char* value) override;
   void setRTCClock(mesh::RTCClock* rtc) override;
-  #if defined(GPS_POWER_SAVE)
+  #if GPS_POWER_SAVE_ACTIVE
   void applyGpsSaverPrefs(uint8_t mode, uint8_t hold, uint8_t timeout_min, uint32_t interval_sec, mesh::RTCClock* rtc);
   void setGpsOffPersistCallback(void (*cb)(void*), void* user) override;
   #endif

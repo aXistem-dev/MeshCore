@@ -494,7 +494,7 @@ int EnvironmentSensorManager::getNumSettings() const {
   #if ENV_INCLUDE_GPS
     if (gps_detected) {
       settings++;  // gps
-      #if defined(GPS_POWER_SAVE)
+      #if GPS_POWER_SAVE_ACTIVE
       settings++;  // gps_saver_mode
       settings++;  // gps_saver_hold
       settings++;  // gps_timeout
@@ -509,7 +509,7 @@ const char* EnvironmentSensorManager::getSettingName(int i) const {
   int settings = 0;
   #if ENV_INCLUDE_GPS
     if (gps_detected && i == settings++) return "gps";
-    #if defined(GPS_POWER_SAVE)
+    #if GPS_POWER_SAVE_ACTIVE
     if (gps_detected && i == settings++) return "gps_saver_mode";
     if (gps_detected && i == settings++) return "gps_saver_hold";
     if (gps_detected && i == settings++) return "gps_timeout";
@@ -523,13 +523,13 @@ const char* EnvironmentSensorManager::getSettingValue(int i) const {
   int settings = 0;
   #if ENV_INCLUDE_GPS
     if (gps_detected && i == settings++) {
-      #if defined(GPS_POWER_SAVE)
+      #if GPS_POWER_SAVE_ACTIVE
       return gps_setting ? "1" : "0";
       #else
       return gps_active ? "1" : "0";
       #endif
     }
-    #if defined(GPS_POWER_SAVE)
+    #if GPS_POWER_SAVE_ACTIVE
     if (gps_detected && i == settings++) {
       static char buf_mode[4];
       snprintf(buf_mode, sizeof(buf_mode), "%d", gps_saver_mode);
@@ -558,7 +558,7 @@ const char* EnvironmentSensorManager::getSettingValue(int i) const {
 bool EnvironmentSensorManager::setSettingValue(const char* name, const char* value) {
   #if ENV_INCLUDE_GPS
   if (gps_detected && strcmp(name, "gps") == 0) {
-    #if defined(GPS_POWER_SAVE)
+    #if GPS_POWER_SAVE_ACTIVE
     gps_setting = (strcmp(value, "0") != 0);
     if (gps_setting) {
       start_gps();
@@ -574,7 +574,7 @@ bool EnvironmentSensorManager::setSettingValue(const char* name, const char* val
     #endif
     return true;
   }
-  #if defined(GPS_POWER_SAVE)
+  #if GPS_POWER_SAVE_ACTIVE
   if (strcmp(name, "gps_saver_mode") == 0) {
     uint8_t old_mode = gps_saver_mode;
     uint8_t new_mode = 0;
@@ -613,7 +613,7 @@ bool EnvironmentSensorManager::setSettingValue(const char* name, const char* val
   #endif
   if (strcmp(name, "gps_interval") == 0) {
     uint32_t interval_seconds = (uint32_t)strtoul(value, NULL, 10);
-    #if defined(GPS_POWER_SAVE)
+    #if GPS_POWER_SAVE_ACTIVE
     // Repeaters: 3600–2592000 (1h–30d) for periodic; store anyway (always allowed)
     if (interval_seconds >= 3600 && interval_seconds <= 2592000) {
       gps_update_interval_sec = interval_seconds;
@@ -640,7 +640,7 @@ void EnvironmentSensorManager::setRTCClock(mesh::RTCClock* rtc) {
   _rtc_clock = rtc;
 }
 
-#if defined(GPS_POWER_SAVE)
+#if GPS_POWER_SAVE_ACTIVE
 void EnvironmentSensorManager::applyGpsSaverPrefs(uint8_t mode, uint8_t hold, uint8_t timeout_min, uint32_t interval_sec, mesh::RTCClock* rtc) {
   setRTCClock(rtc);
   char buf[12];
@@ -795,7 +795,7 @@ bool EnvironmentSensorManager::gpsIsAwake(uint8_t ioPin){
 
 void EnvironmentSensorManager::start_gps() {
   gps_active = true;
-  #if ENV_INCLUDE_GPS && defined(GPS_POWER_SAVE)
+  #if ENV_INCLUDE_GPS && GPS_POWER_SAVE_ACTIVE
   if (_rtc_clock) {
     _gps_no_fix_start = _rtc_clock->getCurrentTime();
   }
@@ -833,7 +833,7 @@ void EnvironmentSensorManager::loop() {
   static long next_gps_update = 0;
 
   #if ENV_INCLUDE_GPS
-  #if defined(GPS_POWER_SAVE)
+  #if GPS_POWER_SAVE_ACTIVE
   uint32_t now = _rtc_clock ? _rtc_clock->getCurrentTime() : 0;
 
   // No-fix timeout: gps_active && !isValid() for >= gps_timeout_min minutes

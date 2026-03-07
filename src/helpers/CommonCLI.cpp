@@ -22,7 +22,7 @@ static bool isValidName(const char *n) {
   return true;
 }
 
-#if defined(GPS_POWER_SAVE)
+#if GPS_POWER_SAVE_ACTIVE
 static void formatGpsInterval(uint32_t sec, char* buf, size_t bufsize) {
   if (sec == 3600) snprintf(buf, bufsize, "1h");
   else if (sec == 14400) snprintf(buf, bufsize, "4h");
@@ -96,7 +96,7 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *)&_prefs->adc_multiplier, sizeof(_prefs->adc_multiplier)); // 166
     file.read((uint8_t *)_prefs->owner_info, sizeof(_prefs->owner_info));  // 170
     // 290
-    #ifdef GPS_POWER_SAVE
+    #if GPS_POWER_SAVE_ACTIVE
     if (file.available() >= (int)sizeof(_prefs->gps_saver_mode)) {
       file.read((uint8_t *)&_prefs->gps_saver_mode, sizeof(_prefs->gps_saver_mode));
       if (file.available() >= (int)(sizeof(_prefs->gps_saver_hold) + sizeof(_prefs->gps_timeout_min))) {
@@ -138,7 +138,7 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
 
     _prefs->gps_enabled = constrain(_prefs->gps_enabled, 0, 1);
     _prefs->advert_loc_policy = constrain(_prefs->advert_loc_policy, 0, 2);
-    #ifdef GPS_POWER_SAVE
+    #if GPS_POWER_SAVE_ACTIVE
     _prefs->gps_saver_mode = constrain(_prefs->gps_saver_mode, 0, 2);
     _prefs->gps_saver_hold = constrain(_prefs->gps_saver_hold, 5, 240);
     _prefs->gps_timeout_min = constrain(_prefs->gps_timeout_min, 1, 15);
@@ -204,7 +204,7 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *)&_prefs->adc_multiplier, sizeof(_prefs->adc_multiplier));                 // 166
     file.write((uint8_t *)_prefs->owner_info, sizeof(_prefs->owner_info));  // 170
     // 290
-    #ifdef GPS_POWER_SAVE
+    #if GPS_POWER_SAVE_ACTIVE
     file.write((uint8_t *)&_prefs->gps_saver_mode, sizeof(_prefs->gps_saver_mode));
     file.write((uint8_t *)&_prefs->gps_saver_hold, sizeof(_prefs->gps_saver_hold));
     file.write((uint8_t *)&_prefs->gps_timeout_min, sizeof(_prefs->gps_timeout_min));
@@ -929,7 +929,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         bool fix = l->isValid();       // has fix ?
         int sats = l->satellitesCount();
         bool active = !strcmp(_sensors->getSettingByKey("gps"), "1");  // gps_setting
-        #if defined(GPS_POWER_SAVE)
+        #if GPS_POWER_SAVE_ACTIVE
         uint8_t mode = _prefs->gps_saver_mode;
         if (!active) {
           strcpy(reply, "off");

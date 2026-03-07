@@ -157,7 +157,7 @@ private:
   #if ENV_INCLUDE_GPS == 1
   void applyGpsPrefs() {
     sensors.setSettingValue("gps", _prefs.gps_enabled?"1":"0");
-    #ifdef GPS_POWER_SAVE
+    #if GPS_POWER_SAVE_ACTIVE
     sensors.applyGpsSaverPrefs(_prefs.gps_saver_mode, _prefs.gps_saver_hold, _prefs.gps_timeout_min, _prefs.gps_interval, getRTCClock());
     #endif
   }
