@@ -903,10 +903,12 @@ struct FreqRange {
   uint32_t lower_freq, upper_freq;
 };
 
+// Allow client repeat on preset frequency bands (lowest–highest preset per band).
+// 433: Portugal 433.375 – EU 433.65; 868–869: 869.525 – 869.618; 915–920: USA 910.525 – Vietnam 920.25
 static FreqRange repeat_freq_ranges[] = {
-  { 433000, 433000 },
-  { 869000, 869000 },
-  { 918000, 918000 }
+  { 433375, 433650 },   // 433 MHz band
+  { 869525, 869618 },   // 868–869 MHz band
+  { 910525, 920250 }    // 915–920 MHz band (USA, AU, NZ, VN)
 };
 
 bool MyMesh::isValidClientRepeatFreq(uint32_t f) const {
