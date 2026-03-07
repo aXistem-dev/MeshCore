@@ -59,6 +59,9 @@ struct NodePrefs { // persisted to file
   char owner_info[120];
   uint8_t path_hash_mode;   // which path mode to use when sending
   uint8_t loop_detect;
+  #ifdef GPS_POWER_SAVE
+  uint8_t gps_saver_mode;       // 0=off, 1=on (boot-only)
+  #endif
 };
 
 class CommonCLICallbacks {

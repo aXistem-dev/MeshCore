@@ -729,6 +729,9 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
   _prefs.gps_enabled = 0;
   _prefs.gps_interval = 0;
   _prefs.advert_loc_policy = ADVERT_LOC_PREFS;
+  #ifdef GPS_POWER_SAVE
+  _prefs.gps_saver_mode = 1;
+  #endif
 }
 
 void SensorMesh::begin(FILESYSTEM* fs) {

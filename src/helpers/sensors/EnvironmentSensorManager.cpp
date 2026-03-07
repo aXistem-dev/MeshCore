@@ -492,7 +492,12 @@ bool EnvironmentSensorManager::querySensors(uint8_t requester_permissions, Cayen
 int EnvironmentSensorManager::getNumSettings() const {
   int settings = 0;
   #if ENV_INCLUDE_GPS
-    if (gps_detected) settings++;  // only show GPS setting if GPS is detected
+    if (gps_detected) {
+      settings++;
+      #if defined(GPS_POWER_SAVE)
+      settings++;  // gps_saver_mode
+      #endif
+    }
   #endif
   return settings;
 }
@@ -500,12 +505,11 @@ int EnvironmentSensorManager::getNumSettings() const {
 const char* EnvironmentSensorManager::getSettingName(int i) const {
   int settings = 0;
   #if ENV_INCLUDE_GPS
-    if (gps_detected && i == settings++) {
-      return "gps";
-    }
+    if (gps_detected && i == settings++) return "gps";
+    #if defined(GPS_POWER_SAVE)
+    if (gps_detected && i == settings++) return "gps_saver_mode";
+    #endif
   #endif
-  // convenient way to add params (needed for some tests)
-//  if (i == settings++) return "param.2";
   return NULL;
 }
 
@@ -513,24 +517,61 @@ const char* EnvironmentSensorManager::getSettingValue(int i) const {
   int settings = 0;
   #if ENV_INCLUDE_GPS
     if (gps_detected && i == settings++) {
+      #if defined(GPS_POWER_SAVE)
+      return gps_setting ? "1" : "0";
+      #else
       return gps_active ? "1" : "0";
+      #endif
     }
+    #if defined(GPS_POWER_SAVE)
+    if (gps_detected && i == settings++) {
+      return gps_saver_mode == 0 ? "off" : "on";
+    }
+    #endif
   #endif
-  // convenient way to add params ...
-//  if (i == settings++) return "2";
   return NULL;
 }
 
 bool EnvironmentSensorManager::setSettingValue(const char* name, const char* value) {
   #if ENV_INCLUDE_GPS
   if (gps_detected && strcmp(name, "gps") == 0) {
+    #if defined(GPS_POWER_SAVE)
+    gps_setting = (strcmp(value, "0") != 0);
+    if (gps_setting) {
+      start_gps();
+    } else {
+      stop_gps();
+    }
+    #else
     if (strcmp(value, "0") == 0) {
       stop_gps();
     } else {
       start_gps();
     }
+    #endif
     return true;
   }
+  #if defined(GPS_POWER_SAVE)
+  if (strcmp(name, "gps_saver_mode") == 0) {
+    uint8_t old_mode = gps_saver_mode;
+    uint8_t new_mode = 0;
+    if (strcmp(value, "off") == 0) { new_mode = 0; }
+    else if (strcmp(value, "on") == 0) { new_mode = 1; }
+    else return false;
+
+    gps_saver_mode = new_mode;
+
+    if (gps_setting) {
+      if (new_mode == 0) {
+        if (!gps_active) start_gps();
+      } else if (old_mode == 0 && gps_active) {
+        stop_gps();
+        _gps_hold_timer_active = false;
+      }
+    }
+    return true;
+  }
+  #endif
   if (strcmp(name, "gps_interval") == 0) {
     uint32_t interval_seconds = atoi(value);
     if (interval_seconds > 0) {
@@ -544,13 +585,26 @@ bool EnvironmentSensorManager::setSettingValue(const char* name, const char* val
   return false;  // not supported
 }
 
+void EnvironmentSensorManager::setRTCClock(mesh::RTCClock* rtc) {
+  _rtc_clock = rtc;
+}
+
+#if defined(GPS_POWER_SAVE)
+void EnvironmentSensorManager::applyGpsSaverPrefs(uint8_t mode, mesh::RTCClock* rtc) {
+  setRTCClock(rtc);
+  setSettingValue("gps_saver_mode", mode ? "on" : "off");
+}
+#endif
+
 #if ENV_INCLUDE_GPS
 void EnvironmentSensorManager::initBasicGPS() {
 
   Serial1.setPins(PIN_GPS_TX, PIN_GPS_RX);
 
-  #ifdef GPS_BAUD_RATE
+  #if defined(GPS_BAUD_RATE)
   Serial1.begin(GPS_BAUD_RATE);
+  #elif defined(GPS_BAUDRATE)
+  Serial1.begin(GPS_BAUDRATE);
   #else
   Serial1.begin(9600);
   #endif
@@ -593,8 +647,10 @@ void EnvironmentSensorManager::rakGPSInit(){
 
   Serial1.setPins(PIN_GPS_TX, PIN_GPS_RX);
 
-  #ifdef GPS_BAUD_RATE
+  #if defined(GPS_BAUD_RATE)
   Serial1.begin(GPS_BAUD_RATE);
+  #elif defined(GPS_BAUDRATE)
+  Serial1.begin(GPS_BAUDRATE);
   #else
   Serial1.begin(9600);
   #endif
@@ -707,6 +763,23 @@ void EnvironmentSensorManager::loop() {
   static long next_gps_update = 0;
 
   #if ENV_INCLUDE_GPS
+  #if defined(GPS_POWER_SAVE)
+  // Boot-only power-save: when gps_active, hold 15s after fix then stop
+  if (_rtc_clock && gps_saver_mode == 1 && gps_setting && gps_active) {
+    if (_location->isValid() && !_location->waitingTimeSync()) {
+      if (!_gps_hold_timer_active) {
+        _gps_hold_start_unixtime = _rtc_clock->getCurrentTime();
+        _gps_hold_timer_active = true;
+      }
+      if (_rtc_clock->getCurrentTime() - _gps_hold_start_unixtime >= 15) {
+        stop_gps();
+        _gps_hold_timer_active = false;
+      }
+    } else {
+      _gps_hold_timer_active = false;
+    }
+  }
+  #endif
   if (gps_active) {
     _location->loop();
   }
