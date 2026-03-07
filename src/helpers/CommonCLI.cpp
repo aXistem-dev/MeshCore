@@ -24,13 +24,13 @@ static bool isValidName(const char *n) {
 
 #if GPS_POWER_SAVE_ACTIVE
 static void formatGpsInterval(uint32_t sec, char* buf, size_t bufsize) {
-  if (sec == 3600) snprintf(buf, bufsize, "1h");
-  else if (sec == 14400) snprintf(buf, bufsize, "4h");
-  else if (sec == 43200) snprintf(buf, bufsize, "12h");
-  else if (sec == 86400) snprintf(buf, bufsize, "1d");
-  else if (sec == 604800) snprintf(buf, bufsize, "7d");
-  else if (sec == 2592000) snprintf(buf, bufsize, "30d");
-  else snprintf(buf, bufsize, "%lu", (unsigned long)sec);
+  if (sec % 86400 == 0 && sec >= 86400 && sec <= 2592000) {
+    snprintf(buf, bufsize, "%lud", (unsigned long)(sec / 86400));
+  } else if (sec % 3600 == 0 && sec >= 3600 && sec <= 2592000) {
+    snprintf(buf, bufsize, "%luh", (unsigned long)(sec / 3600));
+  } else {
+    snprintf(buf, bufsize, "%lu", (unsigned long)sec);
+  }
 }
 #endif
 
@@ -872,13 +872,23 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
       } else {
         const char* val = command + 13;
         uint32_t sec = 0;
-        if (memcmp(val, "1h", 2) == 0 && (val[2] == 0 || val[2] == ' ')) sec = 3600;
-        else if (memcmp(val, "4h", 2) == 0 && (val[2] == 0 || val[2] == ' ')) sec = 14400;
-        else if (memcmp(val, "12h", 3) == 0 && (val[3] == 0 || val[3] == ' ')) sec = 43200;
-        else if (memcmp(val, "1d", 2) == 0 && (val[2] == 0 || val[2] == ' ')) sec = 86400;
-        else if (memcmp(val, "7d", 2) == 0 && (val[2] == 0 || val[2] == ' ')) sec = 604800;
-        else if (memcmp(val, "30d", 3) == 0 && (val[3] == 0 || val[3] == ' ')) sec = 2592000;
-        else sec = (uint32_t)strtoul(val, NULL, 10);
+        char* end;
+        unsigned long n = strtoul(val, &end, 10);
+        if (end > val) {
+          if (*end == 'h' || *end == 'H') {
+            if (n >= 1 && n <= 720) sec = (uint32_t)(n * 3600);
+            end++;
+          } else if (*end == 'd' || *end == 'D') {
+            if (n >= 1 && n <= 30) sec = (uint32_t)(n * 86400);
+            end++;
+          } else if (*end == 0 || *end == ' ') {
+            sec = (uint32_t)n;
+          }
+          if (sec) {
+            while (*end == ' ') end++;
+            if (*end != 0) sec = 0;
+          }
+        }
         if (sec >= 3600 && sec <= 2592000) {
           _prefs->gps_interval = sec;
           char buf[12];
