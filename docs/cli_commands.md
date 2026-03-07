@@ -779,6 +779,28 @@ region save
 
 ---
 
+#### GPS power-save (repeaters with GPS_POWER_SAVE)
+
+**Usage:**
+- `gps saver` — Get power-save mode
+- `gps saver <mode>` — Set mode
+- `gps hold` — Get hold time (seconds)
+- `gps hold <sec>` — Set hold time (5–240 s)
+- `gps timeout` — Get no-fix timeout (minutes)
+- `gps timeout <min>` — Set timeout (1–15 min)
+- `gps interval` — Get wake interval (seconds)
+- `gps interval <value>` — Set interval (e.g. 1h, 13h, 2d, 15d or 3600–2592000 s)
+
+**Parameters:**
+- `mode`: `off` | `bootonly` | `periodic`
+- `sec`: 5–240 (default 15)
+- `min`: 1–15 (default 5)
+- `value`: `Nh` (N hours, 1–720), `Nd` (N days, 1–30), or raw seconds (3600–2592000)
+
+**Defaults:** mode=bootonly, hold=15 s, timeout=5 min, interval=604800 (7 d)
+
+---
+
 ### Sensors (When sensor support is compiled in)
 
 #### View the list of sensors on this node

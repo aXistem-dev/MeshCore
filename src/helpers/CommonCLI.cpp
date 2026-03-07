@@ -22,6 +22,18 @@ static bool isValidName(const char *n) {
   return true;
 }
 
+#if GPS_POWER_SAVE_ACTIVE
+static void formatGpsInterval(uint32_t sec, char* buf, size_t bufsize) {
+  if (sec % 86400 == 0 && sec >= 86400 && sec <= 2592000) {
+    snprintf(buf, bufsize, "%lud", (unsigned long)(sec / 86400));
+  } else if (sec % 3600 == 0 && sec >= 3600 && sec <= 2592000) {
+    snprintf(buf, bufsize, "%luh", (unsigned long)(sec / 3600));
+  } else {
+    snprintf(buf, bufsize, "%lu", (unsigned long)sec);
+  }
+}
+#endif
+
 void CommonCLI::loadPrefs(FILESYSTEM* fs) {
   if (fs->exists("/com_prefs")) {
     loadPrefsInt(fs, "/com_prefs");   // new filename
@@ -84,11 +96,20 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *)&_prefs->adc_multiplier, sizeof(_prefs->adc_multiplier)); // 166
     file.read((uint8_t *)_prefs->owner_info, sizeof(_prefs->owner_info));  // 170
     // 290
-    #ifdef GPS_POWER_SAVE
+    #if GPS_POWER_SAVE_ACTIVE
     if (file.available() >= (int)sizeof(_prefs->gps_saver_mode)) {
-      file.read((uint8_t *)&_prefs->gps_saver_mode, sizeof(_prefs->gps_saver_mode));
+      file.read((uint8_t *)&_prefs->gps_saver_mode, sizeof(_prefs->gps_saver_mode));   // 290
+      if (file.available() >= (int)(sizeof(_prefs->gps_saver_hold) + sizeof(_prefs->gps_timeout_min))) {
+        file.read((uint8_t *)&_prefs->gps_saver_hold, sizeof(_prefs->gps_saver_hold));   // 291
+        file.read((uint8_t *)&_prefs->gps_timeout_min, sizeof(_prefs->gps_timeout_min)); // 292
+      } else {
+        _prefs->gps_saver_hold = 15;
+        _prefs->gps_timeout_min = 5;
+      }
     } else {
       _prefs->gps_saver_mode = 1;
+      _prefs->gps_saver_hold = 15;
+      _prefs->gps_timeout_min = 5;
     }
     #endif
 
@@ -117,8 +138,10 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
 
     _prefs->gps_enabled = constrain(_prefs->gps_enabled, 0, 1);
     _prefs->advert_loc_policy = constrain(_prefs->advert_loc_policy, 0, 2);
-    #ifdef GPS_POWER_SAVE
-    _prefs->gps_saver_mode = constrain(_prefs->gps_saver_mode, 0, 1);
+    #if GPS_POWER_SAVE_ACTIVE
+    _prefs->gps_saver_mode = constrain(_prefs->gps_saver_mode, 0, 2);
+    _prefs->gps_saver_hold = constrain(_prefs->gps_saver_hold, 5, 240);
+    _prefs->gps_timeout_min = constrain(_prefs->gps_timeout_min, 1, 15);
     #endif
 
     file.close();
@@ -181,8 +204,10 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *)&_prefs->adc_multiplier, sizeof(_prefs->adc_multiplier));                 // 166
     file.write((uint8_t *)_prefs->owner_info, sizeof(_prefs->owner_info));  // 170
     // 290
-    #ifdef GPS_POWER_SAVE
-    file.write((uint8_t *)&_prefs->gps_saver_mode, sizeof(_prefs->gps_saver_mode));
+    #if GPS_POWER_SAVE_ACTIVE
+    file.write((uint8_t *)&_prefs->gps_saver_mode, sizeof(_prefs->gps_saver_mode));   // 290
+    file.write((uint8_t *)&_prefs->gps_saver_hold, sizeof(_prefs->gps_saver_hold));   // 291
+    file.write((uint8_t *)&_prefs->gps_timeout_min, sizeof(_prefs->gps_timeout_min));  // 292
     #endif
 
     file.close();
@@ -716,6 +741,34 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
       const char *key = (num > 0) ? parts[0] : "";
       const char *value = (num > 1) ? parts[1] : "null";
       if (_sensors->setSettingValue(key, value)) {
+        #if ENV_INCLUDE_GPS == 1
+        if (strcmp(key, "gps") == 0) {
+          int v = atoi(value);
+          if (v == 0 || v == 1) {
+            _prefs->gps_enabled = (uint8_t)v;
+            savePrefs();
+          }
+        }
+        #endif
+        #if GPS_POWER_SAVE_ACTIVE
+        if (strcmp(key, "gps_saver_mode") == 0) {
+          const char* actual = _sensors->getSettingByKey("gps_saver_mode");
+          if (actual) {
+            int m = atoi(actual);
+            _prefs->gps_saver_mode = (uint8_t)(m >= 0 && m <= 2 ? m : 2);
+            savePrefs();
+          }
+        } else if (strcmp(key, "gps_saver_hold") == 0) {
+          int v = atoi(value);
+          if (v >= 5 && v <= 240) { _prefs->gps_saver_hold = (uint8_t)v; savePrefs(); }
+        } else if (strcmp(key, "gps_timeout") == 0) {
+          int v = atoi(value);
+          if (v >= 1 && v <= 15) { _prefs->gps_timeout_min = (uint8_t)v; savePrefs(); }
+        } else if (strcmp(key, "gps_interval") == 0) {
+          uint32_t v = (uint32_t)strtoul(value, NULL, 10);
+          if (v >= 3600 && v <= 2592000) { _prefs->gps_interval = v; savePrefs(); }
+        }
+        #endif
         strcpy(reply, "ok");
       } else {
         strcpy(reply, "can't find custom var");
@@ -747,10 +800,6 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
       }
 #if ENV_INCLUDE_GPS == 1
     } else if (memcmp(command, "gps on", 6) == 0) {
-      #if defined(GPS_POWER_SAVE)
-      _prefs->gps_saver_mode = 0;
-      _sensors->setSettingValue("gps_saver_mode", "off");
-      #endif
       if (_sensors->setSettingValue("gps", "1")) {
         _prefs->gps_enabled = 1;
         savePrefs();
@@ -766,16 +815,90 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
       } else {
         strcpy(reply, "gps toggle not found");
       }
-    #if defined(GPS_POWER_SAVE)
-    } else if (memcmp(command, "gps saver", 10) == 0) {
-      _prefs->gps_saver_mode = 1;
-      _sensors->setSettingValue("gps_saver_mode", "on");
-      if (_sensors->setSettingValue("gps", "1")) {
-        _prefs->gps_enabled = 1;
+    #if GPS_POWER_SAVE_ACTIVE
+    } else if (memcmp(command, "gps saver", 9) == 0) {
+      if (strlen(command) == 9) {
+        const char* mode_str = _prefs->gps_saver_mode == 0 ? "off" : _prefs->gps_saver_mode == 1 ? "bootonly" : "periodic";
+        sprintf(reply, "> %s", mode_str);
+      } else if (memcmp(command + 10, "off", 3) == 0 && (command[13] == 0 || command[13] == ' ')) {
+        _prefs->gps_saver_mode = 0;
+        _sensors->setSettingValue("gps_saver_mode", "0");
+        savePrefs();
+        strcpy(reply, "ok");
+      } else if (memcmp(command + 10, "bootonly", 8) == 0 && (command[18] == 0 || command[18] == ' ')) {
+        _prefs->gps_saver_mode = 1;
+        _sensors->setSettingValue("gps_saver_mode", "1");
+        savePrefs();
+        strcpy(reply, "ok");
+      } else if (memcmp(command + 10, "periodic", 8) == 0 && (command[18] == 0 || command[18] == ' ')) {
+        _prefs->gps_saver_mode = 2;
+        _sensors->setSettingValue("gps_saver_mode", "2");
         savePrefs();
         strcpy(reply, "ok");
       } else {
-        strcpy(reply, "gps toggle not found");
+        strcpy(reply, "error");
+      }
+    } else if (memcmp(command, "gps hold", 8) == 0) {
+      if (strlen(command) == 8) {
+        sprintf(reply, "> %d", (int)_prefs->gps_saver_hold);
+      } else {
+        int v = atoi(command + 9);
+        if (v >= 5 && v <= 240) {
+          _prefs->gps_saver_hold = (uint8_t)v;
+          _sensors->setSettingValue("gps_saver_hold", command + 9);
+          savePrefs();
+          strcpy(reply, "ok");
+        } else {
+          strcpy(reply, "error");
+        }
+      }
+    } else if (memcmp(command, "gps timeout", 11) == 0) {
+      if (strlen(command) == 11) {
+        sprintf(reply, "> %d", (int)_prefs->gps_timeout_min);
+      } else {
+        int v = atoi(command + 12);
+        if (v >= 1 && v <= 15) {
+          _prefs->gps_timeout_min = (uint8_t)v;
+          _sensors->setSettingValue("gps_timeout", command + 12);
+          savePrefs();
+          strcpy(reply, "ok");
+        } else {
+          strcpy(reply, "error");
+        }
+      }
+    } else if (memcmp(command, "gps interval", 12) == 0) {
+      if (strlen(command) == 12) {
+        sprintf(reply, "> %lu", (unsigned long)_prefs->gps_interval);
+      } else {
+        const char* val = command + 13;
+        uint32_t sec = 0;
+        char* end;
+        unsigned long n = strtoul(val, &end, 10);
+        if (end > val) {
+          if (*end == 'h' || *end == 'H') {
+            if (n >= 1 && n <= 720) sec = (uint32_t)(n * 3600);
+            end++;
+          } else if (*end == 'd' || *end == 'D') {
+            if (n >= 1 && n <= 30) sec = (uint32_t)(n * 86400);
+            end++;
+          } else if (*end == 0 || *end == ' ') {
+            sec = (uint32_t)n;
+          }
+          if (sec) {
+            while (*end == ' ') end++;
+            if (*end != 0) sec = 0;
+          }
+        }
+        if (sec >= 3600 && sec <= 2592000) {
+          _prefs->gps_interval = sec;
+          char buf[12];
+          snprintf(buf, sizeof(buf), "%lu", (unsigned long)sec);
+          _sensors->setSettingValue("gps_interval", buf);
+          savePrefs();
+          strcpy(reply, "ok");
+        } else {
+          strcpy(reply, "error");
+        }
       }
     #endif
     } else if (memcmp(command, "gps sync", 8) == 0) {
@@ -824,32 +947,42 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
     } else if (memcmp(command, "gps", 3) == 0) {
       LocationProvider * l = _sensors->getLocationProvider();
       if (l != NULL) {
-        bool enabled = l->isEnabled(); // is EN pin on ?
+        bool enabled = l->isEnabled(); // hardware on (gps_active)
         bool fix = l->isValid();       // has fix ?
         int sats = l->satellitesCount();
-        bool active = !strcmp(_sensors->getSettingByKey("gps"), "1");
-        if (enabled) {
-          sprintf(reply, "on, %s, %s, %d sats%s",
-            active?"active":"deactivated",
-            fix?"fix":"no fix",
+        bool active = !strcmp(_sensors->getSettingByKey("gps"), "1");  // gps_setting
+        #if GPS_POWER_SAVE_ACTIVE
+        uint8_t mode = _prefs->gps_saver_mode;
+        if (!active) {
+          strcpy(reply, "off");
+        } else if (enabled) {
+          sprintf(reply, "on, active, %s, %d sats%s",
+            fix ? "fix" : "no fix",
             sats,
-            #if defined(GPS_POWER_SAVE)
-            _prefs->gps_saver_mode ? ", saver" : ""
-            #else
-            ""
-            #endif
+            (mode == 1 || mode == 2) ? ", saver" : ""
           );
         } else {
-          #if defined(GPS_POWER_SAVE)
-          if (active) {
-            strcpy(reply, _prefs->gps_saver_mode ? "on, power-save" : "on");
+          if (mode == 0) {
+            strcpy(reply, "on");
+          } else if (mode == 1) {
+            strcpy(reply, "on, power-save, bootonly");
           } else {
-            strcpy(reply, "off");
+            char ivbuf[12];
+            formatGpsInterval(_prefs->gps_interval, ivbuf, sizeof(ivbuf));
+            sprintf(reply, "on, power-save, every %s", ivbuf);
           }
-          #else
-          strcpy(reply, "off");
-          #endif
         }
+        #else
+        if (enabled) {
+          sprintf(reply, "on, %s, %s, %d sats",
+            active ? "active" : "deactivated",
+            fix ? "fix" : "no fix",
+            sats
+          );
+        } else {
+          strcpy(reply, active ? "on" : "off");
+        }
+        #endif
       } else {
         strcpy(reply, "Can't find GPS");
       }

@@ -59,8 +59,10 @@ struct NodePrefs { // persisted to file
   char owner_info[120];
   uint8_t path_hash_mode;   // which path mode to use when sending
   uint8_t loop_detect;
-  #ifdef GPS_POWER_SAVE
-  uint8_t gps_saver_mode;       // 0=off, 1=on (boot-only)
+  #if GPS_POWER_SAVE_ACTIVE
+  uint8_t gps_saver_mode;       // 0=off, 1=bootonly, 2=periodic
+  uint8_t gps_saver_hold;       // 5–240 s, default 15
+  uint8_t gps_timeout_min;      // 1–15 min, default 5
   #endif
 };
 

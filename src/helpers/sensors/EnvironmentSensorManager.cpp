@@ -493,10 +493,13 @@ int EnvironmentSensorManager::getNumSettings() const {
   int settings = 0;
   #if ENV_INCLUDE_GPS
     if (gps_detected) {
-      settings++;
-      #if defined(GPS_POWER_SAVE)
+      settings++;  // gps
+      #if GPS_POWER_SAVE_ACTIVE
       settings++;  // gps_saver_mode
+      settings++;  // gps_saver_hold
+      settings++;  // gps_timeout
       #endif
+      settings++;  // gps_interval
     }
   #endif
   return settings;
@@ -506,9 +509,12 @@ const char* EnvironmentSensorManager::getSettingName(int i) const {
   int settings = 0;
   #if ENV_INCLUDE_GPS
     if (gps_detected && i == settings++) return "gps";
-    #if defined(GPS_POWER_SAVE)
+    #if GPS_POWER_SAVE_ACTIVE
     if (gps_detected && i == settings++) return "gps_saver_mode";
+    if (gps_detected && i == settings++) return "gps_saver_hold";
+    if (gps_detected && i == settings++) return "gps_timeout";
     #endif
+    if (gps_detected && i == settings++) return "gps_interval";
   #endif
   return NULL;
 }
@@ -517,17 +523,34 @@ const char* EnvironmentSensorManager::getSettingValue(int i) const {
   int settings = 0;
   #if ENV_INCLUDE_GPS
     if (gps_detected && i == settings++) {
-      #if defined(GPS_POWER_SAVE)
+      #if GPS_POWER_SAVE_ACTIVE
       return gps_setting ? "1" : "0";
       #else
       return gps_active ? "1" : "0";
       #endif
     }
-    #if defined(GPS_POWER_SAVE)
+    #if GPS_POWER_SAVE_ACTIVE
     if (gps_detected && i == settings++) {
-      return gps_saver_mode == 0 ? "off" : "on";
+      static char buf_mode[4];
+      snprintf(buf_mode, sizeof(buf_mode), "%d", gps_saver_mode);
+      return buf_mode;
+    }
+    if (gps_detected && i == settings++) {
+      static char buf_hold[4];
+      snprintf(buf_hold, sizeof(buf_hold), "%d", gps_saver_hold);
+      return buf_hold;
+    }
+    if (gps_detected && i == settings++) {
+      static char buf_timeout[4];
+      snprintf(buf_timeout, sizeof(buf_timeout), "%d", gps_timeout_min);
+      return buf_timeout;
     }
     #endif
+    if (gps_detected && i == settings++) {
+      static char buf_interval[12];
+      snprintf(buf_interval, sizeof(buf_interval), "%lu", (unsigned long)gps_update_interval_sec);
+      return buf_interval;
+    }
   #endif
   return NULL;
 }
@@ -535,7 +558,7 @@ const char* EnvironmentSensorManager::getSettingValue(int i) const {
 bool EnvironmentSensorManager::setSettingValue(const char* name, const char* value) {
   #if ENV_INCLUDE_GPS
   if (gps_detected && strcmp(name, "gps") == 0) {
-    #if defined(GPS_POWER_SAVE)
+    #if GPS_POWER_SAVE_ACTIVE
     gps_setting = (strcmp(value, "0") != 0);
     if (gps_setting) {
       start_gps();
@@ -551,12 +574,13 @@ bool EnvironmentSensorManager::setSettingValue(const char* name, const char* val
     #endif
     return true;
   }
-  #if defined(GPS_POWER_SAVE)
+  #if GPS_POWER_SAVE_ACTIVE
   if (strcmp(name, "gps_saver_mode") == 0) {
     uint8_t old_mode = gps_saver_mode;
     uint8_t new_mode = 0;
-    if (strcmp(value, "off") == 0) { new_mode = 0; }
-    else if (strcmp(value, "on") == 0) { new_mode = 1; }
+    if (strcmp(value, "0") == 0 || strcmp(value, "off") == 0) { new_mode = 0; }
+    else if (strcmp(value, "1") == 0 || strcmp(value, "bootonly") == 0 || strcmp(value, "on") == 0) { new_mode = 1; }
+    else if (strcmp(value, "2") == 0 || strcmp(value, "periodic") == 0) { new_mode = 2; }
     else return false;
 
     gps_saver_mode = new_mode;
@@ -568,18 +592,45 @@ bool EnvironmentSensorManager::setSettingValue(const char* name, const char* val
         stop_gps();
         _gps_hold_timer_active = false;
       }
+      if (new_mode == 2 && !gps_active && _rtc_clock) {
+        _next_gps_wake_unixtime = _rtc_clock->getCurrentTime() + gps_update_interval_sec;
+      }
     }
+    return true;
+  }
+  if (strcmp(name, "gps_saver_hold") == 0) {
+    int v = atoi(value);
+    if (v < 5 || v > 240) return false;
+    gps_saver_hold = (uint8_t)v;
+    return true;
+  }
+  if (strcmp(name, "gps_timeout") == 0) {
+    int v = atoi(value);
+    if (v < 1 || v > 15) return false;
+    gps_timeout_min = (uint8_t)v;
     return true;
   }
   #endif
   if (strcmp(name, "gps_interval") == 0) {
-    uint32_t interval_seconds = atoi(value);
+    uint32_t interval_seconds = (uint32_t)strtoul(value, NULL, 10);
+    #if GPS_POWER_SAVE_ACTIVE
+    // Repeaters: 3600–2592000 (1h–30d) for periodic; store anyway (always allowed)
+    if (interval_seconds >= 3600 && interval_seconds <= 2592000) {
+      gps_update_interval_sec = interval_seconds;
+      if (gps_saver_mode == 2 && !gps_active && _rtc_clock) {
+        _next_gps_wake_unixtime = _rtc_clock->getCurrentTime() + gps_update_interval_sec;
+      }
+      return true;
+    }
+    return false;
+    #else
     if (interval_seconds > 0) {
       gps_update_interval_sec = interval_seconds;
     } else {
-      gps_update_interval_sec = 1;  // Default to 1 second if 0
+      gps_update_interval_sec = 1;
     }
     return true;
+    #endif
   }
   #endif
   return false;  // not supported
@@ -589,10 +640,24 @@ void EnvironmentSensorManager::setRTCClock(mesh::RTCClock* rtc) {
   _rtc_clock = rtc;
 }
 
-#if defined(GPS_POWER_SAVE)
-void EnvironmentSensorManager::applyGpsSaverPrefs(uint8_t mode, mesh::RTCClock* rtc) {
+#if GPS_POWER_SAVE_ACTIVE
+void EnvironmentSensorManager::applyGpsSaverPrefs(uint8_t mode, uint8_t hold, uint8_t timeout_min, uint32_t interval_sec, mesh::RTCClock* rtc) {
   setRTCClock(rtc);
-  setSettingValue("gps_saver_mode", mode ? "on" : "off");
+  char buf[12];
+  snprintf(buf, sizeof(buf), "%d", mode);
+  setSettingValue("gps_saver_mode", buf);
+  snprintf(buf, sizeof(buf), "%d", hold);
+  setSettingValue("gps_saver_hold", buf);
+  snprintf(buf, sizeof(buf), "%d", timeout_min);
+  setSettingValue("gps_timeout", buf);
+  uint32_t iv = (interval_sec >= 3600 && interval_sec <= 2592000) ? interval_sec : 604800;
+  snprintf(buf, sizeof(buf), "%lu", (unsigned long)iv);
+  setSettingValue("gps_interval", buf);
+}
+
+void EnvironmentSensorManager::setGpsOffPersistCallback(void (*cb)(void*), void* user) {
+  _gps_off_persist_cb = cb;
+  _gps_off_persist_user = user;
 }
 #endif
 
@@ -730,6 +795,11 @@ bool EnvironmentSensorManager::gpsIsAwake(uint8_t ioPin){
 
 void EnvironmentSensorManager::start_gps() {
   gps_active = true;
+  #if ENV_INCLUDE_GPS && GPS_POWER_SAVE_ACTIVE
+  if (_rtc_clock) {
+    _gps_no_fix_start = _rtc_clock->getCurrentTime();
+  }
+  #endif
   #ifdef RAK_WISBLOCK_GPS
     pinMode(gpsResetPin, OUTPUT);
     digitalWrite(gpsResetPin, HIGH);
@@ -763,21 +833,48 @@ void EnvironmentSensorManager::loop() {
   static long next_gps_update = 0;
 
   #if ENV_INCLUDE_GPS
-  #if defined(GPS_POWER_SAVE)
-  // Boot-only power-save: when gps_active, hold 15s after fix then stop
-  if (_rtc_clock && gps_saver_mode == 1 && gps_setting && gps_active) {
+  #if GPS_POWER_SAVE_ACTIVE
+  uint32_t now = _rtc_clock ? _rtc_clock->getCurrentTime() : 0;
+
+  // No-fix timeout: gps_active && !isValid() for >= gps_timeout_min minutes
+  if (_rtc_clock && _gps_no_fix_start != 0 && gps_active && !_location->isValid()) {
+    uint32_t elapsed = now - _gps_no_fix_start;
+    if (elapsed >= (uint32_t)gps_timeout_min * 60) {
+      if (gps_saver_mode == 0) {
+        gps_setting = false;
+        stop_gps();
+        if (_gps_off_persist_cb) _gps_off_persist_cb(_gps_off_persist_user);
+      } else {
+        stop_gps();
+        if (gps_saver_mode == 2) {
+          _next_gps_wake_unixtime = now + gps_update_interval_sec;
+        }
+      }
+    }
+  }
+
+  // Boot-only or periodic hold: after fix + hold time, stop GPS
+  if (_rtc_clock && (gps_saver_mode == 1 || gps_saver_mode == 2) && gps_setting && gps_active) {
     if (_location->isValid() && !_location->waitingTimeSync()) {
       if (!_gps_hold_timer_active) {
-        _gps_hold_start_unixtime = _rtc_clock->getCurrentTime();
+        _gps_hold_start_unixtime = now;
         _gps_hold_timer_active = true;
       }
-      if (_rtc_clock->getCurrentTime() - _gps_hold_start_unixtime >= 15) {
+      if (now - _gps_hold_start_unixtime >= (uint32_t)gps_saver_hold) {
         stop_gps();
         _gps_hold_timer_active = false;
+        if (gps_saver_mode == 2) {
+          _next_gps_wake_unixtime = now + gps_update_interval_sec;
+        }
       }
     } else {
       _gps_hold_timer_active = false;
     }
+  }
+
+  // Periodic wake: when !gps_active and now >= _next_gps_wake
+  if (_rtc_clock && gps_saver_mode == 2 && gps_setting && !gps_active && now >= _next_gps_wake_unixtime) {
+    start_gps();
   }
   #endif
   if (gps_active) {
