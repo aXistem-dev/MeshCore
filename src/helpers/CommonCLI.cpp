@@ -98,10 +98,10 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     // 290
     #if GPS_POWER_SAVE_ACTIVE
     if (file.available() >= (int)sizeof(_prefs->gps_saver_mode)) {
-      file.read((uint8_t *)&_prefs->gps_saver_mode, sizeof(_prefs->gps_saver_mode));
+      file.read((uint8_t *)&_prefs->gps_saver_mode, sizeof(_prefs->gps_saver_mode));   // 290
       if (file.available() >= (int)(sizeof(_prefs->gps_saver_hold) + sizeof(_prefs->gps_timeout_min))) {
-        file.read((uint8_t *)&_prefs->gps_saver_hold, sizeof(_prefs->gps_saver_hold));
-        file.read((uint8_t *)&_prefs->gps_timeout_min, sizeof(_prefs->gps_timeout_min));
+        file.read((uint8_t *)&_prefs->gps_saver_hold, sizeof(_prefs->gps_saver_hold));   // 291
+        file.read((uint8_t *)&_prefs->gps_timeout_min, sizeof(_prefs->gps_timeout_min)); // 292
       } else {
         _prefs->gps_saver_hold = 15;
         _prefs->gps_timeout_min = 5;
@@ -205,9 +205,9 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *)_prefs->owner_info, sizeof(_prefs->owner_info));  // 170
     // 290
     #if GPS_POWER_SAVE_ACTIVE
-    file.write((uint8_t *)&_prefs->gps_saver_mode, sizeof(_prefs->gps_saver_mode));
-    file.write((uint8_t *)&_prefs->gps_saver_hold, sizeof(_prefs->gps_saver_hold));
-    file.write((uint8_t *)&_prefs->gps_timeout_min, sizeof(_prefs->gps_timeout_min));
+    file.write((uint8_t *)&_prefs->gps_saver_mode, sizeof(_prefs->gps_saver_mode));   // 290
+    file.write((uint8_t *)&_prefs->gps_saver_hold, sizeof(_prefs->gps_saver_hold));   // 291
+    file.write((uint8_t *)&_prefs->gps_timeout_min, sizeof(_prefs->gps_timeout_min));  // 292
     #endif
 
     file.close();
