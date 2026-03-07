@@ -805,7 +805,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
       }
     #if defined(GPS_POWER_SAVE)
     } else if (memcmp(command, "gps saver", 10) == 0) {
-      if (strlen(command) == 10) {
+      if (strlen(command) == 9) {
         const char* mode_str = _prefs->gps_saver_mode == 0 ? "off" : _prefs->gps_saver_mode == 1 ? "bootonly" : "periodic";
         sprintf(reply, "> %s", mode_str);
       } else if (memcmp(command + 11, "off", 3) == 0 && (command[14] == 0 || command[14] == ' ')) {
@@ -827,7 +827,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         strcpy(reply, "error");
       }
     } else if (memcmp(command, "gps hold", 9) == 0) {
-      if (strlen(command) == 9) {
+      if (strlen(command) == 8) {
         sprintf(reply, "> %d", (int)_prefs->gps_saver_hold);
       } else {
         int v = atoi(command + 10);
