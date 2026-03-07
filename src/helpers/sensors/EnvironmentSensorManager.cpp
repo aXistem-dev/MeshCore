@@ -617,6 +617,9 @@ bool EnvironmentSensorManager::setSettingValue(const char* name, const char* val
     // Repeaters: 3600–2592000 (1h–30d) for periodic; store anyway (always allowed)
     if (interval_seconds >= 3600 && interval_seconds <= 2592000) {
       gps_update_interval_sec = interval_seconds;
+      if (gps_saver_mode == 2 && !gps_active && _rtc_clock) {
+        _next_gps_wake_unixtime = _rtc_clock->getCurrentTime() + gps_update_interval_sec;
+      }
       return true;
     }
     return false;
@@ -650,6 +653,11 @@ void EnvironmentSensorManager::applyGpsSaverPrefs(uint8_t mode, uint8_t hold, ui
   uint32_t iv = (interval_sec >= 3600 && interval_sec <= 2592000) ? interval_sec : 604800;
   snprintf(buf, sizeof(buf), "%lu", (unsigned long)iv);
   setSettingValue("gps_interval", buf);
+}
+
+void EnvironmentSensorManager::setGpsOffPersistCallback(void (*cb)(void*), void* user) {
+  _gps_off_persist_cb = cb;
+  _gps_off_persist_user = user;
 }
 #endif
 
@@ -787,6 +795,11 @@ bool EnvironmentSensorManager::gpsIsAwake(uint8_t ioPin){
 
 void EnvironmentSensorManager::start_gps() {
   gps_active = true;
+  #if ENV_INCLUDE_GPS && defined(GPS_POWER_SAVE)
+  if (_rtc_clock) {
+    _gps_no_fix_start = _rtc_clock->getCurrentTime();
+  }
+  #endif
   #ifdef RAK_WISBLOCK_GPS
     pinMode(gpsResetPin, OUTPUT);
     digitalWrite(gpsResetPin, HIGH);
@@ -821,20 +834,47 @@ void EnvironmentSensorManager::loop() {
 
   #if ENV_INCLUDE_GPS
   #if defined(GPS_POWER_SAVE)
-  // Boot-only power-save: when gps_active, hold 15s after fix then stop
-  if (_rtc_clock && gps_saver_mode == 1 && gps_setting && gps_active) {
+  uint32_t now = _rtc_clock ? _rtc_clock->getCurrentTime() : 0;
+
+  // No-fix timeout: gps_active && !isValid() for >= gps_timeout_min minutes
+  if (_rtc_clock && _gps_no_fix_start != 0 && gps_active && !_location->isValid()) {
+    uint32_t elapsed = now - _gps_no_fix_start;
+    if (elapsed >= (uint32_t)gps_timeout_min * 60) {
+      if (gps_saver_mode == 0) {
+        gps_setting = false;
+        stop_gps();
+        if (_gps_off_persist_cb) _gps_off_persist_cb(_gps_off_persist_user);
+      } else {
+        stop_gps();
+        if (gps_saver_mode == 2) {
+          _next_gps_wake_unixtime = now + gps_update_interval_sec;
+        }
+      }
+    }
+  }
+
+  // Boot-only or periodic hold: after fix + hold time, stop GPS
+  if (_rtc_clock && (gps_saver_mode == 1 || gps_saver_mode == 2) && gps_setting && gps_active) {
     if (_location->isValid() && !_location->waitingTimeSync()) {
       if (!_gps_hold_timer_active) {
-        _gps_hold_start_unixtime = _rtc_clock->getCurrentTime();
+        _gps_hold_start_unixtime = now;
         _gps_hold_timer_active = true;
       }
-      if (_rtc_clock->getCurrentTime() - _gps_hold_start_unixtime >= 15) {
+      if (now - _gps_hold_start_unixtime >= (uint32_t)gps_saver_hold) {
         stop_gps();
         _gps_hold_timer_active = false;
+        if (gps_saver_mode == 2) {
+          _next_gps_wake_unixtime = now + gps_update_interval_sec;
+        }
       }
     } else {
       _gps_hold_timer_active = false;
     }
+  }
+
+  // Periodic wake: when !gps_active and now >= _next_gps_wake
+  if (_rtc_clock && gps_saver_mode == 2 && gps_setting && !gps_active && now >= _next_gps_wake_unixtime) {
+    start_gps();
   }
   #endif
   if (gps_active) {

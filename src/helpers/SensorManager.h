@@ -25,6 +25,10 @@ public:
   virtual LocationProvider* getLocationProvider() { return NULL; }
   virtual void setRTCClock(mesh::RTCClock* rtc) { (void)rtc; }
 
+  /// Optional: register callback when GPS is turned off due to no-fix timeout (mode off).
+  /// Default no-op; EnvironmentSensorManager overrides when GPS_POWER_SAVE is defined.
+  virtual void setGpsOffPersistCallback(void (*cb)(void*), void* user) { (void)cb; (void)user; }
+
   // Helper functions to manage setting by keys (useful in many places ...)
   const char* getSettingByKey(const char* key) {
     int num = getNumSettings();

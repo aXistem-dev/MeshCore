@@ -921,6 +921,9 @@ void MyMesh::begin(FILESYSTEM *fs) {
 
 #if ENV_INCLUDE_GPS == 1
   applyGpsPrefs();
+  #ifdef GPS_POWER_SAVE
+  sensors.setGpsOffPersistCallback([](void* user) { ((MyMesh*)user)->persistGpsOff(); }, this);
+  #endif
 #endif
 }
 

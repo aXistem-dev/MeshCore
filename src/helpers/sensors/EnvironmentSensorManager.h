@@ -36,6 +36,8 @@ protected:
   bool _gps_hold_timer_active = false;
   uint32_t _gps_no_fix_start = 0;    // unix time when GPS powered on
   uint32_t _next_gps_wake_unixtime = 0;  // for periodic mode
+  void (*_gps_off_persist_cb)(void*) = nullptr;
+  void* _gps_off_persist_user = nullptr;
   #endif
 
   #if ENV_INCLUDE_GPS
@@ -70,5 +72,6 @@ public:
   void setRTCClock(mesh::RTCClock* rtc) override;
   #if defined(GPS_POWER_SAVE)
   void applyGpsSaverPrefs(uint8_t mode, uint8_t hold, uint8_t timeout_min, uint32_t interval_sec, mesh::RTCClock* rtc);
+  void setGpsOffPersistCallback(void (*cb)(void*), void* user) override;
   #endif
 };

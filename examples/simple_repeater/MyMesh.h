@@ -164,6 +164,12 @@ protected:
     sensors.applyGpsSaverPrefs(_prefs.gps_saver_mode, _prefs.gps_saver_hold, _prefs.gps_timeout_min, _prefs.gps_interval, getRTCClock());
     #endif
   }
+  #ifdef GPS_POWER_SAVE
+  void persistGpsOff() {
+    _prefs.gps_enabled = 0;
+    savePrefs();
+  }
+  #endif
 #endif
 
   bool filterRecvFloodPacket(mesh::Packet* pkt) override;
