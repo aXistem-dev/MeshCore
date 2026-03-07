@@ -87,8 +87,17 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     #ifdef GPS_POWER_SAVE
     if (file.available() >= (int)sizeof(_prefs->gps_saver_mode)) {
       file.read((uint8_t *)&_prefs->gps_saver_mode, sizeof(_prefs->gps_saver_mode));
+      if (file.available() >= (int)(sizeof(_prefs->gps_saver_hold) + sizeof(_prefs->gps_timeout_min))) {
+        file.read((uint8_t *)&_prefs->gps_saver_hold, sizeof(_prefs->gps_saver_hold));
+        file.read((uint8_t *)&_prefs->gps_timeout_min, sizeof(_prefs->gps_timeout_min));
+      } else {
+        _prefs->gps_saver_hold = 15;
+        _prefs->gps_timeout_min = 5;
+      }
     } else {
       _prefs->gps_saver_mode = 1;
+      _prefs->gps_saver_hold = 15;
+      _prefs->gps_timeout_min = 5;
     }
     #endif
 
@@ -118,7 +127,9 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     _prefs->gps_enabled = constrain(_prefs->gps_enabled, 0, 1);
     _prefs->advert_loc_policy = constrain(_prefs->advert_loc_policy, 0, 2);
     #ifdef GPS_POWER_SAVE
-    _prefs->gps_saver_mode = constrain(_prefs->gps_saver_mode, 0, 1);
+    _prefs->gps_saver_mode = constrain(_prefs->gps_saver_mode, 0, 2);
+    _prefs->gps_saver_hold = constrain(_prefs->gps_saver_hold, 5, 240);
+    _prefs->gps_timeout_min = constrain(_prefs->gps_timeout_min, 1, 15);
     #endif
 
     file.close();
@@ -183,6 +194,8 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     // 290
     #ifdef GPS_POWER_SAVE
     file.write((uint8_t *)&_prefs->gps_saver_mode, sizeof(_prefs->gps_saver_mode));
+    file.write((uint8_t *)&_prefs->gps_saver_hold, sizeof(_prefs->gps_saver_hold));
+    file.write((uint8_t *)&_prefs->gps_timeout_min, sizeof(_prefs->gps_timeout_min));
     #endif
 
     file.close();
@@ -716,6 +729,22 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
       const char *key = (num > 0) ? parts[0] : "";
       const char *value = (num > 1) ? parts[1] : "null";
       if (_sensors->setSettingValue(key, value)) {
+        #if defined(GPS_POWER_SAVE)
+        if (strcmp(key, "gps_saver_mode") == 0) {
+          _prefs->gps_saver_mode = (uint8_t)atoi(value);
+          if (_prefs->gps_saver_mode > 2) _prefs->gps_saver_mode = 2;
+          savePrefs();
+        } else if (strcmp(key, "gps_saver_hold") == 0) {
+          int v = atoi(value);
+          if (v >= 5 && v <= 240) { _prefs->gps_saver_hold = (uint8_t)v; savePrefs(); }
+        } else if (strcmp(key, "gps_timeout") == 0) {
+          int v = atoi(value);
+          if (v >= 1 && v <= 15) { _prefs->gps_timeout_min = (uint8_t)v; savePrefs(); }
+        } else if (strcmp(key, "gps_interval") == 0) {
+          uint32_t v = (uint32_t)strtoul(value, NULL, 10);
+          if (v >= 3600 && v <= 2592000) { _prefs->gps_interval = v; savePrefs(); }
+        }
+        #endif
         strcpy(reply, "ok");
       } else {
         strcpy(reply, "can't find custom var");
@@ -747,10 +776,6 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
       }
 #if ENV_INCLUDE_GPS == 1
     } else if (memcmp(command, "gps on", 6) == 0) {
-      #if defined(GPS_POWER_SAVE)
-      _prefs->gps_saver_mode = 0;
-      _sensors->setSettingValue("gps_saver_mode", "off");
-      #endif
       if (_sensors->setSettingValue("gps", "1")) {
         _prefs->gps_enabled = 1;
         savePrefs();
@@ -768,14 +793,78 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
       }
     #if defined(GPS_POWER_SAVE)
     } else if (memcmp(command, "gps saver", 10) == 0) {
-      _prefs->gps_saver_mode = 1;
-      _sensors->setSettingValue("gps_saver_mode", "on");
-      if (_sensors->setSettingValue("gps", "1")) {
-        _prefs->gps_enabled = 1;
+      if (strlen(command) == 10) {
+        const char* mode_str = _prefs->gps_saver_mode == 0 ? "off" : _prefs->gps_saver_mode == 1 ? "bootonly" : "periodic";
+        sprintf(reply, "> %s", mode_str);
+      } else if (memcmp(command + 11, "off", 3) == 0 && (command[14] == 0 || command[14] == ' ')) {
+        _prefs->gps_saver_mode = 0;
+        _sensors->setSettingValue("gps_saver_mode", "0");
+        savePrefs();
+        strcpy(reply, "ok");
+      } else if (memcmp(command + 11, "bootonly", 8) == 0 && (command[19] == 0 || command[19] == ' ')) {
+        _prefs->gps_saver_mode = 1;
+        _sensors->setSettingValue("gps_saver_mode", "1");
+        savePrefs();
+        strcpy(reply, "ok");
+      } else if (memcmp(command + 11, "periodic", 8) == 0 && (command[19] == 0 || command[19] == ' ')) {
+        _prefs->gps_saver_mode = 2;
+        _sensors->setSettingValue("gps_saver_mode", "2");
         savePrefs();
         strcpy(reply, "ok");
       } else {
-        strcpy(reply, "gps toggle not found");
+        strcpy(reply, "error");
+      }
+    } else if (memcmp(command, "gps hold", 9) == 0) {
+      if (strlen(command) == 9) {
+        sprintf(reply, "> %d", (int)_prefs->gps_saver_hold);
+      } else {
+        int v = atoi(command + 10);
+        if (v >= 5 && v <= 240) {
+          _prefs->gps_saver_hold = (uint8_t)v;
+          _sensors->setSettingValue("gps_saver_hold", command + 10);
+          savePrefs();
+          strcpy(reply, "ok");
+        } else {
+          strcpy(reply, "error");
+        }
+      }
+    } else if (memcmp(command, "gps timeout", 11) == 0) {
+      if (strlen(command) == 11) {
+        sprintf(reply, "> %d", (int)_prefs->gps_timeout_min);
+      } else {
+        int v = atoi(command + 12);
+        if (v >= 1 && v <= 15) {
+          _prefs->gps_timeout_min = (uint8_t)v;
+          _sensors->setSettingValue("gps_timeout", command + 12);
+          savePrefs();
+          strcpy(reply, "ok");
+        } else {
+          strcpy(reply, "error");
+        }
+      }
+    } else if (memcmp(command, "gps interval", 12) == 0) {
+      if (strlen(command) == 12) {
+        sprintf(reply, "> %lu", (unsigned long)_prefs->gps_interval);
+      } else {
+        const char* val = command + 13;
+        uint32_t sec = 0;
+        if (memcmp(val, "1h", 2) == 0 && (val[2] == 0 || val[2] == ' ')) sec = 3600;
+        else if (memcmp(val, "4h", 2) == 0 && (val[2] == 0 || val[2] == ' ')) sec = 14400;
+        else if (memcmp(val, "12h", 3) == 0 && (val[3] == 0 || val[3] == ' ')) sec = 43200;
+        else if (memcmp(val, "1d", 2) == 0 && (val[2] == 0 || val[2] == ' ')) sec = 86400;
+        else if (memcmp(val, "7d", 2) == 0 && (val[2] == 0 || val[2] == ' ')) sec = 604800;
+        else if (memcmp(val, "30d", 3) == 0 && (val[3] == 0 || val[3] == ' ')) sec = 2592000;
+        else sec = (uint32_t)strtoul(val, NULL, 10);
+        if (sec >= 3600 && sec <= 2592000) {
+          _prefs->gps_interval = sec;
+          char buf[12];
+          snprintf(buf, sizeof(buf), "%lu", (unsigned long)sec);
+          _sensors->setSettingValue("gps_interval", buf);
+          savePrefs();
+          strcpy(reply, "ok");
+        } else {
+          strcpy(reply, "error");
+        }
       }
     #endif
     } else if (memcmp(command, "gps sync", 8) == 0) {

@@ -29,9 +29,13 @@ protected:
 
   #if ENV_INCLUDE_GPS && defined(GPS_POWER_SAVE)
   bool gps_setting = false;           // User intent: GPS on/off
-  uint8_t gps_saver_mode = 1;         // 0=off, 1=on (boot-only, fixed 15s hold)
+  uint8_t gps_saver_mode = 1;         // 0=off, 1=bootonly, 2=periodic
+  uint8_t gps_saver_hold = 15;       // 5–240 s
+  uint8_t gps_timeout_min = 5;       // 1–15 min
   uint32_t _gps_hold_start_unixtime = 0;
   bool _gps_hold_timer_active = false;
+  uint32_t _gps_no_fix_start = 0;    // unix time when GPS powered on
+  uint32_t _next_gps_wake_unixtime = 0;  // for periodic mode
   #endif
 
   #if ENV_INCLUDE_GPS
@@ -65,6 +69,6 @@ public:
   bool setSettingValue(const char* name, const char* value) override;
   void setRTCClock(mesh::RTCClock* rtc) override;
   #if defined(GPS_POWER_SAVE)
-  void applyGpsSaverPrefs(uint8_t gps_saver_mode, mesh::RTCClock* rtc);
+  void applyGpsSaverPrefs(uint8_t mode, uint8_t hold, uint8_t timeout_min, uint32_t interval_sec, mesh::RTCClock* rtc);
   #endif
 };
