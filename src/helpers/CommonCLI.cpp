@@ -22,6 +22,18 @@ static bool isValidName(const char *n) {
   return true;
 }
 
+#if defined(GPS_POWER_SAVE)
+static void formatGpsInterval(uint32_t sec, char* buf, size_t bufsize) {
+  if (sec == 3600) snprintf(buf, bufsize, "1h");
+  else if (sec == 14400) snprintf(buf, bufsize, "4h");
+  else if (sec == 43200) snprintf(buf, bufsize, "12h");
+  else if (sec == 86400) snprintf(buf, bufsize, "1d");
+  else if (sec == 604800) snprintf(buf, bufsize, "7d");
+  else if (sec == 2592000) snprintf(buf, bufsize, "30d");
+  else snprintf(buf, bufsize, "%lu", (unsigned long)sec);
+}
+#endif
+
 void CommonCLI::loadPrefs(FILESYSTEM* fs) {
   if (fs->exists("/com_prefs")) {
     loadPrefsInt(fs, "/com_prefs");   // new filename
@@ -913,32 +925,42 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
     } else if (memcmp(command, "gps", 3) == 0) {
       LocationProvider * l = _sensors->getLocationProvider();
       if (l != NULL) {
-        bool enabled = l->isEnabled(); // is EN pin on ?
+        bool enabled = l->isEnabled(); // hardware on (gps_active)
         bool fix = l->isValid();       // has fix ?
         int sats = l->satellitesCount();
-        bool active = !strcmp(_sensors->getSettingByKey("gps"), "1");
-        if (enabled) {
-          sprintf(reply, "on, %s, %s, %d sats%s",
-            active?"active":"deactivated",
-            fix?"fix":"no fix",
+        bool active = !strcmp(_sensors->getSettingByKey("gps"), "1");  // gps_setting
+        #if defined(GPS_POWER_SAVE)
+        uint8_t mode = _prefs->gps_saver_mode;
+        if (!active) {
+          strcpy(reply, "off");
+        } else if (enabled) {
+          sprintf(reply, "on, active, %s, %d sats%s",
+            fix ? "fix" : "no fix",
             sats,
-            #if defined(GPS_POWER_SAVE)
-            _prefs->gps_saver_mode ? ", saver" : ""
-            #else
-            ""
-            #endif
+            (mode == 1 || mode == 2) ? ", saver" : ""
           );
         } else {
-          #if defined(GPS_POWER_SAVE)
-          if (active) {
-            strcpy(reply, _prefs->gps_saver_mode ? "on, power-save" : "on");
+          if (mode == 0) {
+            strcpy(reply, "on");
+          } else if (mode == 1) {
+            strcpy(reply, "on, power-save, bootonly");
           } else {
-            strcpy(reply, "off");
+            char ivbuf[12];
+            formatGpsInterval(_prefs->gps_interval, ivbuf, sizeof(ivbuf));
+            sprintf(reply, "on, power-save, every %s", ivbuf);
           }
-          #else
-          strcpy(reply, "off");
-          #endif
         }
+        #else
+        if (enabled) {
+          sprintf(reply, "on, %s, %s, %d sats",
+            active ? "active" : "deactivated",
+            fix ? "fix" : "no fix",
+            sats
+          );
+        } else {
+          strcpy(reply, active ? "on" : "off");
+        }
+        #endif
       } else {
         strcpy(reply, "Can't find GPS");
       }
