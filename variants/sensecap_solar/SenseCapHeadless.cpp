@@ -16,7 +16,8 @@
 
 static const unsigned long GPS_LED_SLOW_BLINK_MS = 800;
 static const unsigned long GPS_LED_LOCK_CONFIRM_MS = 3000;
-static const int GPS_LED_FAST_BLINKS = 3;
+static const int GPS_LED_FAST_BLINKS = 3;       // power-down / user-off
+static const int GPS_LED_POWER_ON_BLINKS = 2;   // power-save wake
 static const unsigned long GPS_LED_FAST_ON_MS = 100;
 static const unsigned long GPS_LED_FAST_OFF_MS = 100;
 
@@ -97,7 +98,7 @@ void SenseCapHeadless::pollGpsLed() {
 
   if (_gps_led_state == 0) {
     if (gps_active && !gps_valid) {
-      _gps_led_state = 1;
+      _gps_led_state = 4;  // power-on blink (e.g. power-save wake), then state 1
       _gps_led_ts = now;
       _gps_led_was_valid = false;
     }
@@ -106,8 +107,8 @@ void SenseCapHeadless::pollGpsLed() {
 
   if (_gps_led_state == 1) {
     if (!gps_active) {
-      _gps_led_state = 0;
-      digitalWrite(LED_WHITE, LOW);
+      _gps_led_state = 3;  // power-down blink (power-save or user-off)
+      _gps_led_ts = now;
       return;
     }
     if (gps_valid) {
@@ -124,8 +125,8 @@ void SenseCapHeadless::pollGpsLed() {
 
   if (_gps_led_state == 2) {
     if (!gps_active) {
-      _gps_led_state = 0;
-      digitalWrite(LED_WHITE, LOW);
+      _gps_led_state = 3;  // power-down blink (power-save or user-off)
+      _gps_led_ts = now;
       return;
     }
     if (now - _gps_led_ts >= GPS_LED_LOCK_CONFIRM_MS) {
@@ -142,6 +143,25 @@ void SenseCapHeadless::pollGpsLed() {
     if (blink >= GPS_LED_FAST_BLINKS) {
       _gps_led_state = 0;
       digitalWrite(LED_WHITE, LOW);
+      return;
+    }
+    unsigned long pos = elapsed % cycle;
+    digitalWrite(LED_WHITE, (pos < GPS_LED_FAST_ON_MS) ? HIGH : LOW);
+    return;
+  }
+
+  if (_gps_led_state == 4) {
+    if (!gps_active) {
+      _gps_led_state = 3;  // GPS turned off during power-on blink
+      _gps_led_ts = now;
+      return;
+    }
+    unsigned long cycle = GPS_LED_FAST_ON_MS + GPS_LED_FAST_OFF_MS;
+    unsigned long elapsed = now - _gps_led_ts;
+    int blink = (int)(elapsed / cycle);
+    if (blink >= GPS_LED_POWER_ON_BLINKS) {
+      _gps_led_state = 1;  // continue to slow blink (searching)
+      _gps_led_ts = now;
       return;
     }
     unsigned long pos = elapsed % cycle;
