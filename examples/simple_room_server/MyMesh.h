@@ -159,6 +159,12 @@ protected:
     sensors.applyGpsSaverPrefs(_prefs.gps_saver_mode, _prefs.gps_saver_hold, _prefs.gps_timeout_min, _prefs.gps_interval, getRTCClock());
     #endif
   }
+  #if GPS_POWER_SAVE_ACTIVE
+  void persistGpsOff() {
+    _prefs.gps_enabled = 0;
+    savePrefs();
+  }
+  #endif
 #endif
 
 public:
