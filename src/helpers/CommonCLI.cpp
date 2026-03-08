@@ -112,6 +112,11 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
       _prefs->gps_timeout_min = 5;
     }
     #endif
+    if (file.available() >= (int)sizeof(_prefs->telem_loc_policy)) {
+      file.read((uint8_t *)&_prefs->telem_loc_policy, sizeof(_prefs->telem_loc_policy));
+    } else {
+      _prefs->telem_loc_policy = TELEM_LOC_ALLOW;
+    }
 
     // sanitise bad pref values
     _prefs->rx_delay_base = constrain(_prefs->rx_delay_base, 0, 20.0f);
@@ -138,6 +143,7 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
 
     _prefs->gps_enabled = constrain(_prefs->gps_enabled, 0, 1);
     _prefs->advert_loc_policy = constrain(_prefs->advert_loc_policy, 0, 2);
+    _prefs->telem_loc_policy = constrain(_prefs->telem_loc_policy, 0, 2);
     #if GPS_POWER_SAVE_ACTIVE
     _prefs->gps_saver_mode = constrain(_prefs->gps_saver_mode, 0, 2);
     _prefs->gps_saver_hold = constrain(_prefs->gps_saver_hold, 5, 240);
@@ -209,6 +215,7 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *)&_prefs->gps_saver_hold, sizeof(_prefs->gps_saver_hold));   // 291
     file.write((uint8_t *)&_prefs->gps_timeout_min, sizeof(_prefs->gps_timeout_min));  // 292
     #endif
+    file.write((uint8_t *)&_prefs->telem_loc_policy, sizeof(_prefs->telem_loc_policy));
 
     file.close();
   }
@@ -728,11 +735,15 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
       sprintf(reply, "%s", _board->getManufacturerName());
     } else if (memcmp(command, "sensor get ", 11) == 0) {
       const char* key = command + 11;
-      const char* val = _sensors->getSettingByKey(key);
-      if (val != NULL) {
-        sprintf(reply, "> %s", val);
+      if (strcmp(key, "telem_loc_policy") == 0) {
+        sprintf(reply, "> %d", _prefs->telem_loc_policy);
       } else {
-        strcpy(reply, "null");
+        const char* val = _sensors->getSettingByKey(key);
+        if (val != NULL) {
+          sprintf(reply, "> %s", val);
+        } else {
+          strcpy(reply, "null");
+        }
       }
     } else if (memcmp(command, "sensor set ", 11) == 0) {
       strcpy(tmp, &command[11]);
@@ -740,7 +751,16 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
       int num = mesh::Utils::parseTextParts(tmp, parts, 2, ' ');
       const char *key = (num > 0) ? parts[0] : "";
       const char *value = (num > 1) ? parts[1] : "null";
-      if (_sensors->setSettingValue(key, value)) {
+      if (strcmp(key, "telem_loc_policy") == 0) {
+        int v = atoi(value);
+        if (v >= 0 && v <= 2) {
+          _prefs->telem_loc_policy = (uint8_t)v;
+          savePrefs();
+          strcpy(reply, "ok");
+        } else {
+          strcpy(reply, "can't find custom var");
+        }
+      } else if (_sensors->setSettingValue(key, value)) {
         #if ENV_INCLUDE_GPS == 1
         if (strcmp(key, "gps") == 0) {
           int v = atoi(value);
@@ -770,7 +790,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         }
         #endif
         strcpy(reply, "ok");
-      } else {
+      } else if (strcmp(key, "telem_loc_policy") != 0) {
         strcpy(reply, "can't find custom var");
       }
     } else if (memcmp(command, "sensor list", 11) == 0) {
@@ -939,6 +959,36 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         strcpy(reply, "ok");
       } else if (memcmp(command+11, "prefs", 5) == 0) {
         _prefs->advert_loc_policy = ADVERT_LOC_PREFS;
+        savePrefs();
+        strcpy(reply, "ok");
+      } else {
+        strcpy(reply, "error");
+      }
+    } else if (memcmp(command, "gps telem", 9) == 0) {
+      if (strlen(command) == 9) {
+        switch (_prefs->telem_loc_policy) {
+          case TELEM_LOC_DENY:
+            strcpy(reply, "> deny");
+            break;
+          case TELEM_LOC_ALLOW:
+            strcpy(reply, "> allow");
+            break;
+          case TELEM_LOC_ALWAYS:
+            strcpy(reply, "> always");
+            break;
+          default:
+            strcpy(reply, "error");
+        }
+      } else if (memcmp(command+10, "deny", 4) == 0 && (command[14] == 0 || command[14] == ' ')) {
+        _prefs->telem_loc_policy = TELEM_LOC_DENY;
+        savePrefs();
+        strcpy(reply, "ok");
+      } else if (memcmp(command+10, "allow", 5) == 0 && (command[15] == 0 || command[15] == ' ')) {
+        _prefs->telem_loc_policy = TELEM_LOC_ALLOW;
+        savePrefs();
+        strcpy(reply, "ok");
+      } else if (memcmp(command+10, "always", 6) == 0 && (command[16] == 0 || command[16] == ' ')) {
+        _prefs->telem_loc_policy = TELEM_LOC_ALWAYS;
         savePrefs();
         strcpy(reply, "ok");
       } else {

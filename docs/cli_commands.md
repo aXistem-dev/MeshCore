@@ -779,6 +779,23 @@ region save
 
 ---
 
+#### View or change the telemetry location policy
+**Usage:**
+- `gps telem`
+- `gps telem <policy>`
+
+**Parameters:** 
+- `policy`: `deny`|`allow`|`always` 
+  - `deny`: never include location in telemetry responses
+  - `allow`: include location only for non-guest users (access control: read-only or higher) when requested
+  - `always`: include location for all users who can request telemetry (including guests)
+
+**Default:** `allow`
+
+**Note:** This controls whether real GPS coordinates are included in telemetry responses. It is separate from `gps advert`, which controls location in advertisements.
+
+---
+
 #### GPS power-save (repeaters with GPS_POWER_SAVE)
 
 **Usage:**
@@ -813,7 +830,7 @@ region save
 
 ---
 
-#### View or change thevalue of a sensor
+#### View or change the value of a sensor
 **Usage:** 
 - `sensor get <key>`
 - `sensor set <key> <value>`
@@ -821,6 +838,9 @@ region save
 **Parameters:**
 - `key`: Sensor setting name
 - `value`: The value to set the sensor to
+
+**Repeater/room-server prefs (not in sensor list):**
+- `telem_loc_policy`: 0=deny, 1=allow, 2=always (see `gps telem`)
 
 ---
 

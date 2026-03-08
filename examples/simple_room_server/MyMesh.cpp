@@ -170,6 +170,12 @@ int MyMesh::handleRequest(ClientInfo *sender, uint32_t sender_timestamp, uint8_t
     if ((sender->permissions & PERM_ACL_ROLE_MASK) == PERM_ACL_GUEST) {
       perm_mask = 0x00;  // just base telemetry allowed
     }
+    // apply telem_loc_policy: deny / allow (non-guest) / always
+    if (_prefs.telem_loc_policy == TELEM_LOC_DENY) {
+      perm_mask &= ~TELEM_PERM_LOCATION;
+    } else if (_prefs.telem_loc_policy == TELEM_LOC_ALWAYS) {
+      perm_mask |= TELEM_PERM_LOCATION;
+    }
     sensors.querySensors(perm_mask, telemetry);
 
     uint8_t tlen = telemetry.getSize();
@@ -625,6 +631,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.gps_enabled = 0;
   _prefs.gps_interval = 0;
   _prefs.advert_loc_policy = ADVERT_LOC_PREFS;
+  _prefs.telem_loc_policy = TELEM_LOC_ALLOW;
   #if GPS_POWER_SAVE_ACTIVE
   _prefs.gps_saver_mode = 1;
   #endif
