@@ -28,6 +28,7 @@ void SenseCapHeadless::begin(mesh::MainBoard* board, EnvironmentSensorManager* s
   _gps_led_state = 0;
   _gps_led_ts = 0;
   _gps_led_was_valid = false;
+  _gps_led_was_active = false;
   _usr_press_count = 0;
   _usr_window_end = 0;
   _usr_was_pressed = false;
@@ -101,39 +102,46 @@ void SenseCapHeadless::pollGpsLed() {
       _gps_led_state = 4;  // power-on blink (e.g. power-save wake), then state 1
       _gps_led_ts = now;
       _gps_led_was_valid = false;
+      goto update_was_active;
     }
-    return;
+    if (_gps_led_was_active && !gps_active) {
+      // GPS just powered down (e.g. hold period ended in power-save) -> power-down blink
+      _gps_led_state = 3;
+      _gps_led_ts = now;
+      goto update_was_active;
+    }
+    goto update_was_active;
   }
 
   if (_gps_led_state == 1) {
     if (!gps_active) {
       _gps_led_state = 3;  // power-down blink (power-save or user-off)
       _gps_led_ts = now;
-      return;
+      goto update_was_active;
     }
     if (gps_valid) {
       _gps_led_state = 2;
       _gps_led_ts = now;
       digitalWrite(LED_WHITE, HIGH);
-      return;
+      goto update_was_active;
     }
     unsigned long half = GPS_LED_SLOW_BLINK_MS / 2;
     unsigned long phase = (now - _gps_led_ts) % GPS_LED_SLOW_BLINK_MS;
     digitalWrite(LED_WHITE, (phase < half) ? HIGH : LOW);
-    return;
+    goto update_was_active;
   }
 
   if (_gps_led_state == 2) {
     if (!gps_active) {
       _gps_led_state = 3;  // power-down blink (power-save or user-off)
       _gps_led_ts = now;
-      return;
+      goto update_was_active;
     }
     if (now - _gps_led_ts >= GPS_LED_LOCK_CONFIRM_MS) {
       _gps_led_state = 0;
       digitalWrite(LED_WHITE, LOW);
     }
-    return;
+    goto update_was_active;
   }
 
   if (_gps_led_state == 3) {
@@ -143,18 +151,18 @@ void SenseCapHeadless::pollGpsLed() {
     if (blink >= GPS_LED_FAST_BLINKS) {
       _gps_led_state = 0;
       digitalWrite(LED_WHITE, LOW);
-      return;
+      goto update_was_active;
     }
     unsigned long pos = elapsed % cycle;
     digitalWrite(LED_WHITE, (pos < GPS_LED_FAST_ON_MS) ? HIGH : LOW);
-    return;
+    goto update_was_active;
   }
 
   if (_gps_led_state == 4) {
     if (!gps_active) {
       _gps_led_state = 3;  // GPS turned off during power-on blink
       _gps_led_ts = now;
-      return;
+      goto update_was_active;
     }
     unsigned long cycle = GPS_LED_FAST_ON_MS + GPS_LED_FAST_OFF_MS;
     unsigned long elapsed = now - _gps_led_ts;
@@ -162,11 +170,14 @@ void SenseCapHeadless::pollGpsLed() {
     if (blink >= GPS_LED_POWER_ON_BLINKS) {
       _gps_led_state = 1;  // continue to slow blink (searching)
       _gps_led_ts = now;
-      return;
+      goto update_was_active;
     }
     unsigned long pos = elapsed % cycle;
     digitalWrite(LED_WHITE, (pos < GPS_LED_FAST_ON_MS) ? HIGH : LOW);
   }
+
+update_was_active:
+  _gps_led_was_active = gps_active;
 #endif
 }
 
