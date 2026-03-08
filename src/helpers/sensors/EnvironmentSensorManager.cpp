@@ -337,8 +337,14 @@ bool EnvironmentSensorManager::begin() {
 bool EnvironmentSensorManager::querySensors(uint8_t requester_permissions, CayenneLPP& telemetry) {
   next_available_channel = TELEM_CHANNEL_SELF + 1;
 
-  if (requester_permissions & TELEM_PERM_LOCATION && gps_active) {
-    telemetry.addGPS(TELEM_CHANNEL_SELF, node_lat, node_lon, node_altitude); // allow lat/lon via telemetry even if no GPS is detected
+  #if GPS_POWER_SAVE_ACTIVE
+  // Send GPS when active, or when power-save has powered down but we have last known position
+  bool send_gps = gps_active || (gps_setting && (node_lat != 0 || node_lon != 0));
+  #else
+  bool send_gps = gps_active;
+  #endif
+  if (requester_permissions & TELEM_PERM_LOCATION && send_gps) {
+    telemetry.addGPS(TELEM_CHANNEL_SELF, node_lat, node_lon, node_altitude);
   }
 
   if (requester_permissions & TELEM_PERM_ENVIRONMENT) {
@@ -901,7 +907,10 @@ void EnvironmentSensorManager::loop() {
     }
     #endif
     }
-    next_gps_update = millis() + (gps_update_interval_sec * 1000);
+    // When gps_active: poll every 1s to capture fix (gps_update_interval_sec is for periodic wake, not read rate)
+    // When gps_update_interval_sec > 1h (repeater) or 0: use 1s. Else: use gps_update_interval_sec (companion)
+    uint32_t read_interval_ms = (gps_update_interval_sec > 3600 || gps_update_interval_sec == 0) ? 1000 : (gps_update_interval_sec * 1000);
+    next_gps_update = millis() + read_interval_ms;
   }
   #endif
 }
