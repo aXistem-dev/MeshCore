@@ -30,6 +30,7 @@ private:
   uint8_t _gps_led_state = 0;
   unsigned long _gps_led_ts = 0;
   bool _gps_led_was_valid = false;
+  bool _gps_led_was_active = false;  // to detect power-down after hold (state 0 -> state 3)
 };
 
 #endif
