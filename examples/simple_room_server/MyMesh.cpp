@@ -706,10 +706,6 @@ void MyMesh::begin(FILESYSTEM *fs) {
   applyGpsPrefs();
 #endif
 #ifdef WITH_MQTT_BRIDGE
-  // Set MQTT origin to actual device name (not build-time ADVERT_NAME) - same as repeater
-  StrHelper::strncpy(_prefs.mqtt_origin, _prefs.node_name, sizeof(_prefs.mqtt_origin));
-  MESH_DEBUG_PRINTLN("MQTT origin set to device name: %s", _prefs.mqtt_origin);
-
   if (_prefs.bridge_enabled) {
     // Set device public key for MQTT topics (same as repeater)
     char device_id[65];
