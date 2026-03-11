@@ -1667,11 +1667,11 @@ bool MQTTBridge::publishStatus() {
             
             // Always publish to Let's Mesh Analyzer servers if enabled and connected
             // Use shared helper function to publish same JSON to both servers (avoids duplication)
-            // Use same memory threshold as main check (60000) for consistency
+            // Use same critical threshold (58000) as packet/raw for consistency
             if (_cached_has_analyzer_servers) {
               #ifdef ESP32
               size_t max_alloc = ESP.getMaxAllocHeap();
-              if (max_alloc >= 60000) {  // Same threshold as main memory check
+              if (max_alloc >= 58000) {  // Only skip when critical
               #endif
                 // publishToAnalyzerServers returns true if at least one publish succeeded
                 if (publishToAnalyzerServers(topic, json_buffer, true)) {  // retained=true for status
@@ -1711,18 +1711,18 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
     return;
   }
   
-  // Memory pressure check: Skip publishes when heap is severely fragmented
-  // This prevents further fragmentation and allows memory to recover
-  // Threshold: Max alloc < 60KB indicates severe fragmentation
+  // Memory pressure check: Skip publishes only when heap is in *critical* fragmentation,
+  // matching runCriticalMemoryCheckAndRecovery (PRESSURE_THRESHOLD_CRITICAL = 58000).
+  // This avoids skipping when status still works (status uses smaller buffer, no early skip).
   #ifdef ESP32
   unsigned long now = millis();
   if (now - _last_memory_check > 5000) {  // Check every 5 seconds
     size_t max_alloc = ESP.getMaxAllocHeap();
-    if (max_alloc < 60000) {  // Less than 60KB max alloc = severe fragmentation
+    if (max_alloc < 58000) {  // Critical only: skip to allow recovery
       _skipped_publishes++;
       static unsigned long last_skip_log = 0;
       if (now - last_skip_log > 60000) {  // Log every minute
-        MQTT_DEBUG_PRINTLN("MQTT: Skipping publish due to memory pressure (Max alloc: %d, skipped: %d)", max_alloc, _skipped_publishes);
+        MQTT_DEBUG_PRINTLN("MQTT: Skipping packet publish due to critical memory (max_alloc: %d, skipped: %d)", max_alloc, _skipped_publishes);
         last_skip_log = now;
       }
       return;  // Skip this publish to allow memory to recover
@@ -1737,6 +1737,12 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
   char* json_buffer_psram = (char*)psram_malloc(PUBLISH_JSON_BUFFER_SIZE);
   if (json_buffer_psram == nullptr) {
     _skipped_publishes++;
+    static unsigned long last_alloc_fail_log = 0;
+    unsigned long now_alloc = millis();
+    if (now_alloc - last_alloc_fail_log > 60000) {
+      MQTT_DEBUG_PRINTLN("MQTT: Skipping packet publish - buffer allocation failed (skipped: %d)", _skipped_publishes);
+      last_alloc_fail_log = now_alloc;
+    }
     return;
   }
   char* active_buffer = json_buffer_psram;
@@ -1835,10 +1841,10 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
     }
     
     // Always publish to Let's Mesh Analyzer servers (independent of custom broker config)
-    // Skip analyzer servers if memory is severely fragmented (they're less critical than custom brokers)
+    // Skip analyzer servers only when heap is critical (match PRESSURE_THRESHOLD_CRITICAL)
     #ifdef ESP32
     size_t max_alloc = ESP.getMaxAllocHeap();
-    if (max_alloc >= 60000) {  // Only publish to analyzer servers if memory is OK
+    if (max_alloc >= 58000) {  // Only skip when critical
       publishToAnalyzerServers(topic, active_buffer, false);
     }
     #else
@@ -1874,6 +1880,12 @@ void MQTTBridge::publishRaw(mesh::Packet* packet) {
   char* json_buffer_psram = (char*)psram_malloc(2048);
   if (json_buffer_psram == nullptr) {
     _skipped_publishes++;
+    static unsigned long last_raw_alloc_fail_log = 0;
+    unsigned long now_raw = millis();
+    if (now_raw - last_raw_alloc_fail_log > 60000) {
+      MQTT_DEBUG_PRINTLN("MQTT: Skipping raw publish - buffer allocation failed (skipped: %d)", _skipped_publishes);
+      last_raw_alloc_fail_log = now_raw;
+    }
     return;
   }
   char* active_buffer = json_buffer_psram;
@@ -1946,10 +1958,10 @@ void MQTTBridge::publishRaw(mesh::Packet* packet) {
     }
     
     // Always publish to Let's Mesh Analyzer servers (independent of custom broker config)
-    // Skip analyzer servers if memory is severely fragmented (they're less critical than custom brokers)
+    // Skip analyzer servers only when heap is critical (match PRESSURE_THRESHOLD_CRITICAL)
     #ifdef ESP32
     size_t max_alloc = ESP.getMaxAllocHeap();
-    if (max_alloc >= 60000) {  // Only publish to analyzer servers if memory is OK
+    if (max_alloc >= 58000) {  // Only skip when critical
       publishToAnalyzerServers(topic, active_buffer, false);
     }
     #else
