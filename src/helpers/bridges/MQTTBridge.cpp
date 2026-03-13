@@ -1782,11 +1782,11 @@ bool MQTTBridge::publishStatus() {
             
             // Always publish to Let's Mesh Analyzer servers if enabled and connected
             // Use shared helper function to publish same JSON to both servers (avoids duplication)
-            // Use same memory threshold as main check (60000) for consistency
+            // Use same critical threshold (58000) as packet/raw for consistency
             if (_cached_has_analyzer_servers) {
               #ifdef ESP32
               size_t max_alloc = ESP.getMaxAllocHeap();
-              if (max_alloc >= 60000) {  // Same threshold as main memory check
+              if (max_alloc >= 58000) {  // Only skip when critical
               #endif
                 // publishToAnalyzerServers returns true if at least one publish succeeded
                 if (publishToAnalyzerServers(topic, json_buffer, true)) {  // retained=true for status
@@ -1823,7 +1823,6 @@ bool MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
     }
     return false;
   }
-
   bool pressure_mode = false;
   bool critical_mode = false;
   size_t max_alloc = 0;
@@ -1833,7 +1832,8 @@ bool MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
     _last_memory_check = now;
   }
   max_alloc = ESP.getMaxAllocHeap();
-  critical_mode = (max_alloc < 55000);
+  // Align critical cutoff with recovery logic threshold (58 KB).
+  critical_mode = (max_alloc < 58000);
   pressure_mode = (!critical_mode && max_alloc < 70000);
   if (pressure_mode || critical_mode) {
     _low_memory_mode_count++;
@@ -1954,10 +1954,9 @@ bool MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
         }
       }
     }
-
     // Preserve core packet flow first; shed analyzer traffic in critical memory mode.
     #ifdef ESP32
-    if (!critical_mode && max_alloc >= 60000) {
+  if (!critical_mode && max_alloc >= 58000) {
       if (publishToAnalyzerServers(topic, active_buffer, false)) {
         published_any = true;
       }
@@ -2071,10 +2070,9 @@ bool MQTTBridge::publishRaw(mesh::Packet* packet) {
         }
       }
     }
-
     #ifdef ESP32
     size_t max_alloc = ESP.getMaxAllocHeap();
-    if (max_alloc >= 60000) {
+  if (max_alloc >= 58000) {
       if (publishToAnalyzerServers(topic, active_buffer, false)) {
         published_any = true;
       }
