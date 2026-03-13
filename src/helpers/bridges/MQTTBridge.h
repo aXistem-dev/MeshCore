@@ -95,6 +95,8 @@ private:
     uint8_t packet_data[MAX_TRANS_UNIT + 1];
     uint8_t packet_len;
     bool is_tx;
+    uint8_t retry_count;
+    unsigned long retry_not_before_ms;
     // Store raw radio data with each packet to avoid it being overwritten
     uint8_t raw_data[256];
     uint16_t raw_len;
@@ -159,6 +161,9 @@ private:
   // Memory pressure monitoring
   unsigned long _last_memory_check;
   int _skipped_publishes;  // Count of skipped publishes due to memory pressure
+  unsigned long _queue_drop_count;
+  unsigned long _queue_retry_count;
+  unsigned long _low_memory_mode_count;
   unsigned long _last_fragmentation_recovery;  // Throttle: 5 min between recovery runs (task + loop)
   unsigned long _fragmentation_pressure_since;  // 0 = not under pressure; else first time max_alloc < threshold
   unsigned long _last_critical_check_run;  // Throttle: run unified check at most every 60s
@@ -214,6 +219,14 @@ private:
   mesh::Radio* _radio;             // For noise floor
   mesh::MainBoard* _board;         // For battery voltage
   mesh::MillisecondClock* _ms;    // For uptime
+
+  // Reusable JSON publish buffers to avoid per-message heap churn.
+  static const size_t STATUS_JSON_BUFFER_SIZE = 768;
+  static const size_t PUBLISH_JSON_BUFFER_SIZE = 2048;
+  static const size_t RAW_JSON_BUFFER_SIZE = 2048;
+  char* _status_json_buffer;
+  char* _publish_json_buffer;
+  char* _raw_json_buffer;
   
   // Internal methods
   void ensureMainMqttClient();  // Create main MQTT client if _config_valid and _mqtt_client is null (e.g. after reinit)
@@ -234,10 +247,10 @@ private:
   void mqttTaskLoop();  // Main loop for MQTT task
   void initializeWiFiInTask();  // WiFi initialization moved to task
   #endif
-  void publishPacket(mesh::Packet* packet, bool is_tx, 
-                     const uint8_t* raw_data = nullptr, int raw_len = 0, 
-                     float snr = 0.0f, float rssi = 0.0f);
-  void publishRaw(mesh::Packet* packet);
+  bool publishPacket(mesh::Packet* packet, bool is_tx,
+                    const uint8_t* raw_data = nullptr, int raw_len = 0,
+                    float snr = 0.0f, float rssi = 0.0f);
+  bool publishRaw(mesh::Packet* packet);
   void queuePacket(mesh::Packet* packet, bool is_tx);
   void dequeuePacket();
   bool isAnyBrokerConnected();

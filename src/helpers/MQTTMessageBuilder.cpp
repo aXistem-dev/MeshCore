@@ -19,6 +19,9 @@ int MQTTMessageBuilder::buildStatusMessage(
   int uptime_secs,
   int errors,
   int queue_len,
+  int queue_drops,
+  int queue_retries,
+  int low_memory_events,
   int noise_floor,
   int tx_air_secs,
   int rx_air_secs,
@@ -38,7 +41,8 @@ int MQTTMessageBuilder::buildStatusMessage(
   root["client_version"] = client_version;
   
   // Add stats object if any stats are provided
-  if (battery_mv >= 0 || uptime_secs >= 0 || errors >= 0 || queue_len >= 0 || 
+  if (battery_mv >= 0 || uptime_secs >= 0 || errors >= 0 || queue_len >= 0 ||
+      queue_drops >= 0 || queue_retries >= 0 || low_memory_events >= 0 ||
       noise_floor > -999 || tx_air_secs >= 0 || rx_air_secs >= 0 || recv_errors >= 0) {
     JsonObject stats = root.createNestedObject("stats");
     
@@ -53,6 +57,15 @@ int MQTTMessageBuilder::buildStatusMessage(
     }
     if (queue_len >= 0) {
       stats["queue_len"] = queue_len;
+    }
+    if (queue_drops >= 0) {
+      stats["queue_drops"] = queue_drops;
+    }
+    if (queue_retries >= 0) {
+      stats["queue_retries"] = queue_retries;
+    }
+    if (low_memory_events >= 0) {
+      stats["low_memory_events"] = low_memory_events;
     }
     if (noise_floor > -999) {
       stats["noise_floor"] = noise_floor;
@@ -314,6 +327,69 @@ int MQTTMessageBuilder::buildPacketJSONFromRaw(
     packet->isRouteDirect() ? path_str : nullptr,
     buffer, buffer_size
   );
+}
+
+int MQTTMessageBuilder::buildPacketJSONCompact(
+  mesh::Packet* packet,
+  bool is_tx,
+  const char* origin,
+  const char* origin_id,
+  const uint8_t* raw_data,
+  int raw_len,
+  float snr,
+  float rssi,
+  Timezone* timezone,
+  char* buffer,
+  size_t buffer_size
+) {
+  if (!packet) return 0;
+
+  time_t now = time(nullptr);
+  time_t local_time = timezone ? timezone->toLocal(now) : now;
+  struct tm* local_timeinfo = localtime(&local_time);
+
+  char timestamp[32];
+  if (local_timeinfo) {
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S.000000", local_timeinfo);
+  } else {
+    strcpy(timestamp, "2024-01-01T12:00:00.000000");
+  }
+
+  char hash_str[17];
+  uint8_t packet_hash[MAX_HASH_SIZE];
+  packet->calculatePacketHash(packet_hash);
+  bytesToHex(packet_hash, MAX_HASH_SIZE, hash_str, sizeof(hash_str));
+
+  // Keep decoder-required fields in compact mode.
+  char raw_hex[1024] = "";
+  if (raw_data && raw_len > 0) {
+    bytesToHex(raw_data, raw_len, raw_hex, sizeof(raw_hex));
+  } else {
+    packetToHex(packet, raw_hex, sizeof(raw_hex));
+  }
+
+  char snr_str[16];
+  char rssi_str[16];
+  snprintf(snr_str, sizeof(snr_str), "%.1f", snr);
+  snprintf(rssi_str, sizeof(rssi_str), "%d", (int)rssi);
+
+  StaticJsonDocument<1024> doc;
+  JsonObject root = doc.to<JsonObject>();
+  root["origin"] = origin;
+  root["origin_id"] = origin_id;
+  root["timestamp"] = timestamp;
+  root["type"] = "PACKET";
+  root["direction"] = is_tx ? "tx" : "rx";
+  root["len"] = packet->getRawLength();
+  root["packet_type"] = packet->getPayloadType();
+  root["payload_len"] = packet->payload_len;
+  root["raw"] = raw_hex;
+  root["SNR"] = snr_str;
+  root["RSSI"] = rssi_str;
+  root["hash"] = hash_str;
+
+  size_t len = serializeJson(root, buffer, buffer_size);
+  return (len > 0 && len < buffer_size) ? len : 0;
 }
 
 int MQTTMessageBuilder::buildRawJSON(

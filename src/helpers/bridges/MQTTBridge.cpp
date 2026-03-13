@@ -144,11 +144,12 @@ MQTTBridge::MQTTBridge(NodePrefs *prefs, mesh::PacketManager *mgr, mesh::RTCCloc
               _token_us_expires_at(0), _token_eu_expires_at(0),
               _analyzer_us_client(nullptr), _analyzer_eu_client(nullptr), _config_valid(false),
               _cached_has_brokers(false), _cached_has_analyzer_servers(false),
-              _last_memory_check(0), _skipped_publishes(0), _last_fragmentation_recovery(0),
+              _last_memory_check(0), _skipped_publishes(0), _queue_drop_count(0), _queue_retry_count(0), _low_memory_mode_count(0), _last_fragmentation_recovery(0),
               _fragmentation_pressure_since(0), _last_critical_check_run(0),
               _last_token_renewal_attempt_us(0), _last_token_renewal_attempt_eu(0),
               _last_reconnect_attempt_us(0), _last_reconnect_attempt_eu(0),
               _last_no_broker_log(0), _last_config_warning(0), _dispatcher(nullptr), _radio(nullptr), _board(nullptr), _ms(nullptr),
+              _status_json_buffer(nullptr), _publish_json_buffer(nullptr), _raw_json_buffer(nullptr),
               _last_wifi_check(0), _last_wifi_status(WL_DISCONNECTED), _wifi_status_initialized(false),
               _wifi_disconnected_time(0), _last_wifi_reconnect_attempt(0), _wifi_reconnect_backoff_attempt(0),
               _main_broker_reconnect_backoff_attempt(0), _analyzer_us_reconnect_backoff_attempt(0), _analyzer_eu_reconnect_backoff_attempt(0)
@@ -269,6 +270,15 @@ void MQTTBridge::begin() {
   if (_last_raw_data == nullptr) {
     _last_raw_data = (uint8_t*)psram_malloc(LAST_RAW_DATA_SIZE);
   }
+  if (_status_json_buffer == nullptr) {
+    _status_json_buffer = (char*)psram_malloc(STATUS_JSON_BUFFER_SIZE);
+  }
+  if (_publish_json_buffer == nullptr) {
+    _publish_json_buffer = (char*)psram_malloc(PUBLISH_JSON_BUFFER_SIZE);
+  }
+  if (_raw_json_buffer == nullptr) {
+    _raw_json_buffer = (char*)psram_malloc(RAW_JSON_BUFFER_SIZE);
+  }
   if (_auth_token_us) _auth_token_us[0] = '\0';
   if (_auth_token_eu) _auth_token_eu[0] = '\0';
   _last_raw_len = 0;
@@ -278,6 +288,10 @@ void MQTTBridge::begin() {
   _last_token_renewal_attempt_eu = 0;
   _last_reconnect_attempt_us = 0;
   _last_reconnect_attempt_eu = 0;
+  _queue_drop_count = 0;
+  _queue_retry_count = 0;
+  _low_memory_mode_count = 0;
+  _skipped_publishes = 0;
   
   // Validate custom MQTT broker configuration (optional)
   _config_valid = isMQTTConfigValid();
@@ -593,6 +607,12 @@ void MQTTBridge::end() {
   _auth_token_eu = nullptr;
   psram_free(_last_raw_data);
   _last_raw_data = nullptr;
+  psram_free(_status_json_buffer);
+  _status_json_buffer = nullptr;
+  psram_free(_publish_json_buffer);
+  _publish_json_buffer = nullptr;
+  psram_free(_raw_json_buffer);
+  _raw_json_buffer = nullptr;
   
   _initialized = false;
   MQTT_DEBUG_PRINTLN("MQTT Bridge stopped");
@@ -1390,11 +1410,19 @@ void MQTTBridge::processPacketQueue() {
   
   _last_no_broker_log = 0;
   
-  // Process up to 1 packet per call to maintain responsiveness
+  // Adaptive drain: process more when backlog grows and heap health is good.
   int processed = 0;
   int max_per_loop = 1;
+  #ifdef ESP32
+  if (_queue_count >= 8 && ESP.getMaxAllocHeap() >= 80000) {
+    max_per_loop = 3;
+  } else if (_queue_count >= 4) {
+    max_per_loop = 2;
+  }
+  #endif
   unsigned long loop_start_time = millis();
   const unsigned long MAX_PROCESSING_TIME_MS = 30;
+  static const uint8_t MAX_PACKET_RETRIES = 5;
   
   while (processed < max_per_loop) {
     unsigned long elapsed = millis() - loop_start_time;
@@ -1403,30 +1431,75 @@ void MQTTBridge::processPacketQueue() {
     }
     
     QueuedPacket queued;
-    // Try to receive from queue (non-blocking)
-    if (xQueueReceive(_packet_queue_handle, &queued, 0) != pdTRUE) {
+    // Peek first: remove only on success (or intentional retry/drop path).
+    if (xQueuePeek(_packet_queue_handle, &queued, 0) != pdTRUE) {
       break;  // No more packets
+    }
+
+    unsigned long now = millis();
+    if (queued.retry_not_before_ms != 0 &&
+        (long)(now - queued.retry_not_before_ms) < 0) {
+      // Head packet is in backoff window, let other work run.
+      break;
     }
     
     mesh::Packet snapshot;
-    if (queued.packet_len > 0 && snapshot.readFrom(queued.packet_data, queued.packet_len)) {
-      // Publish packet (use stored raw data if available)
-      publishPacket(&snapshot, queued.is_tx,
-                    queued.has_raw_data ? queued.raw_data : nullptr,
-                    queued.has_raw_data ? queued.raw_len : 0,
-                    queued.has_raw_data ? queued.snr : 0.0f,
-                    queued.has_raw_data ? queued.rssi : 0.0f);
-
-      // Publish raw if enabled
-      if (_raw_enabled) {
-        publishRaw(&snapshot);
+    if (queued.packet_len == 0 || !snapshot.readFrom(queued.packet_data, queued.packet_len)) {
+      // Corrupt snapshot: drop it so queue can progress.
+      QueuedPacket dropped;
+      if (xQueueReceive(_packet_queue_handle, &dropped, 0) == pdTRUE) {
+        _queue_drop_count++;
+        _queue_count--;
+        processed++;
       }
+      continue;
     }
-    
-    _queue_count--;
-    processed++;
-    
-    // No need for vTaskDelay here - task already yields at end of main loop
+
+    bool packet_published = publishPacket(&snapshot, queued.is_tx,
+                                          queued.has_raw_data ? queued.raw_data : nullptr,
+                                          queued.has_raw_data ? queued.raw_len : 0,
+                                          queued.has_raw_data ? queued.snr : 0.0f,
+                                          queued.has_raw_data ? queued.rssi : 0.0f);
+
+    if (packet_published) {
+      if (_raw_enabled) {
+        (void)publishRaw(&snapshot);
+      }
+      // Ack: remove from queue only after publish succeeds.
+      QueuedPacket acked;
+      if (xQueueReceive(_packet_queue_handle, &acked, 0) == pdTRUE) {
+        _queue_count--;
+      }
+      processed++;
+      continue;
+    }
+
+    // Retry path: rotate failed packet to tail with bounded backoff.
+    QueuedPacket retry_packet;
+    if (xQueueReceive(_packet_queue_handle, &retry_packet, 0) != pdTRUE) {
+      break;
+    }
+    _queue_retry_count++;
+    if (retry_packet.retry_count < 255) {
+      retry_packet.retry_count++;
+    }
+    if (retry_packet.retry_count > MAX_PACKET_RETRIES) {
+      _queue_drop_count++;
+      _queue_count--;
+      continue;
+    }
+
+    unsigned long backoff_ms = 2000UL << ((retry_packet.retry_count < 4) ? retry_packet.retry_count : 4);
+    if (backoff_ms > 30000UL) {
+      backoff_ms = 30000UL;
+    }
+    retry_packet.retry_not_before_ms = now + backoff_ms;
+    if (xQueueSend(_packet_queue_handle, &retry_packet, 0) != pdTRUE) {
+      _queue_drop_count++;
+      _queue_count--;
+    }
+    // Leave loop to avoid spinning when broker is unhealthy.
+    break;
   }
   #else
   // Non-ESP32: Use circular buffer
@@ -1451,9 +1524,10 @@ void MQTTBridge::processPacketQueue() {
   _last_no_broker_log = 0;
   
   int processed = 0;
-  int max_per_loop = 1;
+  int max_per_loop = (_queue_count >= 6) ? 2 : 1;
   unsigned long loop_start_time = millis();
   const unsigned long MAX_PROCESSING_TIME_MS = 30;
+  static const uint8_t MAX_PACKET_RETRIES = 5;
   
   while (_queue_count > 0 && processed < max_per_loop) {
     unsigned long elapsed = millis() - loop_start_time;
@@ -1462,22 +1536,61 @@ void MQTTBridge::processPacketQueue() {
     }
     
     QueuedPacket& queued = _packet_queue[_queue_head];
-    
-    mesh::Packet snapshot;
-    if (queued.packet_len > 0 && snapshot.readFrom(queued.packet_data, queued.packet_len)) {
-      publishPacket(&snapshot, queued.is_tx,
-                    queued.has_raw_data ? queued.raw_data : nullptr,
-                    queued.has_raw_data ? queued.raw_len : 0,
-                    queued.has_raw_data ? queued.snr : 0.0f,
-                    queued.has_raw_data ? queued.rssi : 0.0f);
-
-      if (_raw_enabled) {
-        publishRaw(&snapshot);
-      }
+    unsigned long now = millis();
+    if (queued.retry_not_before_ms != 0 &&
+        (long)(now - queued.retry_not_before_ms) < 0) {
+      break;
     }
     
+    mesh::Packet snapshot;
+    if (queued.packet_len == 0 || !snapshot.readFrom(queued.packet_data, queued.packet_len)) {
+      _queue_drop_count++;
+      dequeuePacket();
+      processed++;
+      continue;
+    }
+
+    bool packet_published = publishPacket(&snapshot, queued.is_tx,
+                                          queued.has_raw_data ? queued.raw_data : nullptr,
+                                          queued.has_raw_data ? queued.raw_len : 0,
+                                          queued.has_raw_data ? queued.snr : 0.0f,
+                                          queued.has_raw_data ? queued.rssi : 0.0f);
+
+    if (packet_published) {
+      if (_raw_enabled) {
+        (void)publishRaw(&snapshot);
+      }
+      dequeuePacket();
+      processed++;
+      continue;
+    }
+
+    // Retry path: rotate to tail so one bad packet does not block queue head.
+    QueuedPacket retry_packet = queued;
     dequeuePacket();
-    processed++;
+    _queue_retry_count++;
+    if (retry_packet.retry_count < 255) {
+      retry_packet.retry_count++;
+    }
+    if (retry_packet.retry_count > MAX_PACKET_RETRIES) {
+      _queue_drop_count++;
+      continue;
+    }
+
+    unsigned long backoff_ms = 2000UL << ((retry_packet.retry_count < 4) ? retry_packet.retry_count : 4);
+    if (backoff_ms > 30000UL) {
+      backoff_ms = 30000UL;
+    }
+    retry_packet.retry_not_before_ms = now + backoff_ms;
+
+    if (_queue_count >= MAX_QUEUE_SIZE) {
+      _queue_drop_count++;
+      continue;
+    }
+    _packet_queue[_queue_tail] = retry_packet;
+    _queue_tail = (_queue_tail + 1) % MAX_QUEUE_SIZE;
+    _queue_count++;
+    break;
   }
   #endif
 }
@@ -1507,12 +1620,11 @@ bool MQTTBridge::publishStatus() {
     return false;  // No destinations available
   }
   
-  // JSON buffer in PSRAM when available (plan §4)
-  static const size_t STATUS_JSON_BUFFER_SIZE = 768;
-  char* json_buffer = (char*)psram_malloc(STATUS_JSON_BUFFER_SIZE);
-  if (json_buffer == nullptr) {
+  // Reuse a long-lived buffer to avoid per-publish alloc/free churn.
+  if (_status_json_buffer == nullptr) {
     return false;
   }
+  char* json_buffer = _status_json_buffer;
   char origin_id[65];
   char timestamp[32];
   char radio_info[64];
@@ -1578,6 +1690,9 @@ bool MQTTBridge::publishStatus() {
     uptime_secs,
     errors,
     _queue_count,  // Use current queue length
+    (int)_queue_drop_count,
+    (int)_queue_retry_count,
+    (int)_low_memory_mode_count,
     noise_floor,
     tx_air_secs,
     rx_air_secs,
@@ -1685,19 +1800,17 @@ bool MQTTBridge::publishStatus() {
             // Return true if we successfully published to at least one destination
             if (published) {
               MQTT_DEBUG_PRINTLN("Status published");
-              psram_free(json_buffer);
               return true;
             }
           }
           
-          psram_free(json_buffer);
           return false;  // Failed to build or publish message
 }
 
-void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx, 
-                                const uint8_t* raw_data, int raw_len, 
+bool MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
+                                const uint8_t* raw_data, int raw_len,
                                 float snr, float rssi) {
-  if (!packet) return;
+  if (!packet) return false;
   
   // Check if IATA is configured before attempting to publish
   if (!isIATAValid()) {
@@ -1708,101 +1821,109 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
       MQTT_DEBUG_PRINTLN("MQTT: Cannot publish packet - IATA code not configured (current: '%s'). Please set mqtt.iata via CLI.", _iata);
       last_iata_warning = now;
     }
-    return;
+    return false;
   }
-  
-  // Memory pressure check: Skip publishes when heap is severely fragmented
-  // This prevents further fragmentation and allows memory to recover
-  // Threshold: Max alloc < 60KB indicates severe fragmentation
+
+  bool pressure_mode = false;
+  bool critical_mode = false;
+  size_t max_alloc = 0;
   #ifdef ESP32
   unsigned long now = millis();
-  if (now - _last_memory_check > 5000) {  // Check every 5 seconds
-    size_t max_alloc = ESP.getMaxAllocHeap();
-    if (max_alloc < 60000) {  // Less than 60KB max alloc = severe fragmentation
-      _skipped_publishes++;
-      static unsigned long last_skip_log = 0;
-      if (now - last_skip_log > 60000) {  // Log every minute
-        MQTT_DEBUG_PRINTLN("MQTT: Skipping publish due to memory pressure (Max alloc: %d, skipped: %d)", max_alloc, _skipped_publishes);
-        last_skip_log = now;
-      }
-      return;  // Skip this publish to allow memory to recover
-    }
+  if (now - _last_memory_check > 1000) {
     _last_memory_check = now;
   }
-  #endif
-  
-  // JSON buffer: use PSRAM to avoid large stack allocations on constrained targets.
-  // If allocation fails, skip publish to preserve system stability.
-  static const size_t PUBLISH_JSON_BUFFER_SIZE = 2048;
-  char* json_buffer_psram = (char*)psram_malloc(PUBLISH_JSON_BUFFER_SIZE);
-  if (json_buffer_psram == nullptr) {
-    _skipped_publishes++;
-    return;
+  max_alloc = ESP.getMaxAllocHeap();
+  critical_mode = (max_alloc < 55000);
+  pressure_mode = (!critical_mode && max_alloc < 70000);
+  if (pressure_mode || critical_mode) {
+    _low_memory_mode_count++;
   }
-  char* active_buffer = json_buffer_psram;
+  #endif
+
+  // Reuse long-lived JSON buffer to avoid per-message allocation churn.
+  if (_publish_json_buffer == nullptr) {
+    _skipped_publishes++;
+    return false;
+  }
+  char* active_buffer = _publish_json_buffer;
   size_t active_buffer_size = PUBLISH_JSON_BUFFER_SIZE;
   char origin_id[65];
-  
+
   // Use actual device ID
   strncpy(origin_id, _device_id, sizeof(origin_id) - 1);
   origin_id[sizeof(origin_id) - 1] = '\0';
-  
-  // Build packet message using raw radio data if provided
-  int len;
+
+  int len = 0;
+  bool using_compact_payload = pressure_mode || critical_mode;
+  const uint8_t* compact_raw_data = nullptr;
+  int compact_raw_len = 0;
+  float compact_snr = snr;
+  float compact_rssi = rssi;
   if (raw_data && raw_len > 0) {
-    // Use provided raw radio data
-    len = MQTTMessageBuilder::buildPacketJSONFromRaw(
-      raw_data, raw_len, packet, is_tx, _origin, origin_id, 
-      snr, rssi, _timezone, active_buffer, active_buffer_size
-    );
+    compact_raw_data = raw_data;
+    compact_raw_len = raw_len;
   } else if (_last_raw_data && _last_raw_len > 0 && (millis() - _last_raw_timestamp) < 1000) {
-    // Fallback to global raw radio data (within 1 second of packet)
-    len = MQTTMessageBuilder::buildPacketJSONFromRaw(
-      _last_raw_data, _last_raw_len, packet, is_tx, _origin, origin_id, 
-      _last_snr, _last_rssi, _timezone, active_buffer, active_buffer_size
-    );
-  } else {
-    // Fallback to reconstructed packet data
-    len = MQTTMessageBuilder::buildPacketJSON(
-      packet, is_tx, _origin, origin_id, _timezone, active_buffer, active_buffer_size
+    compact_raw_data = _last_raw_data;
+    compact_raw_len = _last_raw_len;
+    compact_snr = _last_snr;
+    compact_rssi = _last_rssi;
+  }
+
+  if (!using_compact_payload) {
+    // Build full packet message using raw radio data when available.
+    if (raw_data && raw_len > 0) {
+      len = MQTTMessageBuilder::buildPacketJSONFromRaw(
+        raw_data, raw_len, packet, is_tx, _origin, origin_id,
+        snr, rssi, _timezone, active_buffer, active_buffer_size
+      );
+    } else if (_last_raw_data && _last_raw_len > 0 && (millis() - _last_raw_timestamp) < 1000) {
+      len = MQTTMessageBuilder::buildPacketJSONFromRaw(
+        _last_raw_data, _last_raw_len, packet, is_tx, _origin, origin_id,
+        _last_snr, _last_rssi, _timezone, active_buffer, active_buffer_size
+      );
+    } else {
+      len = MQTTMessageBuilder::buildPacketJSON(
+        packet, is_tx, _origin, origin_id, _timezone, active_buffer, active_buffer_size
+      );
+    }
+  }
+
+  if (len <= 0) {
+    // Pressure fallback: keep core packet telemetry flowing with a compact schema.
+    using_compact_payload = true;
+    len = MQTTMessageBuilder::buildPacketJSONCompact(
+      packet, is_tx, _origin, origin_id,
+      compact_raw_data, compact_raw_len, compact_snr, compact_rssi,
+      _timezone, active_buffer, active_buffer_size
     );
   }
-  
+
+  bool published_any = false;
   if (len > 0) {
-    // Build topic string once and reuse (optimization: avoid redundant snprintf calls)
     char topic[128];
     snprintf(topic, sizeof(topic), "meshcore/%s/%s/packets", _iata, _device_id);
-    size_t json_len = strlen(active_buffer); // Cache length to avoid multiple strlen() calls
-    
+    size_t json_len = strlen(active_buffer);
+
     // Publish to custom brokers (only if config is valid)
-    // Double-check client is actually connected before attempting publish
     if (_config_valid && _mqtt_client && _mqtt_client->connected()) {
-      // Track last broker URI to avoid calling setServer() unnecessarily (memory optimization)
-      // setServer() may allocate memory, so we only call it when the broker changes
       static char last_broker_uri[128] = "";
-      
       for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
-        // Verify broker is actually connected (state might be stale)
         if (_brokers[i].enabled && _brokers[i].connected && _mqtt_client->connected()) {
-          // Build broker URI
           char broker_uri[128];
           snprintf(broker_uri, sizeof(broker_uri), "mqtt://%s:%d", _brokers[i].host, _brokers[i].port);
-          
-          // Only call setServer() if broker URI changed (reduces memory allocations)
+
           if (strcmp(broker_uri, last_broker_uri) != 0) {
             _mqtt_client->setServer(broker_uri);
             strncpy(last_broker_uri, broker_uri, sizeof(last_broker_uri) - 1);
             last_broker_uri[sizeof(last_broker_uri) - 1] = '\0';
           }
-          
-          // Publish with timeout check - don't block if connection is slow
-          // This prevents blocking the main loop when MQTT broker is slow or unresponsive
-          int publish_result = _mqtt_client->publish(topic, 1, false, active_buffer, json_len); // qos=1, retained=false
+
+          int publish_result = _mqtt_client->publish(topic, 1, false, active_buffer, json_len);
           if (publish_result > 0) {
             s_consecutive_main_publish_failures = 0;
+            published_any = true;
           } else {
             s_consecutive_main_publish_failures++;
-            // Only disconnect after several consecutive failures to avoid heap fragmentation from disconnect/reconnect storms
             bool should_disconnect = (s_consecutive_main_publish_failures >= MAIN_CLIENT_DISCONNECT_FAILURE_THRESHOLD);
             static unsigned long last_publish_fail_log = 0;
             unsigned long now = millis();
@@ -1833,29 +1954,39 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
         }
       }
     }
-    
-    // Always publish to Let's Mesh Analyzer servers (independent of custom broker config)
-    // Skip analyzer servers if memory is severely fragmented (they're less critical than custom brokers)
+
+    // Preserve core packet flow first; shed analyzer traffic in critical memory mode.
     #ifdef ESP32
-    size_t max_alloc = ESP.getMaxAllocHeap();
-    if (max_alloc >= 60000) {  // Only publish to analyzer servers if memory is OK
-      publishToAnalyzerServers(topic, active_buffer, false);
+    if (!critical_mode && max_alloc >= 60000) {
+      if (publishToAnalyzerServers(topic, active_buffer, false)) {
+        published_any = true;
+      }
     }
     #else
-    publishToAnalyzerServers(topic, active_buffer, false);
+    if (publishToAnalyzerServers(topic, active_buffer, false)) {
+      published_any = true;
+    }
     #endif
+    if (using_compact_payload) {
+      static unsigned long last_compact_log = 0;
+      unsigned long now = millis();
+      if (now - last_compact_log > 60000) {
+        MQTT_DEBUG_PRINTLN("MQTT: packet publish using compact payload (max_alloc=%d)", (int)max_alloc);
+        last_compact_log = now;
+      }
+    }
   } else {
-    // Debug: log when packet message building fails
     uint8_t packet_type = packet->getPayloadType();
-    if (packet_type == 4 || packet_type == 9) {  // ADVERT or TRACE
+    if (packet_type == 4 || packet_type == 9) {
       MQTT_DEBUG_PRINTLN("Failed to build packet JSON for type=%d (len=%d), packet not published", packet_type, len);
     }
+    _skipped_publishes++;
   }
-  psram_free(json_buffer_psram);
+  return published_any;
 }
 
-void MQTTBridge::publishRaw(mesh::Packet* packet) {
-  if (!packet) return;
+bool MQTTBridge::publishRaw(mesh::Packet* packet) {
+  if (!packet) return false;
   
   // Check if IATA is configured before attempting to publish
   if (!isIATAValid()) {
@@ -1866,18 +1997,23 @@ void MQTTBridge::publishRaw(mesh::Packet* packet) {
       MQTT_DEBUG_PRINTLN("MQTT: Cannot publish raw packet - IATA code not configured (current: '%s'). Please set mqtt.iata via CLI.", _iata);
       last_iata_warning = now;
     }
-    return;
+    return false;
   }
-  
-  // JSON buffer: use PSRAM to avoid large stack allocations on constrained targets.
-  // If allocation fails, skip publish to preserve system stability.
-  char* json_buffer_psram = (char*)psram_malloc(2048);
-  if (json_buffer_psram == nullptr) {
+
+  #ifdef ESP32
+  if (ESP.getMaxAllocHeap() < 55000) {
+    // Raw topic is optional under critical pressure.
+    _low_memory_mode_count++;
+    return false;
+  }
+  #endif
+
+  if (_raw_json_buffer == nullptr) {
     _skipped_publishes++;
-    return;
+    return false;
   }
-  char* active_buffer = json_buffer_psram;
-  size_t active_buffer_size = 2048;
+  char* active_buffer = _raw_json_buffer;
+  size_t active_buffer_size = RAW_JSON_BUFFER_SIZE;
   char origin_id[65];
   
   // Use actual device ID
@@ -1888,38 +2024,29 @@ void MQTTBridge::publishRaw(mesh::Packet* packet) {
   int len = MQTTMessageBuilder::buildRawJSON(
     packet, _origin, origin_id, _timezone, active_buffer, active_buffer_size
   );
-  
+
+  bool published_any = false;
   if (len > 0) {
-    // Build topic string once and reuse (optimization: avoid redundant snprintf calls)
     char topic[128];
     snprintf(topic, sizeof(topic), "meshcore/%s/%s/raw", _iata, _device_id);
-    size_t json_len = strlen(active_buffer); // Cache length to avoid multiple strlen() calls
-    
-    // Publish to custom brokers (only if config is valid)
-    // Double-check client is actually connected before attempting publish
+    size_t json_len = strlen(active_buffer);
+
     if (_config_valid && _mqtt_client && _mqtt_client->connected()) {
-      // Track last broker URI to avoid calling setServer() unnecessarily (memory optimization)
-      // setServer() may allocate memory, so we only call it when the broker changes
       static char last_broker_uri_raw[128] = "";
-      
       for (int i = 0; i < MAX_MQTT_BROKERS_COUNT; i++) {
-        // Verify broker is actually connected (state might be stale)
         if (_brokers[i].enabled && _brokers[i].connected && _mqtt_client->connected()) {
-          // Build broker URI
           char broker_uri[128];
           snprintf(broker_uri, sizeof(broker_uri), "mqtt://%s:%d", _brokers[i].host, _brokers[i].port);
-          
-          // Only call setServer() if broker URI changed (reduces memory allocations)
           if (strcmp(broker_uri, last_broker_uri_raw) != 0) {
             _mqtt_client->setServer(broker_uri);
             strncpy(last_broker_uri_raw, broker_uri, sizeof(last_broker_uri_raw) - 1);
             last_broker_uri_raw[sizeof(last_broker_uri_raw) - 1] = '\0';
           }
-          
-          // Publish with timeout check - don't block if connection is slow
-          int publish_result = _mqtt_client->publish(topic, 1, false, active_buffer, json_len); // qos=1, retained=false
+
+          int publish_result = _mqtt_client->publish(topic, 1, false, active_buffer, json_len);
           if (publish_result > 0) {
             s_consecutive_main_publish_failures = 0;
+            published_any = true;
           } else {
             s_consecutive_main_publish_failures++;
             bool should_disconnect = (s_consecutive_main_publish_failures >= MAIN_CLIENT_DISCONNECT_FAILURE_THRESHOLD);
@@ -1944,19 +2071,21 @@ void MQTTBridge::publishRaw(mesh::Packet* packet) {
         }
       }
     }
-    
-    // Always publish to Let's Mesh Analyzer servers (independent of custom broker config)
-    // Skip analyzer servers if memory is severely fragmented (they're less critical than custom brokers)
+
     #ifdef ESP32
     size_t max_alloc = ESP.getMaxAllocHeap();
-    if (max_alloc >= 60000) {  // Only publish to analyzer servers if memory is OK
-      publishToAnalyzerServers(topic, active_buffer, false);
+    if (max_alloc >= 60000) {
+      if (publishToAnalyzerServers(topic, active_buffer, false)) {
+        published_any = true;
+      }
     }
     #else
-    publishToAnalyzerServers(topic, active_buffer, false);
+    if (publishToAnalyzerServers(topic, active_buffer, false)) {
+      published_any = true;
+    }
     #endif
   }
-  psram_free(json_buffer_psram);
+  return published_any;
 }
 
 void MQTTBridge::queuePacket(mesh::Packet* packet, bool is_tx) {
@@ -1977,6 +2106,8 @@ void MQTTBridge::queuePacket(mesh::Packet* packet, bool is_tx) {
     return;
   }
   queued.is_tx = is_tx;
+  queued.retry_count = 0;
+  queued.retry_not_before_ms = 0;
   queued.has_raw_data = false;
   
   // Capture raw radio data with mutex protection
@@ -2004,6 +2135,7 @@ void MQTTBridge::queuePacket(mesh::Packet* packet, bool is_tx) {
     QueuedPacket oldest;
     if (xQueueReceive(_packet_queue_handle, &oldest, 0) == pdTRUE) {
       MQTT_DEBUG_PRINTLN("Queue full, dropping oldest packet snapshot");
+      _queue_drop_count++;
       // Now try to send again
       if (xQueueSend(_packet_queue_handle, &queued, 0) != pdTRUE) {
         MQTT_DEBUG_PRINTLN("Failed to queue packet after dropping oldest");
@@ -2023,6 +2155,7 @@ void MQTTBridge::queuePacket(mesh::Packet* packet, bool is_tx) {
   if (_queue_count >= MAX_QUEUE_SIZE) {
     QueuedPacket& oldest = _packet_queue[_queue_head];
     MQTT_DEBUG_PRINTLN("Queue full, dropping oldest packet snapshot (queue size: %d)", _queue_count);
+    _queue_drop_count++;
     dequeuePacket();
   }
   
@@ -2034,6 +2167,8 @@ void MQTTBridge::queuePacket(mesh::Packet* packet, bool is_tx) {
     return;
   }
   queued.is_tx = is_tx;
+  queued.retry_count = 0;
+  queued.retry_not_before_ms = 0;
   queued.has_raw_data = false;
   
   if (!is_tx && _last_raw_data && _last_raw_len > 0 && (millis() - _last_raw_timestamp) < 1000) {
@@ -2593,6 +2728,9 @@ void MQTTBridge::publishStatusToAnalyzerClient(PsychicMqttClient* client, const 
     uptime_secs,
     errors,
     _queue_count,  // Use current queue length
+    (int)_queue_drop_count,
+    (int)_queue_retry_count,
+    (int)_low_memory_mode_count,
     noise_floor,
     tx_air_secs,
     rx_air_secs,

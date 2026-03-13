@@ -55,6 +55,9 @@ public:
     int uptime_secs = -1,
     int errors = -1,
     int queue_len = -1,
+    int queue_drops = -1,
+    int queue_retries = -1,
+    int low_memory_events = -1,
     int noise_floor = -999,
     int tx_air_secs = -1,
     int rx_air_secs = -1,
@@ -151,6 +154,22 @@ public:
     bool is_tx,
     const char* origin,
     const char* origin_id,
+    float snr,
+    float rssi,
+    Timezone* timezone,
+    char* buffer,
+    size_t buffer_size
+  );
+
+  // Memory-pressure fallback: compact packet payload that keeps decoder-required
+  // fields (raw, SNR, RSSI) while omitting optional route/time fields.
+  static int buildPacketJSONCompact(
+    mesh::Packet* packet,
+    bool is_tx,
+    const char* origin,
+    const char* origin_id,
+    const uint8_t* raw_data,
+    int raw_len,
     float snr,
     float rssi,
     Timezone* timezone,
