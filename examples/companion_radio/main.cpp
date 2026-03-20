@@ -91,10 +91,6 @@ static uint32_t _atoi(const char* sp) {
   UITask ui_task(&board, &serial_interface);
 #endif
 
-#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
-  #include <SenseCapHeadless.h>
-  static SenseCapHeadless headless;
-#endif
 
 StdRNG fast_rng;
 SimpleMeshTables tables;
@@ -232,7 +228,7 @@ void setup() {
 #endif
 
 #if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
-  headless.begin(&board, &sensors, sensecap_send_advert);
+  board.beginHeadless(&sensors, sensecap_send_advert);
 #endif
 }
 
@@ -254,9 +250,7 @@ void loop() {
 
   the_mesh.loop();
   sensors.loop();
-#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
-  headless.loop();
-#endif
+  board.loop();
 #ifdef DISPLAY_CLASS
   ui_task.loop();
 #endif

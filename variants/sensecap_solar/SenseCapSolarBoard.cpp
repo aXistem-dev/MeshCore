@@ -4,6 +4,25 @@
 #include "SenseCapSolarBoard.h"
 #include "variant.h"
 
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
+#include <helpers/sensors/EnvironmentSensorManager.h>
+
+#ifndef PIN_BUTTON1
+#define PIN_BUTTON1 13
+#endif
+#ifndef PIN_BUTTON2
+#define PIN_BUTTON2 20
+#endif
+#define BUTTON_PRESSED(pin) (digitalRead(pin) == LOW)
+
+static const unsigned long GPS_LED_SLOW_BLINK_MS = 800;
+static const unsigned long GPS_LED_LOCK_CONFIRM_MS = 3000;
+static const int GPS_LED_FAST_BLINKS = 3;
+static const int GPS_LED_POWER_ON_BLINKS = 2;
+static const unsigned long GPS_LED_FAST_ON_MS = 100;
+static const unsigned long GPS_LED_FAST_OFF_MS = 100;
+#endif
+
 #ifdef NRF52_POWER_MANAGEMENT
 #include "nrf.h"
 extern const uint32_t g_ADigitalPinMap[];
@@ -123,5 +142,154 @@ void SenseCapSolarBoard::powerOff() {
   initiateShutdown(SHUTDOWN_REASON_USER);
 #else
   sd_power_system_off();
+#endif
+}
+
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
+void SenseCapSolarBoard::beginHeadless(EnvironmentSensorManager* sensors, void (*onSendAdvert)(void)) {
+  _headless_sensors = sensors;
+  _headless_on_send_advert = onSendAdvert;
+  _headless_gps_led_state = 0;
+  _headless_gps_led_ts = 0;
+  _headless_gps_led_was_valid = false;
+  _headless_gps_led_was_active = false;
+  _headless_usr_press_count = 0;
+  _headless_usr_window_end = 0;
+  _headless_usr_was_pressed = false;
+
+  pinMode(PIN_BUTTON2, INPUT_PULLUP);
+#ifdef LED_WHITE
+  pinMode(LED_WHITE, OUTPUT);
+  digitalWrite(LED_WHITE, LOW);
+#endif
+}
+
+void SenseCapSolarBoard::headlessPollButtons() {
+  unsigned long now = millis();
+  bool usr = BUTTON_PRESSED(PIN_BUTTON2);
+  if (usr && !_headless_usr_was_pressed) {
+    _headless_usr_was_pressed = true;
+    _headless_usr_press_count++;
+    _headless_usr_window_end = now + HEADLESS_PRESS_WINDOW_MS;
+  }
+  if (!usr) {
+    _headless_usr_was_pressed = false;
+  }
+
+  if (_headless_usr_press_count > 0 && now > _headless_usr_window_end) {
+    if (_headless_usr_press_count == 2 && _headless_on_send_advert) {
+      _headless_on_send_advert();
+    } else if (_headless_usr_press_count >= 3 && _headless_sensors) {
+      bool active = _headless_sensors->getGpsActive();
+      _headless_sensors->setSettingValue("gps", active ? "0" : "1");
+      if (active) {
+        _headless_gps_led_state = 3;
+        _headless_gps_led_ts = now;
+      } else {
+        _headless_gps_led_state = 1;
+        _headless_gps_led_ts = now;
+        _headless_gps_led_was_valid = false;
+      }
+    }
+    _headless_usr_press_count = 0;
+  }
+}
+
+void SenseCapSolarBoard::headlessPollGpsLed() {
+#ifdef LED_WHITE
+  if (!_headless_sensors) return;
+  unsigned long now = millis();
+  bool gps_active = _headless_sensors->getGpsActive();
+  bool gps_valid = _headless_sensors->getGpsValid();
+
+  if (_headless_gps_led_state == 0) {
+    if (gps_active && !gps_valid) {
+      _headless_gps_led_state = 4;
+      _headless_gps_led_ts = now;
+      _headless_gps_led_was_valid = false;
+      goto update_was_active;
+    }
+    if (_headless_gps_led_was_active && !gps_active) {
+      _headless_gps_led_state = 3;
+      _headless_gps_led_ts = now;
+      goto update_was_active;
+    }
+    goto update_was_active;
+  }
+
+  if (_headless_gps_led_state == 1) {
+    if (!gps_active) {
+      _headless_gps_led_state = 3;
+      _headless_gps_led_ts = now;
+      goto update_was_active;
+    }
+    if (gps_valid) {
+      _headless_gps_led_state = 2;
+      _headless_gps_led_ts = now;
+      digitalWrite(LED_WHITE, HIGH);
+      goto update_was_active;
+    }
+    unsigned long half = GPS_LED_SLOW_BLINK_MS / 2;
+    unsigned long phase = (now - _headless_gps_led_ts) % GPS_LED_SLOW_BLINK_MS;
+    digitalWrite(LED_WHITE, (phase < half) ? HIGH : LOW);
+    goto update_was_active;
+  }
+
+  if (_headless_gps_led_state == 2) {
+    if (!gps_active) {
+      _headless_gps_led_state = 3;
+      _headless_gps_led_ts = now;
+      goto update_was_active;
+    }
+    if (now - _headless_gps_led_ts >= GPS_LED_LOCK_CONFIRM_MS) {
+      _headless_gps_led_state = 0;
+      digitalWrite(LED_WHITE, LOW);
+    }
+    goto update_was_active;
+  }
+
+  if (_headless_gps_led_state == 3) {
+    unsigned long cycle = GPS_LED_FAST_ON_MS + GPS_LED_FAST_OFF_MS;
+    unsigned long elapsed = now - _headless_gps_led_ts;
+    int blink = (int)(elapsed / cycle);
+    if (blink >= GPS_LED_FAST_BLINKS) {
+      _headless_gps_led_state = 0;
+      digitalWrite(LED_WHITE, LOW);
+      goto update_was_active;
+    }
+    unsigned long pos = elapsed % cycle;
+    digitalWrite(LED_WHITE, (pos < GPS_LED_FAST_ON_MS) ? HIGH : LOW);
+    goto update_was_active;
+  }
+
+  if (_headless_gps_led_state == 4) {
+    if (!gps_active) {
+      _headless_gps_led_state = 3;
+      _headless_gps_led_ts = now;
+      goto update_was_active;
+    }
+    unsigned long cycle = GPS_LED_FAST_ON_MS + GPS_LED_FAST_OFF_MS;
+    unsigned long elapsed = now - _headless_gps_led_ts;
+    int blink = (int)(elapsed / cycle);
+    if (blink >= GPS_LED_POWER_ON_BLINKS) {
+      _headless_gps_led_state = 1;
+      _headless_gps_led_ts = now;
+      goto update_was_active;
+    }
+    unsigned long pos = elapsed % cycle;
+    digitalWrite(LED_WHITE, (pos < GPS_LED_FAST_ON_MS) ? HIGH : LOW);
+  }
+
+update_was_active:
+  _headless_gps_led_was_active = gps_active;
+#endif
+}
+
+#endif
+
+void SenseCapSolarBoard::loop() {
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
+  headlessPollButtons();
+  headlessPollGpsLed();
 #endif
 }
