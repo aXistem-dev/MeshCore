@@ -32,6 +32,7 @@
 // Buttons
 #define PIN_BUTTON1             (13) // PWR Button
 #define PIN_BUTTON2             (20) // USR Button
+#define PIN_USER_BTN            PIN_BUTTON1
 
 #define VBAT_ENABLE             (19)    // Output LOW to enable reading of the BAT voltage.
 

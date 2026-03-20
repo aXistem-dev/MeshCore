@@ -5,14 +5,15 @@
 #include <helpers/NRF52Board.h>
 
 class SenseCapSolarBoard : public NRF52BoardDCDC {
+protected:
+#ifdef NRF52_POWER_MANAGEMENT
+  void initiateShutdown(uint8_t reason) override;
+#endif
+
 public:
   SenseCapSolarBoard() : NRF52Board("SENSECAP_SOLAR_OTA") {}
   void begin();
   void powerOff() override;
-
-#ifdef NRF52_POWER_MANAGEMENT
-  void initiateShutdown(uint8_t reason) override;
-#endif
 
 #if defined(P_LORA_TX_LED)
   void onBeforeTransmit() override {
