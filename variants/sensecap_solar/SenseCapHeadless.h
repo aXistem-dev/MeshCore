@@ -1,6 +1,6 @@
 #pragma once
 
-#if defined(SENSECAP_HEADLESS) && !defined(DISPLAY_CLASS)
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
 
 #include <Arduino.h>
 
@@ -20,12 +20,9 @@ private:
   void pollGpsLed();
 
   static const unsigned long PRESS_WINDOW_MS = 600;
-  static const unsigned long LONG_PRESS_MS = 5000;
   uint8_t _usr_press_count = 0;
   unsigned long _usr_window_end = 0;
   bool _usr_was_pressed = false;
-  unsigned long _pwr_press_start = 0;
-  bool _pwr_was_pressed = false;
 
   uint8_t _gps_led_state = 0;
   unsigned long _gps_led_ts = 0;

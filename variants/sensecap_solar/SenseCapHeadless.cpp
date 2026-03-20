@@ -1,4 +1,4 @@
-#if defined(SENSECAP_HEADLESS) && !defined(DISPLAY_CLASS)
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
 
 #include "SenseCapHeadless.h"
 #include "variant.h"
@@ -32,11 +32,8 @@ void SenseCapHeadless::begin(mesh::MainBoard* board, EnvironmentSensorManager* s
   _usr_press_count = 0;
   _usr_window_end = 0;
   _usr_was_pressed = false;
-  _pwr_press_start = 0;
-  _pwr_was_pressed = false;
 
-  pinMode(PIN_BUTTON1, INPUT_PULLUP);
-  pinMode(PIN_BUTTON2, INPUT_PULLUP);
+  pinMode(PIN_BUTTON2, INPUT_PULLUP);  // PWR handled in main.cpp (1.5s hold)
 #ifdef LED_WHITE
   pinMode(LED_WHITE, OUTPUT);
   digitalWrite(LED_WHITE, LOW);
@@ -46,20 +43,8 @@ void SenseCapHeadless::begin(mesh::MainBoard* board, EnvironmentSensorManager* s
 void SenseCapHeadless::pollButtons() {
   unsigned long now = millis();
 
-  if (!_board) return;
-
-  bool pwr = BUTTON_PRESSED(PIN_BUTTON1);
-  if (pwr) {
-    if (!_pwr_was_pressed) {
-      _pwr_was_pressed = true;
-      _pwr_press_start = now;
-    } else if (now - _pwr_press_start >= LONG_PRESS_MS) {
-      _board->powerOff();
-      _pwr_was_pressed = false;
-    }
-  } else {
-    _pwr_was_pressed = false;
-  }
+  // PWR button (power off) is handled in main.cpp with 1.5s hold (same as upstream dev)
+  // Here we only handle USR button (double/triple tap) and GPS LED feedback
 
   bool usr = BUTTON_PRESSED(PIN_BUTTON2);
   if (usr && !_usr_was_pressed) {

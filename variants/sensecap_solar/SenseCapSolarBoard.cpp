@@ -4,6 +4,11 @@
 #include "SenseCapSolarBoard.h"
 #include "variant.h"
 
+#ifdef NRF52_POWER_MANAGEMENT
+#include "nrf.h"
+extern const uint32_t g_ADigitalPinMap[];
+#endif
+
 static void blinkBothLeds(int times, int onMs, int offMs) {
 #if defined(LED_WHITE) && defined(LED_BLUE)
   for (int i = 0; i < times; i++) {
@@ -89,7 +94,7 @@ void SenseCapSolarBoard::begin() {
 
   delay(10);   // give sx1262 some time to power up
 
-#if defined(SENSECAP_HEADLESS) && !defined(DISPLAY_CLASS)
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
   // Startup: white + blue on for 5 seconds, then off
   digitalWrite(LED_WHITE, HIGH);
   digitalWrite(LED_BLUE, HIGH);
@@ -101,12 +106,22 @@ void SenseCapSolarBoard::begin() {
 
 void SenseCapSolarBoard::powerOff() {
 #if defined(LED_WHITE) && defined(LED_BLUE)
-  // Shutdown: blink white + blue 5 times fast
+  // Shutdown: blink white + blue 5 times fast (custom feedback)
   blinkBothLeds(5, 150, 150);
 #endif
 #ifdef NRF52_POWER_MANAGEMENT
+#ifdef PIN_USER_BTN
+  while (digitalRead(PIN_USER_BTN) == LOW)
+    ;  // Wait for user to release button
+  // Keep pull-up enabled in system-off so the wake line doesn't float low.
+  nrf_gpio_cfg_sense_input(g_ADigitalPinMap[PIN_USER_BTN], NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
+#elif defined(PIN_BUTTON1)
+  while (digitalRead(PIN_BUTTON1) == LOW)
+    ;
+  nrf_gpio_cfg_sense_input(g_ADigitalPinMap[PIN_BUTTON1], NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
+#endif
   initiateShutdown(SHUTDOWN_REASON_USER);
 #else
-  (void)0;
+  sd_power_system_off();
 #endif
 }

@@ -8,7 +8,7 @@
   static UITask ui_task(display);
 #endif
 
-#if defined(SENSECAP_HEADLESS) && !defined(DISPLAY_CLASS)
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
   #include <SenseCapHeadless.h>
   static SenseCapHeadless headless;
 #endif
@@ -18,7 +18,7 @@ SimpleMeshTables tables;
 
 MyMesh the_mesh(board, radio_driver, *new ArduinoMillis(), fast_rng, rtc_clock, tables);
 
-#if defined(SENSECAP_HEADLESS) && !defined(DISPLAY_CLASS)
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
   static void sensecap_send_advert() { the_mesh.sendSelfAdvertisement(0, false); }
 #endif
 
@@ -108,7 +108,7 @@ void setup() {
   ui_task.begin(the_mesh.getNodePrefs(), FIRMWARE_BUILD_DATE, FIRMWARE_VERSION);
 #endif
 
-#if defined(SENSECAP_HEADLESS) && !defined(DISPLAY_CLASS)
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
   headless.begin(&board, &sensors, sensecap_send_advert);
 #endif
 
@@ -162,7 +162,7 @@ void loop() {
 
   the_mesh.loop();
   sensors.loop();
-#if defined(SENSECAP_HEADLESS) && !defined(DISPLAY_CLASS)
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
   headless.loop();
 #endif
 #ifdef DISPLAY_CLASS
