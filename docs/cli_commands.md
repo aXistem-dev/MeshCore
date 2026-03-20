@@ -869,13 +869,13 @@ region save
 - `gps timeout` — Get no-fix timeout (minutes)
 - `gps timeout <min>` — Set timeout (1–15 min)
 - `gps interval` — Get wake interval (seconds)
-- `gps interval <value>` — Set interval (e.g. 1h, 13h, 2d, 15d or 3600–2592000 s)
+- `gps interval <value>` — Set interval (e.g. 15m, 30m, 1h, 2d or 900–2592000 s)
 
 **Parameters:**
 - `mode`: `off` | `bootonly` | `periodic`
 - `sec`: 5–240 (default 15)
 - `min`: 1–15 (default 5)
-- `value`: `Nh` (N hours, 1–720), `Nd` (N days, 1–30), or raw seconds (3600–2592000)
+- `value`: `Nm` (N minutes, 15–43200), `Nh` (N hours, 1–720), `Nd` (N days, 1–30), or raw seconds (900–2592000)
 
 **Defaults:** mode=bootonly, hold=15 s, timeout=5 min, interval=604800 (7 d)
 

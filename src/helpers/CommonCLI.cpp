@@ -32,6 +32,8 @@ static void formatGpsInterval(uint32_t sec, char* buf, size_t bufsize) {
     snprintf(buf, bufsize, "%lud", (unsigned long)(sec / 86400));
   } else if (sec % 3600 == 0 && sec >= 3600 && sec <= 2592000) {
     snprintf(buf, bufsize, "%luh", (unsigned long)(sec / 3600));
+  } else if (sec % 60 == 0 && sec >= 900 && sec < 3600) {
+    snprintf(buf, bufsize, "%lum", (unsigned long)(sec / 60));
   } else {
     snprintf(buf, bufsize, "%lu", (unsigned long)sec);
   }
@@ -806,7 +808,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
           if (v >= 1 && v <= 15) { _prefs->gps_timeout_min = (uint8_t)v; savePrefs(); }
         } else if (strcmp(key, "gps_interval") == 0) {
           uint32_t v = (uint32_t)strtoul(value, NULL, 10);
-          if (v >= 3600 && v <= 2592000) { _prefs->gps_interval = v; savePrefs(); }
+          if (v >= 900 && v <= 2592000) { _prefs->gps_interval = v; savePrefs(); }
         }
         #endif
         strcpy(reply, "ok");
@@ -915,7 +917,10 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         char* end;
         unsigned long n = strtoul(val, &end, 10);
         if (end > val) {
-          if (*end == 'h' || *end == 'H') {
+          if (*end == 'm' || *end == 'M') {
+            if (n >= 15 && n <= 43200) sec = (uint32_t)(n * 60);
+            end++;
+          } else if (*end == 'h' || *end == 'H') {
             if (n >= 1 && n <= 720) sec = (uint32_t)(n * 3600);
             end++;
           } else if (*end == 'd' || *end == 'D') {
@@ -929,7 +934,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             if (*end != 0) sec = 0;
           }
         }
-        if (sec >= 3600 && sec <= 2592000) {
+        if (sec >= 900 && sec <= 2592000) {
           _prefs->gps_interval = sec;
           char buf[12];
           snprintf(buf, sizeof(buf), "%lu", (unsigned long)sec);

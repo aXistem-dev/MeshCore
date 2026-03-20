@@ -620,8 +620,8 @@ bool EnvironmentSensorManager::setSettingValue(const char* name, const char* val
   if (strcmp(name, "gps_interval") == 0) {
     uint32_t interval_seconds = (uint32_t)strtoul(value, NULL, 10);
     #if GPS_POWER_SAVE_ACTIVE
-    // Repeaters: 3600–2592000 (1h–30d) for periodic; store anyway (always allowed)
-    if (interval_seconds >= 3600 && interval_seconds <= 2592000) {
+    // Repeaters: 900–2592000 (15min–30d) for periodic; store anyway (always allowed)
+    if (interval_seconds >= 900 && interval_seconds <= 2592000) {
       gps_update_interval_sec = interval_seconds;
       if (gps_saver_mode == 2 && !gps_active && _rtc_clock) {
         _next_gps_wake_unixtime = _rtc_clock->getCurrentTime() + gps_update_interval_sec;
@@ -656,7 +656,7 @@ void EnvironmentSensorManager::applyGpsSaverPrefs(uint8_t mode, uint8_t hold, ui
   setSettingValue("gps_saver_hold", buf);
   snprintf(buf, sizeof(buf), "%d", timeout_min);
   setSettingValue("gps_timeout", buf);
-  uint32_t iv = (interval_sec >= 3600 && interval_sec <= 2592000) ? interval_sec : 604800;
+  uint32_t iv = (interval_sec >= 900 && interval_sec <= 2592000) ? interval_sec : 604800;
   snprintf(buf, sizeof(buf), "%lu", (unsigned long)iv);
   setSettingValue("gps_interval", buf);
 }
