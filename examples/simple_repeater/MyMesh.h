@@ -69,11 +69,11 @@ struct NeighbourInfo {
 };
 
 #ifndef FIRMWARE_BUILD_DATE
-  #define FIRMWARE_BUILD_DATE   "6 Mar 2026"
+  #define FIRMWARE_BUILD_DATE   "20 Mar 2026"
 #endif
 
 #ifndef FIRMWARE_VERSION
-  #define FIRMWARE_VERSION   "v1.14.0"
+  #define FIRMWARE_VERSION   "v1.14.1"
 #endif
 
 #define FIRMWARE_ROLE "repeater"
@@ -164,7 +164,7 @@ protected:
     bool prefs_fixed = false;
     if (_prefs.gps_saver_hold < 5 || _prefs.gps_saver_hold > 240) { _prefs.gps_saver_hold = 15; prefs_fixed = true; }
     if (_prefs.gps_timeout_min < 1 || _prefs.gps_timeout_min > 15) { _prefs.gps_timeout_min = 5; prefs_fixed = true; }
-    if (_prefs.gps_interval < 3600 || _prefs.gps_interval > 2592000) { _prefs.gps_interval = 604800; prefs_fixed = true; }
+    if (_prefs.gps_interval < 900 || _prefs.gps_interval > 2592000) { _prefs.gps_interval = 604800; prefs_fixed = true; }
     if (prefs_fixed) savePrefs();
     sensors.applyGpsSaverPrefs(_prefs.gps_saver_mode, _prefs.gps_saver_hold, _prefs.gps_timeout_min, _prefs.gps_interval, getRTCClock());
     #endif
@@ -253,4 +253,8 @@ public:
 
   // To check if there is pending work
   bool hasPendingWork() const;
+
+#if defined(USE_SX1262) || defined(USE_SX1268)
+  void setRxBoostedGain(bool enable) override;
+#endif
 };
