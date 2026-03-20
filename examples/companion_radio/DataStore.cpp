@@ -202,6 +202,11 @@ void DataStore::loadPrefs(NodePrefs& prefs, double& node_lat, double& node_lon) 
     prefs.screen_brightness = 2;  // default to Normal
     prefs.screen_screensaver = 0;  // default to OFF
     prefs.timezone_offset_minutes = 0;  // default to UTC
+    prefs.gps_enabled = 0;
+    prefs.gps_interval = 0;
+    prefs.autoadd_config = 0;
+    prefs.autoadd_max_hops = 0;
+    prefs.rx_boosted_gain = 0;
   }
 }
 
@@ -218,7 +223,7 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& no
     file.read((uint8_t *)&_prefs.freq, sizeof(_prefs.freq));                               // 56
     file.read((uint8_t *)&_prefs.sf, sizeof(_prefs.sf));                                   // 60
     file.read((uint8_t *)&_prefs.cr, sizeof(_prefs.cr));                                   // 61
-    file.read(pad, 1);                                                                     // 62
+    file.read((uint8_t *)&_prefs.client_repeat, sizeof(_prefs.client_repeat));             // 62
     file.read((uint8_t *)&_prefs.manual_add_contacts, sizeof(_prefs.manual_add_contacts)); // 63
     file.read((uint8_t *)&_prefs.bw, sizeof(_prefs.bw));                                   // 64
     file.read((uint8_t *)&_prefs.tx_power_dbm, sizeof(_prefs.tx_power_dbm));               // 68
@@ -228,7 +233,8 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& no
     file.read((uint8_t *)&_prefs.rx_delay_base, sizeof(_prefs.rx_delay_base));             // 72
     file.read((uint8_t *)&_prefs.advert_loc_policy, sizeof(_prefs.advert_loc_policy));     // 76
     file.read((uint8_t *)&_prefs.multi_acks, sizeof(_prefs.multi_acks));                   // 77
-    file.read(pad, 2);                                                                     // 78
+    file.read((uint8_t *)&_prefs.path_hash_mode, sizeof(_prefs.path_hash_mode));            // 78
+    file.read(pad, 1);                                                                     // 79
     file.read((uint8_t *)&_prefs.ble_pin, sizeof(_prefs.ble_pin));                         // 80
     file.read((uint8_t *)&_prefs.buzzer_quiet, sizeof(_prefs.buzzer_quiet));               // 84
     // screen_always_on is a new field - read it if available, otherwise default to 0
@@ -255,6 +261,20 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& no
       file.read((uint8_t *)&_prefs.timezone_offset_minutes, sizeof(_prefs.timezone_offset_minutes));    // 88-89
     } else {
       _prefs.timezone_offset_minutes = 0;  // default to UTC for old preference files
+    }
+    // gps_enabled, gps_interval, autoadd_config, autoadd_max_hops, rx_boosted_gain - read if available
+    if (file.available() >= (int)(sizeof(_prefs.gps_enabled) + sizeof(_prefs.gps_interval) + sizeof(_prefs.autoadd_config) + sizeof(_prefs.autoadd_max_hops) + sizeof(_prefs.rx_boosted_gain))) {
+      file.read((uint8_t *)&_prefs.gps_enabled, sizeof(_prefs.gps_enabled));                 // 90
+      file.read((uint8_t *)&_prefs.gps_interval, sizeof(_prefs.gps_interval));               // 91
+      file.read((uint8_t *)&_prefs.autoadd_config, sizeof(_prefs.autoadd_config));           // 95
+      file.read((uint8_t *)&_prefs.autoadd_max_hops, sizeof(_prefs.autoadd_max_hops));       // 96
+      file.read((uint8_t *)&_prefs.rx_boosted_gain, sizeof(_prefs.rx_boosted_gain));         // 97
+    } else {
+      _prefs.gps_enabled = 0;
+      _prefs.gps_interval = 0;
+      _prefs.autoadd_config = 0;
+      _prefs.autoadd_max_hops = 0;
+      _prefs.rx_boosted_gain = 0;
     }
 
     file.close();
@@ -290,9 +310,14 @@ void DataStore::savePrefs(const NodePrefs& _prefs, double node_lat, double node_
     file.write((uint8_t *)&_prefs.ble_pin, sizeof(_prefs.ble_pin));                         // 80
     file.write((uint8_t *)&_prefs.buzzer_quiet, sizeof(_prefs.buzzer_quiet));               // 84
     file.write((uint8_t *)&_prefs.screen_always_on, sizeof(_prefs.screen_always_on));        // 85
-    file.write((uint8_t *)&_prefs.screen_brightness, sizeof(_prefs.screen_brightness));       // 86
-    file.write((uint8_t *)&_prefs.screen_screensaver, sizeof(_prefs.screen_screensaver));       // 87
-    file.write((uint8_t *)&_prefs.timezone_offset_minutes, sizeof(_prefs.timezone_offset_minutes));       // 88-89
+    file.write((uint8_t *)&_prefs.screen_brightness, sizeof(_prefs.screen_brightness));      // 86
+    file.write((uint8_t *)&_prefs.screen_screensaver, sizeof(_prefs.screen_screensaver));   // 87
+    file.write((uint8_t *)&_prefs.timezone_offset_minutes, sizeof(_prefs.timezone_offset_minutes));  // 88-89
+    file.write((uint8_t *)&_prefs.gps_enabled, sizeof(_prefs.gps_enabled));                 // 90
+    file.write((uint8_t *)&_prefs.gps_interval, sizeof(_prefs.gps_interval));               // 91
+    file.write((uint8_t *)&_prefs.autoadd_config, sizeof(_prefs.autoadd_config));           // 95
+    file.write((uint8_t *)&_prefs.autoadd_max_hops, sizeof(_prefs.autoadd_max_hops));        // 96
+    file.write((uint8_t *)&_prefs.rx_boosted_gain, sizeof(_prefs.rx_boosted_gain));          // 97
 
     file.close();
   }

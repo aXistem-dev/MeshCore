@@ -706,7 +706,7 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
 
   // defaults
   memset(&_prefs, 0, sizeof(_prefs));
-  _prefs.airtime_factor = 1.0;    // one half
+  _prefs.airtime_factor = 1.0;
   _prefs.rx_delay_base =   0.0f;  // turn off by default, was 10.0;
   _prefs.tx_delay_factor = 0.5f;   // was 0.25f
   _prefs.direct_tx_delay_factor = 0.2f; // was zero
@@ -729,6 +729,9 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
   _prefs.gps_enabled = 0;
   _prefs.gps_interval = 0;
   _prefs.advert_loc_policy = ADVERT_LOC_PREFS;
+  #if GPS_POWER_SAVE_ACTIVE
+  _prefs.gps_saver_mode = 1;
+  #endif
 }
 
 void SensorMesh::begin(FILESYSTEM* fs) {
@@ -749,6 +752,9 @@ void SensorMesh::begin(FILESYSTEM* fs) {
 
 #if ENV_INCLUDE_GPS == 1
   applyGpsPrefs();
+  #if GPS_POWER_SAVE_ACTIVE
+  sensors.setGpsOffPersistCallback([](void* user) { ((SensorMesh*)user)->persistGpsOff(); }, this);
+  #endif
 #endif
 }
 

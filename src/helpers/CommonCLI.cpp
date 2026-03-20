@@ -4,6 +4,10 @@
 #include "AdvertDataHelpers.h"
 #include <RTClib.h>
 
+#ifndef BRIDGE_MAX_BAUD
+#define BRIDGE_MAX_BAUD 115200
+#endif
+
 // Believe it or not, this std C function is busted on some platforms!
 static uint32_t _atoi(const char* sp) {
   uint32_t n = 0;
@@ -21,6 +25,20 @@ static bool isValidName(const char *n) {
   }
   return true;
 }
+
+#if GPS_POWER_SAVE_ACTIVE
+static void formatGpsInterval(uint32_t sec, char* buf, size_t bufsize) {
+  if (sec % 86400 == 0 && sec >= 86400 && sec <= 2592000) {
+    snprintf(buf, bufsize, "%lud", (unsigned long)(sec / 86400));
+  } else if (sec % 3600 == 0 && sec >= 3600 && sec <= 2592000) {
+    snprintf(buf, bufsize, "%luh", (unsigned long)(sec / 3600));
+  } else if (sec % 60 == 0 && sec >= 900 && sec < 3600) {
+    snprintf(buf, bufsize, "%lum", (unsigned long)(sec / 60));
+  } else {
+    snprintf(buf, bufsize, "%lu", (unsigned long)sec);
+  }
+}
+#endif
 
 void CommonCLI::loadPrefs(FILESYSTEM* fs) {
   if (fs->exists("/com_prefs")) {
@@ -51,12 +69,12 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *)&_prefs->tx_power_dbm, sizeof(_prefs->tx_power_dbm));        // 76
     file.read((uint8_t *)&_prefs->disable_fwd, sizeof(_prefs->disable_fwd));          // 77
     file.read((uint8_t *)&_prefs->advert_interval, sizeof(_prefs->advert_interval));  // 78
-    file.read((uint8_t *)pad, 1);                                                     // 79  was 'unused'
+    file.read((uint8_t *)&_prefs->rx_boosted_gain, sizeof(_prefs->rx_boosted_gain));  // 79
     file.read((uint8_t *)&_prefs->rx_delay_base, sizeof(_prefs->rx_delay_base));      // 80
     file.read((uint8_t *)&_prefs->tx_delay_factor, sizeof(_prefs->tx_delay_factor));  // 84
     file.read((uint8_t *)&_prefs->guest_password[0], sizeof(_prefs->guest_password)); // 88
     file.read((uint8_t *)&_prefs->direct_tx_delay_factor, sizeof(_prefs->direct_tx_delay_factor)); // 104
-    file.read(pad, 4);                                                                             // 108
+    file.read(pad, 4); // 108 : 4 bytes unused
     file.read((uint8_t *)&_prefs->sf, sizeof(_prefs->sf));                                         // 112
     file.read((uint8_t *)&_prefs->cr, sizeof(_prefs->cr));                                         // 113
     file.read((uint8_t *)&_prefs->allow_read_only, sizeof(_prefs->allow_read_only));               // 114
@@ -81,9 +99,30 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *)&_prefs->gps_interval, sizeof(_prefs->gps_interval));                     // 157
     file.read((uint8_t *)&_prefs->advert_loc_policy, sizeof (_prefs->advert_loc_policy));          // 161
     file.read((uint8_t *)&_prefs->discovery_mod_timestamp, sizeof(_prefs->discovery_mod_timestamp)); // 162
-    file.read((uint8_t *)&_prefs->adc_multiplier, sizeof(_prefs->adc_multiplier)); // 166
-    file.read((uint8_t *)_prefs->owner_info, sizeof(_prefs->owner_info));  // 170
-    // 290
+    file.read((uint8_t *)&_prefs->adc_multiplier, sizeof(_prefs->adc_multiplier));                 // 166
+    file.read((uint8_t *)_prefs->owner_info, sizeof(_prefs->owner_info));                          // 170
+    // next: 290
+    #if GPS_POWER_SAVE_ACTIVE
+    if (file.available() >= (int)sizeof(_prefs->gps_saver_mode)) {
+      file.read((uint8_t *)&_prefs->gps_saver_mode, sizeof(_prefs->gps_saver_mode));   // 290
+      if (file.available() >= (int)(sizeof(_prefs->gps_saver_hold) + sizeof(_prefs->gps_timeout_min))) {
+        file.read((uint8_t *)&_prefs->gps_saver_hold, sizeof(_prefs->gps_saver_hold));   // 291
+        file.read((uint8_t *)&_prefs->gps_timeout_min, sizeof(_prefs->gps_timeout_min)); // 292
+      } else {
+        _prefs->gps_saver_hold = 15;
+        _prefs->gps_timeout_min = 5;
+      }
+    } else {
+      _prefs->gps_saver_mode = 1;
+      _prefs->gps_saver_hold = 15;
+      _prefs->gps_timeout_min = 5;
+    }
+    #endif
+    if (file.available() >= (int)sizeof(_prefs->telem_loc_policy)) {
+      file.read((uint8_t *)&_prefs->telem_loc_policy, sizeof(_prefs->telem_loc_policy));
+    } else {
+      _prefs->telem_loc_policy = TELEM_LOC_ALLOW;
+    }
 
     // sanitise bad pref values
     _prefs->rx_delay_base = constrain(_prefs->rx_delay_base, 0, 20.0f);
@@ -103,13 +142,22 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     _prefs->bridge_enabled = constrain(_prefs->bridge_enabled, 0, 1);
     _prefs->bridge_delay = constrain(_prefs->bridge_delay, 0, 10000);
     _prefs->bridge_pkt_src = constrain(_prefs->bridge_pkt_src, 0, 1);
-    _prefs->bridge_baud = constrain(_prefs->bridge_baud, 9600, 115200);
+    _prefs->bridge_baud = constrain(_prefs->bridge_baud, 9600, BRIDGE_MAX_BAUD);
     _prefs->bridge_channel = constrain(_prefs->bridge_channel, 0, 14);
 
     _prefs->powersaving_enabled = constrain(_prefs->powersaving_enabled, 0, 1);
 
     _prefs->gps_enabled = constrain(_prefs->gps_enabled, 0, 1);
     _prefs->advert_loc_policy = constrain(_prefs->advert_loc_policy, 0, 2);
+    _prefs->telem_loc_policy = constrain(_prefs->telem_loc_policy, 0, 2);
+    #if GPS_POWER_SAVE_ACTIVE
+    _prefs->gps_saver_mode = constrain(_prefs->gps_saver_mode, 0, 2);
+    _prefs->gps_saver_hold = constrain(_prefs->gps_saver_hold, 5, 240);
+    _prefs->gps_timeout_min = constrain(_prefs->gps_timeout_min, 1, 15);
+    #endif
+
+    // sanitise settings
+    _prefs->rx_boosted_gain = constrain(_prefs->rx_boosted_gain, 0, 1); // boolean
 
     file.close();
   }
@@ -138,12 +186,12 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *)&_prefs->tx_power_dbm, sizeof(_prefs->tx_power_dbm));        // 76
     file.write((uint8_t *)&_prefs->disable_fwd, sizeof(_prefs->disable_fwd));          // 77
     file.write((uint8_t *)&_prefs->advert_interval, sizeof(_prefs->advert_interval));  // 78
-    file.write((uint8_t *)pad, 1);                                                     // 79  was 'unused'
+    file.write((uint8_t *)&_prefs->rx_boosted_gain, sizeof(_prefs->rx_boosted_gain));  // 79
     file.write((uint8_t *)&_prefs->rx_delay_base, sizeof(_prefs->rx_delay_base));      // 80
     file.write((uint8_t *)&_prefs->tx_delay_factor, sizeof(_prefs->tx_delay_factor));  // 84
     file.write((uint8_t *)&_prefs->guest_password[0], sizeof(_prefs->guest_password)); // 88
     file.write((uint8_t *)&_prefs->direct_tx_delay_factor, sizeof(_prefs->direct_tx_delay_factor)); // 104
-    file.write(pad, 4);                                                                             // 108
+    file.write(pad, 4); // 108 : 4 byte unused
     file.write((uint8_t *)&_prefs->sf, sizeof(_prefs->sf));                                         // 112
     file.write((uint8_t *)&_prefs->cr, sizeof(_prefs->cr));                                         // 113
     file.write((uint8_t *)&_prefs->allow_read_only, sizeof(_prefs->allow_read_only));               // 114
@@ -169,8 +217,14 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *)&_prefs->advert_loc_policy, sizeof(_prefs->advert_loc_policy));           // 161
     file.write((uint8_t *)&_prefs->discovery_mod_timestamp, sizeof(_prefs->discovery_mod_timestamp)); // 162
     file.write((uint8_t *)&_prefs->adc_multiplier, sizeof(_prefs->adc_multiplier));                 // 166
-    file.write((uint8_t *)_prefs->owner_info, sizeof(_prefs->owner_info));  // 170
-    // 290
+    file.write((uint8_t *)_prefs->owner_info, sizeof(_prefs->owner_info));                          // 170
+    // next: 290
+    #if GPS_POWER_SAVE_ACTIVE
+    file.write((uint8_t *)&_prefs->gps_saver_mode, sizeof(_prefs->gps_saver_mode));   // 290
+    file.write((uint8_t *)&_prefs->gps_saver_hold, sizeof(_prefs->gps_saver_hold));   // 291
+    file.write((uint8_t *)&_prefs->gps_timeout_min, sizeof(_prefs->gps_timeout_min));  // 292
+    #endif
+    file.write((uint8_t *)&_prefs->telem_loc_policy, sizeof(_prefs->telem_loc_policy));
 
     file.close();
   }
@@ -199,7 +253,9 @@ uint8_t CommonCLI::buildAdvertData(uint8_t node_type, uint8_t* app_data) {
 }
 
 void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, char* reply) {
-    if (memcmp(command, "reboot", 6) == 0) {
+    if (memcmp(command, "poweroff", 8) == 0 || memcmp(command, "shutdown", 8) == 0) {
+      _board->powerOff();  // doesn't return
+    } else if (memcmp(command, "reboot", 6) == 0) {
       _board->reboot();  // doesn't return
     } else if (memcmp(command, "clkreboot", 9) == 0) {
       // Reset clock
@@ -312,6 +368,10 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         sprintf(reply, "> %s", StrHelper::ftoa(_prefs->node_lat));
       } else if (memcmp(config, "lon", 3) == 0) {
         sprintf(reply, "> %s", StrHelper::ftoa(_prefs->node_lon));
+#if defined(USE_SX1262) || defined(USE_SX1268)
+      } else if (memcmp(config, "radio.rxgain", 12) == 0) {
+        sprintf(reply, "> %s", _prefs->rx_boosted_gain ? "on" : "off");
+#endif
       } else if (memcmp(config, "radio", 5) == 0) {
         char freq[16], bw[16];
         strcpy(freq, StrHelper::ftoa(_prefs->freq));
@@ -505,6 +565,13 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         _prefs->disable_fwd = memcmp(&config[7], "off", 3) == 0;
         savePrefs();
         strcpy(reply, _prefs->disable_fwd ? "OK - repeat is now OFF" : "OK - repeat is now ON");
+#if defined(USE_SX1262) || defined(USE_SX1268)
+      } else if (memcmp(config, "radio.rxgain ", 13) == 0) {
+        _prefs->rx_boosted_gain = memcmp(&config[13], "on", 2) == 0;
+        strcpy(reply, "OK");
+        savePrefs();
+        _callbacks->setRxBoostedGain(_prefs->rx_boosted_gain);
+#endif
       } else if (memcmp(config, "radio ", 6) == 0) {
         strcpy(tmp, &config[6]);
         const char *parts[4];
@@ -639,13 +706,13 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
 #ifdef WITH_RS232_BRIDGE
       } else if (memcmp(config, "bridge.baud ", 12) == 0) {
         uint32_t baud = atoi(&config[12]);
-        if (baud >= 9600 && baud <= 115200) {
+        if (baud >= 9600 && baud <= BRIDGE_MAX_BAUD) {
           _prefs->bridge_baud = (uint32_t)baud;
           _callbacks->restartBridge();
           savePrefs();
           strcpy(reply, "OK");
         } else {
-          strcpy(reply, "Error: baud rate must be between 9600-115200");
+          sprintf(reply, "Error: baud rate must be between 9600-%d",BRIDGE_MAX_BAUD);
         }
 #endif
 #ifdef WITH_ESPNOW_BRIDGE
@@ -690,11 +757,15 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
       sprintf(reply, "%s", _board->getManufacturerName());
     } else if (memcmp(command, "sensor get ", 11) == 0) {
       const char* key = command + 11;
-      const char* val = _sensors->getSettingByKey(key);
-      if (val != NULL) {
-        sprintf(reply, "> %s", val);
+      if (strcmp(key, "telem_loc_policy") == 0) {
+        sprintf(reply, "> %d", _prefs->telem_loc_policy);
       } else {
-        strcpy(reply, "null");
+        const char* val = _sensors->getSettingByKey(key);
+        if (val != NULL) {
+          sprintf(reply, "> %s", val);
+        } else {
+          strcpy(reply, "null");
+        }
       }
     } else if (memcmp(command, "sensor set ", 11) == 0) {
       strcpy(tmp, &command[11]);
@@ -702,9 +773,46 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
       int num = mesh::Utils::parseTextParts(tmp, parts, 2, ' ');
       const char *key = (num > 0) ? parts[0] : "";
       const char *value = (num > 1) ? parts[1] : "null";
-      if (_sensors->setSettingValue(key, value)) {
+      if (strcmp(key, "telem_loc_policy") == 0) {
+        int v = atoi(value);
+        if (v >= 0 && v <= 2) {
+          _prefs->telem_loc_policy = (uint8_t)v;
+          savePrefs();
+          strcpy(reply, "ok");
+        } else {
+          strcpy(reply, "can't find custom var");
+        }
+      } else if (_sensors->setSettingValue(key, value)) {
+        #if ENV_INCLUDE_GPS == 1
+        if (strcmp(key, "gps") == 0) {
+          int v = atoi(value);
+          if (v == 0 || v == 1) {
+            _prefs->gps_enabled = (uint8_t)v;
+            savePrefs();
+          }
+        }
+        #endif
+        #if GPS_POWER_SAVE_ACTIVE
+        if (strcmp(key, "gps_saver_mode") == 0) {
+          const char* actual = _sensors->getSettingByKey("gps_saver_mode");
+          if (actual) {
+            int m = atoi(actual);
+            _prefs->gps_saver_mode = (uint8_t)(m >= 0 && m <= 2 ? m : 2);
+            savePrefs();
+          }
+        } else if (strcmp(key, "gps_saver_hold") == 0) {
+          int v = atoi(value);
+          if (v >= 5 && v <= 240) { _prefs->gps_saver_hold = (uint8_t)v; savePrefs(); }
+        } else if (strcmp(key, "gps_timeout") == 0) {
+          int v = atoi(value);
+          if (v >= 1 && v <= 15) { _prefs->gps_timeout_min = (uint8_t)v; savePrefs(); }
+        } else if (strcmp(key, "gps_interval") == 0) {
+          uint32_t v = (uint32_t)strtoul(value, NULL, 10);
+          if (v >= 900 && v <= 2592000) { _prefs->gps_interval = v; savePrefs(); }
+        }
+        #endif
         strcpy(reply, "ok");
-      } else {
+      } else if (strcmp(key, "telem_loc_policy") != 0) {
         strcpy(reply, "can't find custom var");
       }
     } else if (memcmp(command, "sensor list", 11) == 0) {
@@ -749,6 +857,95 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
       } else {
         strcpy(reply, "gps toggle not found");
       }
+    #if GPS_POWER_SAVE_ACTIVE
+    } else if (memcmp(command, "gps saver", 9) == 0) {
+      if (strlen(command) == 9) {
+        const char* mode_str = _prefs->gps_saver_mode == 0 ? "off" : _prefs->gps_saver_mode == 1 ? "bootonly" : "periodic";
+        sprintf(reply, "> %s", mode_str);
+      } else if (memcmp(command + 10, "off", 3) == 0 && (command[13] == 0 || command[13] == ' ')) {
+        _prefs->gps_saver_mode = 0;
+        _sensors->setSettingValue("gps_saver_mode", "0");
+        savePrefs();
+        strcpy(reply, "ok");
+      } else if (memcmp(command + 10, "bootonly", 8) == 0 && (command[18] == 0 || command[18] == ' ')) {
+        _prefs->gps_saver_mode = 1;
+        _sensors->setSettingValue("gps_saver_mode", "1");
+        savePrefs();
+        strcpy(reply, "ok");
+      } else if (memcmp(command + 10, "periodic", 8) == 0 && (command[18] == 0 || command[18] == ' ')) {
+        _prefs->gps_saver_mode = 2;
+        _sensors->setSettingValue("gps_saver_mode", "2");
+        savePrefs();
+        strcpy(reply, "ok");
+      } else {
+        strcpy(reply, "error");
+      }
+    } else if (memcmp(command, "gps hold", 8) == 0) {
+      if (strlen(command) == 8) {
+        sprintf(reply, "> %d", (int)_prefs->gps_saver_hold);
+      } else {
+        int v = atoi(command + 9);
+        if (v >= 5 && v <= 240) {
+          _prefs->gps_saver_hold = (uint8_t)v;
+          _sensors->setSettingValue("gps_saver_hold", command + 9);
+          savePrefs();
+          strcpy(reply, "ok");
+        } else {
+          strcpy(reply, "error");
+        }
+      }
+    } else if (memcmp(command, "gps timeout", 11) == 0) {
+      if (strlen(command) == 11) {
+        sprintf(reply, "> %d", (int)_prefs->gps_timeout_min);
+      } else {
+        int v = atoi(command + 12);
+        if (v >= 1 && v <= 15) {
+          _prefs->gps_timeout_min = (uint8_t)v;
+          _sensors->setSettingValue("gps_timeout", command + 12);
+          savePrefs();
+          strcpy(reply, "ok");
+        } else {
+          strcpy(reply, "error");
+        }
+      }
+    } else if (memcmp(command, "gps interval", 12) == 0) {
+      if (strlen(command) == 12) {
+        sprintf(reply, "> %lu", (unsigned long)_prefs->gps_interval);
+      } else {
+        const char* val = command + 13;
+        uint32_t sec = 0;
+        char* end;
+        unsigned long n = strtoul(val, &end, 10);
+        if (end > val) {
+          if (*end == 'm' || *end == 'M') {
+            if (n >= 15 && n <= 43200) sec = (uint32_t)(n * 60);
+            end++;
+          } else if (*end == 'h' || *end == 'H') {
+            if (n >= 1 && n <= 720) sec = (uint32_t)(n * 3600);
+            end++;
+          } else if (*end == 'd' || *end == 'D') {
+            if (n >= 1 && n <= 30) sec = (uint32_t)(n * 86400);
+            end++;
+          } else if (*end == 0 || *end == ' ') {
+            sec = (uint32_t)n;
+          }
+          if (sec) {
+            while (*end == ' ') end++;
+            if (*end != 0) sec = 0;
+          }
+        }
+        if (sec >= 900 && sec <= 2592000) {
+          _prefs->gps_interval = sec;
+          char buf[12];
+          snprintf(buf, sizeof(buf), "%lu", (unsigned long)sec);
+          _sensors->setSettingValue("gps_interval", buf);
+          savePrefs();
+          strcpy(reply, "ok");
+        } else {
+          strcpy(reply, "error");
+        }
+      }
+    #endif
     } else if (memcmp(command, "gps sync", 8) == 0) {
       LocationProvider * l = _sensors->getLocationProvider();
       if (l != NULL) {
@@ -792,21 +989,75 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
       } else {
         strcpy(reply, "error");
       }
+    } else if (memcmp(command, "gps telem", 9) == 0) {
+      if (strlen(command) == 9) {
+        switch (_prefs->telem_loc_policy) {
+          case TELEM_LOC_DENY:
+            strcpy(reply, "> deny");
+            break;
+          case TELEM_LOC_ALLOW:
+            strcpy(reply, "> allow");
+            break;
+          case TELEM_LOC_ALWAYS:
+            strcpy(reply, "> always");
+            break;
+          default:
+            strcpy(reply, "error");
+        }
+      } else if (memcmp(command+10, "deny", 4) == 0 && (command[14] == 0 || command[14] == ' ')) {
+        _prefs->telem_loc_policy = TELEM_LOC_DENY;
+        savePrefs();
+        strcpy(reply, "ok");
+      } else if (memcmp(command+10, "allow", 5) == 0 && (command[15] == 0 || command[15] == ' ')) {
+        _prefs->telem_loc_policy = TELEM_LOC_ALLOW;
+        savePrefs();
+        strcpy(reply, "ok");
+      } else if (memcmp(command+10, "always", 6) == 0 && (command[16] == 0 || command[16] == ' ')) {
+        _prefs->telem_loc_policy = TELEM_LOC_ALWAYS;
+        savePrefs();
+        strcpy(reply, "ok");
+      } else {
+        strcpy(reply, "error");
+      }
     } else if (memcmp(command, "gps", 3) == 0) {
       LocationProvider * l = _sensors->getLocationProvider();
       if (l != NULL) {
-        bool enabled = l->isEnabled(); // is EN pin on ?
+        bool enabled = l->isEnabled(); // hardware on (gps_active)
         bool fix = l->isValid();       // has fix ?
         int sats = l->satellitesCount();
-        bool active = !strcmp(_sensors->getSettingByKey("gps"), "1");
+        bool active = !strcmp(_sensors->getSettingByKey("gps"), "1");  // gps_setting
+        #if GPS_POWER_SAVE_ACTIVE
+        uint8_t mode = _prefs->gps_saver_mode;
+        if (!active) {
+          strcpy(reply, "off");
+        } else if (enabled) {
+          sprintf(reply, "on, active, %s, %d sats%s",
+            fix ? "fix" : "no fix",
+            sats,
+            (mode == 1 || mode == 2) ? ", saver" : ""
+          );
+        } else {
+          if (mode == 0) {
+            strcpy(reply, "on");
+          } else if (mode == 1) {
+            strcpy(reply, "on, power-save, bootonly");
+          } else {
+            char ivbuf[12];
+            formatGpsInterval(_prefs->gps_interval, ivbuf, sizeof(ivbuf));
+            sprintf(reply, "on, power-save, every %s", ivbuf);
+          }
+        }
+        #else
         if (enabled) {
           sprintf(reply, "on, %s, %s, %d sats",
-            active?"active":"deactivated", 
-            fix?"fix":"no fix", 
-            sats);
+            active ? "active" : "deactivated",
+            fix ? "fix" : "no fix",
+            sats
+          );
         } else {
-          strcpy(reply, "off");
+          strcpy(reply, active ? "on" : "off");
         }
+        #endif
       } else {
         strcpy(reply, "Can't find GPS");
       }

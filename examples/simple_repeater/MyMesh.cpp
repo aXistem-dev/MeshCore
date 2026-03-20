@@ -250,6 +250,12 @@ int MyMesh::handleRequest(ClientInfo *sender, uint32_t sender_timestamp, uint8_t
     if ((sender->permissions & PERM_ACL_ROLE_MASK) == PERM_ACL_GUEST) {
       perm_mask = 0x00;  // just base telemetry allowed
     }
+    // apply telem_loc_policy: deny / allow (non-guest) / always
+    if (_prefs.telem_loc_policy == TELEM_LOC_DENY) {
+      perm_mask &= ~TELEM_PERM_LOCATION;
+    } else if (_prefs.telem_loc_policy == TELEM_LOC_ALWAYS) {
+      perm_mask |= TELEM_PERM_LOCATION;
+    }
     sensors.querySensors(perm_mask, telemetry);
 
 	// This default temperature will be overridden by external sensors (if any)
@@ -855,7 +861,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 
   // defaults
   memset(&_prefs, 0, sizeof(_prefs));
-  _prefs.airtime_factor = 1.0;   // one half
+  _prefs.airtime_factor = 1.0;
   _prefs.rx_delay_base = 0.0f;   // turn off by default, was 10.0;
   _prefs.tx_delay_factor = 0.5f; // was 0.25f
   _prefs.direct_tx_delay_factor = 0.3f; // was 0.2
@@ -886,8 +892,20 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.gps_enabled = 0;
   _prefs.gps_interval = 0;
   _prefs.advert_loc_policy = ADVERT_LOC_PREFS;
+  _prefs.telem_loc_policy = TELEM_LOC_ALLOW;
+  #if GPS_POWER_SAVE_ACTIVE
+  _prefs.gps_saver_mode = 1;
+  #endif
 
   _prefs.adc_multiplier = 0.0f; // 0.0f means use default board multiplier
+
+#if defined(USE_SX1262) || defined(USE_SX1268)
+#ifdef SX126X_RX_BOOSTED_GAIN
+  _prefs.rx_boosted_gain = SX126X_RX_BOOSTED_GAIN;
+#else
+  _prefs.rx_boosted_gain = 1; // enabled by default;
+#endif
+#endif
 
   pending_discover_tag = 0;
   pending_discover_until = 0;
@@ -911,6 +929,10 @@ void MyMesh::begin(FILESYSTEM *fs) {
   radio_set_params(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_set_tx_power(_prefs.tx_power_dbm);
 
+  radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
+  MESH_DEBUG_PRINTLN("RX Boosted Gain Mode: %s",
+                     radio_driver.getRxBoostedGainMode() ? "Enabled" : "Disabled");
+
   updateAdvertTimer();
   updateFloodAdvertTimer();
 
@@ -918,6 +940,9 @@ void MyMesh::begin(FILESYSTEM *fs) {
 
 #if ENV_INCLUDE_GPS == 1
   applyGpsPrefs();
+  #if GPS_POWER_SAVE_ACTIVE
+  sensors.setGpsOffPersistCallback([](void* user) { ((MyMesh*)user)->persistGpsOff(); }, this);
+  #endif
 #endif
 }
 
@@ -992,6 +1017,12 @@ void MyMesh::dumpLogFile() {
 void MyMesh::setTxPower(int8_t power_dbm) {
   radio_set_tx_power(power_dbm);
 }
+
+#if defined(USE_SX1262) || defined(USE_SX1268)
+void MyMesh::setRxBoostedGain(bool enable) {
+  radio_driver.setRxBoostedGainMode(enable);
+}
+#endif
 
 void MyMesh::formatNeighborsReply(char *reply) {
   char *dp = reply;
@@ -1281,7 +1312,8 @@ void MyMesh::loop() {
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
     mesh::Packet *pkt = createSelfAdvert();
-    if (pkt) sendFlood(pkt);
+    uint32_t delay_millis = 0;
+    if (pkt) sendFlood(pkt, delay_millis, _prefs.path_hash_mode + 1);
 
     updateFloodAdvertTimer(); // schedule next flood advert
     updateAdvertTimer();      // also schedule local advert (so they don't overlap)
