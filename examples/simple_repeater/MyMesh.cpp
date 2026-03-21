@@ -949,9 +949,10 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   StrHelper::strncpy(_prefs.timezone_string, "America/Los_Angeles", sizeof(_prefs.timezone_string));
   _prefs.timezone_offset = -8; // fallback
 
-  // Let's Mesh Analyzer defaults (both enabled by default)
-  _prefs.mqtt_analyzer_us_enabled = 1; // enabled
-  _prefs.mqtt_analyzer_eu_enabled = 1; // enabled
+  // MQTT slot presets (analyzer-us and analyzer-eu enabled by default)
+  StrHelper::strncpy(_prefs.mqtt_slot_preset[0], "analyzer-us", sizeof(_prefs.mqtt_slot_preset[0]));
+  StrHelper::strncpy(_prefs.mqtt_slot_preset[1], "analyzer-eu", sizeof(_prefs.mqtt_slot_preset[1]));
+  StrHelper::strncpy(_prefs.mqtt_slot_preset[2], "none", sizeof(_prefs.mqtt_slot_preset[2]));
 
   _prefs.adc_multiplier = 0.0f; // 0.0f means use default board multiplier
 

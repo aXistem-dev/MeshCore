@@ -77,18 +77,19 @@ struct NodePrefs { // persisted to file
   char timezone_string[32]; // Timezone string (e.g., "America/Los_Angeles")
   int8_t timezone_offset;   // Timezone offset in hours (-12 to +14) - fallback
   
-  // MQTT server settings
-  char mqtt_server[64];     // MQTT server hostname
-  uint16_t mqtt_port;       // MQTT server port
-  char mqtt_username[32];   // MQTT username
-  char mqtt_password[64];   // MQTT password
-  
-  // Let's Mesh Analyzer settings
-  uint8_t mqtt_analyzer_us_enabled; // Enable US analyzer server
-  uint8_t mqtt_analyzer_eu_enabled; // Enable EU analyzer server
+  // MQTT slot presets (3 slots, each can be a preset name or "custom"/"none")
+  char mqtt_slot_preset[3][24]; // e.g. "analyzer-us", "meshmapper", "custom", "none"
+
+  // Per-slot custom broker settings (only used when slot preset is "custom")
+  char mqtt_slot_host[3][64];
+  uint16_t mqtt_slot_port[3];
+  char mqtt_slot_username[3][32];
+  char mqtt_slot_password[3][64];
+
+  // Shared MQTT authentication
   char mqtt_owner_public_key[65]; // Owner public key (hex string, same length as repeater public key)
   char mqtt_email[64]; // Owner email address for matching nodes with owners
-  
+
   uint8_t loop_detect;
 };
 
@@ -103,27 +104,38 @@ struct MQTTPrefs {
   uint8_t mqtt_raw_enabled;      // Enable raw messages
   uint8_t mqtt_tx_enabled;       // Enable TX packet uplinking
   uint32_t mqtt_status_interval; // Status publish interval (ms)
-  
+
   // WiFi settings
   char wifi_ssid[32];       // WiFi SSID
   char wifi_password[64];  // WiFi password
   uint8_t wifi_power_save; // WiFi power save mode: 0=min, 1=none, 2=max (default: 0=min)
-  
+
   // Timezone settings
   char timezone_string[32]; // Timezone string (e.g., "America/Los_Angeles")
   int8_t timezone_offset;   // Timezone offset in hours (-12 to +14) - fallback
-  
-  // MQTT server settings
-  char mqtt_server[64];     // MQTT server hostname
-  uint16_t mqtt_port;       // MQTT server port
-  char mqtt_username[32];   // MQTT username
-  char mqtt_password[64];   // MQTT password
-  
-  // Let's Mesh Analyzer settings
-  uint8_t mqtt_analyzer_us_enabled; // Enable US analyzer server
-  uint8_t mqtt_analyzer_eu_enabled; // Enable EU analyzer server
-  char mqtt_owner_public_key[65]; // Owner public key (hex string, same length as repeater public key)
-  char mqtt_email[64]; // Owner email address for matching nodes with owners
+
+  // Slot presets (3 slots)
+  char mqtt_slot_preset[3][24]; // e.g. "analyzer-us", "meshmapper", "custom", "none"
+
+  // Per-slot custom broker settings (only used when preset is "custom")
+  char mqtt_slot_host[3][64];
+  uint16_t mqtt_slot_port[3];
+  char mqtt_slot_username[3][32];
+  char mqtt_slot_password[3][64];
+
+  // Shared authentication
+  char mqtt_owner_public_key[65]; // Owner public key (hex string)
+  char mqtt_email[64]; // Owner email address
+
+  // --- Legacy fields for migration detection ---
+  // These are read during loadMQTTPrefs to detect old-format prefs and auto-migrate.
+  // After migration they are zeroed out and not used again.
+  uint8_t _legacy_analyzer_us_enabled;
+  uint8_t _legacy_analyzer_eu_enabled;
+  char _legacy_mqtt_server[64];
+  uint16_t _legacy_mqtt_port;
+  char _legacy_mqtt_username[32];
+  char _legacy_mqtt_password[64];
 };
 #endif
 
