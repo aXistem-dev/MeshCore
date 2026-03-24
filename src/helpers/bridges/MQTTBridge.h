@@ -74,6 +74,8 @@ private:
 
     // Reconnect backoff
     uint8_t reconnect_backoff;      // 0..4 index into backoff table
+    uint8_t max_backoff_failures;   // consecutive failures at max backoff level
+    bool circuit_breaker_tripped;   // true = stop reconnecting until reconfigured
     unsigned long last_reconnect_attempt;
     unsigned long last_log_time;    // Throttle disconnect log messages
   };
@@ -202,7 +204,7 @@ private:
   void setupSlot(int index);           // Create/destroy client for a slot based on its preset
   void teardownSlot(int index);        // Disconnect and free slot resources
   void maintainSlotConnections();      // Maintain all slot connections (token renewal, reconnect)
-  void maintainSlotConnection(int index, unsigned long now_millis, unsigned long current_time, bool time_synced);
+  void maintainSlotConnection(int index, unsigned long now_millis, unsigned long current_time, bool time_synced, bool& reconnect_attempted);
   bool createSlotAuthToken(int index); // Create/renew JWT token for a slot
   bool publishToSlot(int index, const char* topic, const char* payload, bool retained = false);
   bool publishToAllSlots(const char* topic, const char* payload, bool retained = false);

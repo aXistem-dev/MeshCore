@@ -79,7 +79,7 @@ bool JWTHelper::createAuthToken(
   // Verify the signature locally
   int verify_result = ed25519_verify(signature, (const unsigned char*)signingInput, signingInputLen, public_key);
   if (verify_result != 1) {
-    Serial.println("JWTHelper: Signature verification failed!");
+    if (Serial.availableForWrite() > 0) Serial.println("JWTHelper: Signature verification failed!");
     return false;
   }
   
