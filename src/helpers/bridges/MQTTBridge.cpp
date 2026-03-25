@@ -335,7 +335,7 @@ void MQTTBridge::begin() {
           _slots[i].enabled = true;
           _slots[i].preset = preset;
         } else {
-          MQTT_DEBUG_PRINTLN("Slot %d: unknown preset '%s', disabling", i, preset_name);
+          MQTT_DEBUG_PRINTLN("MQTT%d: unknown preset '%s', disabling", i + 1, preset_name);
           _slots[i].enabled = false;
         }
       }
@@ -346,12 +346,12 @@ void MQTTBridge::begin() {
   for (int i = 0; i < MAX_MQTT_SLOTS; i++) {
     if (_slots[i].enabled) {
       if (_slots[i].preset) {
-        MQTT_DEBUG_PRINTLN("Slot %d: preset=%s", i, _slots[i].preset->name);
+        MQTT_DEBUG_PRINTLN("MQTT%d: preset=%s", i + 1, _slots[i].preset->name);
       } else {
-        MQTT_DEBUG_PRINTLN("Slot %d: custom=%s:%d", i, _slots[i].host, _slots[i].port);
+        MQTT_DEBUG_PRINTLN("MQTT%d: custom=%s:%d", i + 1, _slots[i].host, _slots[i].port);
       }
     } else {
-      MQTT_DEBUG_PRINTLN("Slot %d: none", i);
+      MQTT_DEBUG_PRINTLN("MQTT%d: none", i + 1);
     }
   }
 
@@ -628,13 +628,13 @@ void MQTTBridge::mqttTaskLoop() {
       for (int i = 0; i < MAX_MQTT_SLOTS; i++) {
         if (_slots[i].enabled) {
           if (active_count >= _max_active_slots) {
-            MQTT_DEBUG_PRINTLN("Slot %d skipped: max active slots (%d) reached (no PSRAM)", i, _max_active_slots);
+            MQTT_DEBUG_PRINTLN("MQTT%d skipped: max active slots (%d) reached (no PSRAM)", i + 1, _max_active_slots);
             _slots[i].enabled = false;  // Disable so other loops skip it
             continue;
           }
           char reason[80];
           if (!isSlotReady(i, reason, sizeof(reason))) {
-            MQTT_DEBUG_PRINTLN("Slot %d not ready — run '%s' to connect", i, reason);
+            MQTT_DEBUG_PRINTLN("MQTT%d not ready — run '%s' to connect", i + 1, reason);
             continue;
           }
           setupSlot(i);
@@ -652,7 +652,7 @@ void MQTTBridge::mqttTaskLoop() {
     for (int i = 0; i < MAX_MQTT_SLOTS; i++) {
       if (_slot_reconfigure_pending[i]) {
         _slot_reconfigure_pending[i] = false;
-        MQTT_DEBUG_PRINTLN("Applying deferred reconfigure for slot %d (preset: %s)", i, _prefs->mqtt_slot_preset[i]);
+        MQTT_DEBUG_PRINTLN("Applying deferred reconfigure for MQTT%d (preset: %s)", i + 1, _prefs->mqtt_slot_preset[i]);
         applySlotPreset(i, _prefs->mqtt_slot_preset[i]);
       }
     }
@@ -788,7 +788,7 @@ void MQTTBridge::setupSlot(int index) {
 
   // Callbacks (capture index by value)
   slot.client->onConnect([this, index](bool sessionPresent) {
-    MQTT_DEBUG_PRINTLN("Slot %d connected", index);
+    MQTT_DEBUG_PRINTLN("MQTT%d connected", index + 1);
     _slots[index].connected = true;
     _slots[index].reconnect_backoff = 0;
     _slots[index].max_backoff_failures = 0;
@@ -797,12 +797,12 @@ void MQTTBridge::setupSlot(int index) {
     publishStatusToSlot(index);
   });
   slot.client->onDisconnect([this, index](bool sessionPresent) {
-    MQTT_DEBUG_PRINTLN("Slot %d disconnected", index);
+    MQTT_DEBUG_PRINTLN("MQTT%d disconnected", index + 1);
     _slots[index].connected = false;
     updateCachedConnectionStatus();
   });
   slot.client->onError([this, index](esp_mqtt_error_codes error) {
-    MQTT_DEBUG_PRINTLN("Slot %d MQTT error: %d", index, error.esp_tls_last_esp_err);
+    MQTT_DEBUG_PRINTLN("MQTT%d error: %d", index + 1, error.esp_tls_last_esp_err);
   });
 
   if (slot.preset) {
@@ -941,7 +941,7 @@ void MQTTBridge::maintainSlotConnection(int index, unsigned long now_millis, uns
       unsigned long old_token_expires_at = slot.token_expires_at;
 
       if (createSlotAuthToken(index)) {
-        MQTT_DEBUG_PRINTLN("Slot %d token renewed", index);
+        MQTT_DEBUG_PRINTLN("MQTT%d token renewed", index + 1);
 
         const unsigned long DISCONNECT_THRESHOLD = 60;
         bool old_token_expired_or_imminent = !time_synced ||
@@ -952,7 +952,7 @@ void MQTTBridge::maintainSlotConnection(int index, unsigned long now_millis, uns
 
         if (old_token_expired_or_imminent || !slot.client->connected()) {
           // Clean teardown+setup ensures fresh TLS state and credentials
-          MQTT_DEBUG_PRINTLN("Slot %d token renewal: reconnecting with fresh client", index);
+          MQTT_DEBUG_PRINTLN("MQTT%d token renewal: reconnecting with fresh client", index + 1);
           teardownSlot(index);
           setupSlot(index);
           reconnect_attempted = true;
@@ -961,7 +961,7 @@ void MQTTBridge::maintainSlotConnection(int index, unsigned long now_millis, uns
           slot.client->setCredentials(_jwt_username, slot.auth_token);
         }
       } else {
-        MQTT_DEBUG_PRINTLN("Slot %d token renewal failed", index);
+        MQTT_DEBUG_PRINTLN("MQTT%d token renewal failed", index + 1);
         slot.token_expires_at = 0;
       }
       return; // Token renewal handled connect; skip backoff logic below
@@ -978,11 +978,11 @@ void MQTTBridge::maintainSlotConnection(int index, unsigned long now_millis, uns
     if (probe_elapsed >= CIRCUIT_BREAKER_PROBE_INTERVAL_MS) {
       slot.last_reconnect_attempt = now_millis;
       reconnect_attempted = true;
-      MQTT_DEBUG_PRINTLN("Slot %d circuit breaker probe (attempting single reconnect after %lu ms)", index, probe_elapsed);
+      MQTT_DEBUG_PRINTLN("MQTT%d circuit breaker probe (attempting single reconnect after %lu ms)", index + 1, probe_elapsed);
       // Refresh JWT token before reconnecting (it may have expired while tripped)
       if (slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT) {
         if (createSlotAuthToken(index)) {
-          MQTT_DEBUG_PRINTLN("Slot %d token refreshed before circuit breaker probe", index);
+          MQTT_DEBUG_PRINTLN("MQTT%d token refreshed before circuit breaker probe", index + 1);
           slot.client->setCredentials(_jwt_username, slot.auth_token);
         }
       }
@@ -1011,16 +1011,16 @@ void MQTTBridge::maintainSlotConnection(int index, unsigned long now_millis, uns
         slot.max_backoff_failures++;
         if (slot.max_backoff_failures >= MAX_FAILURES_AT_MAX_BACKOFF) {
           slot.circuit_breaker_tripped = true;
-          MQTT_DEBUG_PRINTLN("Slot %d circuit breaker tripped after %d failures at max backoff - stopping reconnect attempts. Reconfigure slot to retry.", index, slot.max_backoff_failures);
+          MQTT_DEBUG_PRINTLN("MQTT%d circuit breaker tripped after %d failures at max backoff - stopping reconnect attempts. Reconfigure slot to retry.", index + 1, slot.max_backoff_failures);
           return;
         }
       }
-      MQTT_DEBUG_PRINTLN("Slot %d reconnecting (backoff level %d, failures at max: %d)", index, slot.reconnect_backoff, slot.max_backoff_failures);
+      MQTT_DEBUG_PRINTLN("MQTT%d reconnecting (backoff level %d, failures at max: %d)", index + 1, slot.reconnect_backoff, slot.max_backoff_failures);
       reconnect_attempted = true;
       // Refresh JWT token before reconnecting (it may have expired during backoff)
       if (slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT) {
         if (createSlotAuthToken(index)) {
-          MQTT_DEBUG_PRINTLN("Slot %d token refreshed before reconnect", index);
+          MQTT_DEBUG_PRINTLN("MQTT%d token refreshed before reconnect", index + 1);
           slot.client->setCredentials(_jwt_username, slot.auth_token);
         }
       }
@@ -1088,7 +1088,7 @@ bool MQTTBridge::publishToSlot(int index, const char* topic, const char* payload
     unsigned long now = millis();
     if (now - slot.last_log_time > SLOT_LOG_INTERVAL) {
       slot.last_log_time = now;
-      MQTT_DEBUG_PRINTLN("Slot %d not connected - skipping publish", index);
+      MQTT_DEBUG_PRINTLN("MQTT%d not connected - skipping publish", index + 1);
     }
     return false;
   }
@@ -1101,7 +1101,7 @@ bool MQTTBridge::publishToSlot(int index, const char* topic, const char* payload
     static unsigned long last_fail_log = 0;
     unsigned long now = millis();
     if (now - last_fail_log > 60000) {
-      MQTT_DEBUG_PRINTLN("Slot %d publish failed (result=%d)", index, result);
+      MQTT_DEBUG_PRINTLN("MQTT%d publish failed (result=%d)", index + 1, result);
       last_fail_log = now;
     }
     return false;
@@ -1267,7 +1267,7 @@ void MQTTBridge::publishStatusToSlot(int index) {
   if (len > 0) {
     int result = slot.client->publish(status_topic, 1, true, json_buffer, strlen(json_buffer));
     if (result <= 0) {
-      MQTT_DEBUG_PRINTLN("Slot %d status publish failed", index);
+      MQTT_DEBUG_PRINTLN("MQTT%d status publish failed", index + 1);
     }
   }
   psram_free(json_buffer);
@@ -1301,7 +1301,7 @@ void MQTTBridge::setSlotPreset(int slot_index, const char* preset_name) {
   #ifdef ESP_PLATFORM
   if (_mqtt_task_handle != nullptr) {
     _slot_reconfigure_pending[slot_index] = true;
-    MQTT_DEBUG_PRINTLN("Slot %d reconfigure queued (preset: %s)", slot_index, preset_name);
+    MQTT_DEBUG_PRINTLN("MQTT%d reconfigure queued (preset: %s)", slot_index + 1, preset_name);
     return;
   }
   #endif
@@ -1339,7 +1339,7 @@ void MQTTBridge::applySlotPreset(int slot_index, const char* preset_name) {
     if (_initialized) {
       char reason[80];
       if (!isSlotReady(slot_index, reason, sizeof(reason))) {
-        MQTT_DEBUG_PRINTLN("Slot %d (%s) not ready — run '%s' to connect", slot_index, preset_name, reason);
+        MQTT_DEBUG_PRINTLN("MQTT%d (%s) not ready — run '%s' to connect", slot_index + 1, preset_name, reason);
         return;
       }
       setupSlot(slot_index);
@@ -2295,7 +2295,7 @@ void MQTTBridge::syncTimeWithNTP() {
           // Check if the slot's token was created with a stale time
           // (token_expires_at would be far in the past relative to current time)
           if (_slots[i].token_expires_at > 0 && current_time > _slots[i].token_expires_at) {
-            MQTT_DEBUG_PRINTLN("Slot %d token stale after time correction, re-creating", i);
+            MQTT_DEBUG_PRINTLN("MQTT%d token stale after time correction, re-creating", i + 1);
             teardownSlot(i);
             setupSlot(i);
           }
