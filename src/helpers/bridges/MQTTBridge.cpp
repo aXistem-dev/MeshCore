@@ -980,13 +980,27 @@ void MQTTBridge::maintainSlotConnection(int index, unsigned long now_millis, uns
       reconnect_attempted = true;
       MQTT_DEBUG_PRINTLN("MQTT%d circuit breaker probe (attempting single reconnect after %lu ms)", index + 1, probe_elapsed);
       if (slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT) {
-        // JWT slots: full teardown+setup for fresh TLS state and credentials
-        // Preserve circuit breaker state across teardown
-        bool saved_tripped = slot.circuit_breaker_tripped;
-        teardownSlot(index);
-        setupSlot(index);
-        _slots[index].circuit_breaker_tripped = saved_tripped;
-        _slots[index].last_reconnect_attempt = now_millis;
+        unsigned long current_time = time(nullptr);
+        bool token_still_valid = slot.token_expires_at > 0 &&
+                                current_time < slot.token_expires_at &&
+                                (slot.token_expires_at - current_time) > 120; // >2 min remaining
+
+        if (token_still_valid) {
+          // Lightweight reconnect — reuse existing client but refresh JWT for fresh iat
+          if (createSlotAuthToken(index)) {
+            slot.client->setCredentials(_jwt_username, slot.auth_token);
+            MQTT_DEBUG_PRINTLN("MQTT%d circuit breaker probe (fresh token)", index + 1);
+          }
+          slot.client->connect();
+        } else {
+          // Token expired or near expiry — full teardown for fresh TLS + new token
+          bool saved_tripped = slot.circuit_breaker_tripped;
+          MQTT_DEBUG_PRINTLN("MQTT%d token expired/near expiry, full teardown+setup for probe", index + 1);
+          teardownSlot(index);
+          setupSlot(index);
+          _slots[index].circuit_breaker_tripped = saved_tripped;
+          _slots[index].last_reconnect_attempt = now_millis;
+        }
       } else {
         slot.client->connect();
       }
@@ -1020,16 +1034,32 @@ void MQTTBridge::maintainSlotConnection(int index, unsigned long now_millis, uns
       MQTT_DEBUG_PRINTLN("MQTT%d reconnecting (backoff level %d, failures at max: %d)", index + 1, slot.reconnect_backoff, slot.max_backoff_failures);
       reconnect_attempted = true;
       if (slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT) {
-        // JWT slots: full teardown+setup for fresh TLS state and credentials
-        // Preserve backoff state across teardown (which resets it to 0)
-        uint8_t saved_backoff = slot.reconnect_backoff;
-        uint8_t saved_failures = slot.max_backoff_failures;
-        MQTT_DEBUG_PRINTLN("MQTT%d teardown+setup for clean JWT reconnect", index + 1);
-        teardownSlot(index);
-        setupSlot(index);
-        _slots[index].reconnect_backoff = saved_backoff;
-        _slots[index].max_backoff_failures = saved_failures;
-        _slots[index].last_reconnect_attempt = now_millis;
+        unsigned long current_time = time(nullptr);
+        bool token_still_valid = slot.token_expires_at > 0 &&
+                                current_time < slot.token_expires_at &&
+                                (slot.token_expires_at - current_time) > 120; // >2 min remaining
+
+        if (token_still_valid) {
+          // Lightweight reconnect — reuse existing client but refresh JWT for fresh iat
+          // (brokers like waev enforce iat freshness ±10 min, so stale iat = rejected)
+          if (createSlotAuthToken(index)) {
+            slot.client->setCredentials(_jwt_username, slot.auth_token);
+            MQTT_DEBUG_PRINTLN("MQTT%d lightweight reconnect (fresh token, expires in %lu sec)", index + 1, slot.token_expires_at - (unsigned long)time(nullptr));
+          } else {
+            MQTT_DEBUG_PRINTLN("MQTT%d lightweight reconnect (token refresh failed, using existing)", index + 1);
+          }
+          slot.client->connect();
+        } else {
+          // Token expired or near expiry — full teardown for fresh TLS + new token
+          uint8_t saved_backoff = slot.reconnect_backoff;
+          uint8_t saved_failures = slot.max_backoff_failures;
+          MQTT_DEBUG_PRINTLN("MQTT%d token expired/near expiry, full teardown+setup for reconnect", index + 1);
+          teardownSlot(index);
+          setupSlot(index);
+          _slots[index].reconnect_backoff = saved_backoff;
+          _slots[index].max_backoff_failures = saved_failures;
+          _slots[index].last_reconnect_attempt = now_millis;
+        }
       } else {
         // Non-JWT slots: lightweight reconnect on existing client
         slot.client->connect();
