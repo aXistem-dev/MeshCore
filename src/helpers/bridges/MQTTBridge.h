@@ -71,6 +71,7 @@ private:
     uint16_t port;
     char username[32];
     char password[64];
+    char broker_uri[128];           // Persistent URI for custom slots (avoids dangling pointer)
 
     // Reconnect backoff
     uint8_t reconnect_backoff;      // 0..4 index into backoff table
@@ -163,6 +164,10 @@ private:
   float _last_snr;
   float _last_rssi;
   unsigned long _last_raw_timestamp;
+
+  // Pre-allocated JSON publish buffer (PSRAM when available, allocated once in begin())
+  static const size_t PUBLISH_JSON_BUFFER_SIZE = 2048;
+  char* _publish_json_buffer;
 
   // Memory pressure monitoring
   unsigned long _last_memory_check;

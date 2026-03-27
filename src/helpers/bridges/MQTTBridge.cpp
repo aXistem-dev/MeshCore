@@ -227,6 +227,9 @@ MQTTBridge::MQTTBridge(NodePrefs *prefs, mesh::PacketManager *mgr, mesh::RTCCloc
 
   // Raw radio buffer in PSRAM when available
   _last_raw_data = (uint8_t*)psram_malloc(LAST_RAW_DATA_SIZE);
+
+  // Pre-allocate JSON publish buffer (reused for all publishes to avoid alloc/free churn)
+  _publish_json_buffer = (char*)psram_malloc(PUBLISH_JSON_BUFFER_SIZE);
 }
 
 // ---------------------------------------------------------------------------
@@ -505,9 +508,11 @@ void MQTTBridge::end() {
     _timezone = nullptr;
   }
 
-  // Free PSRAM-backed raw data buffer
+  // Free PSRAM-backed buffers
   psram_free(_last_raw_data);
   _last_raw_data = nullptr;
+  psram_free(_publish_json_buffer);
+  _publish_json_buffer = nullptr;
 
   _initialized = false;
   _slots_setup_done = false;  // Reset so deferred setup runs again on next begin()
@@ -826,10 +831,25 @@ void MQTTBridge::setupSlot(int index) {
       }
     }
   } else {
-    // Custom broker slot
-    char broker_uri[128];
-    snprintf(broker_uri, sizeof(broker_uri), "mqtt://%s:%d", slot.host, slot.port);
-    slot.client->setServer(broker_uri);
+    // Custom broker slot — build persistent URI
+    // If host already has a scheme (mqtt://, mqtts://, ws://, wss://), use as-is with port.
+    // Otherwise, infer protocol from port number.
+    bool has_scheme = (strncmp(slot.host, "mqtt://", 7) == 0 ||
+                       strncmp(slot.host, "mqtts://", 8) == 0 ||
+                       strncmp(slot.host, "ws://", 5) == 0 ||
+                       strncmp(slot.host, "wss://", 6) == 0);
+    if (has_scheme) {
+      snprintf(slot.broker_uri, sizeof(slot.broker_uri), "%s:%d", slot.host, slot.port);
+    } else {
+      const char* proto = "mqtt";
+      if (slot.port == 8883) {
+        proto = "mqtts";
+      } else if (slot.port == 443) {
+        proto = "wss";
+      }
+      snprintf(slot.broker_uri, sizeof(slot.broker_uri), "%s://%s:%d", proto, slot.host, slot.port);
+    }
+    slot.client->setServer(slot.broker_uri);
     if (strlen(slot.username) > 0) {
       slot.client->setCredentials(slot.username, slot.password);
     }
@@ -864,6 +884,7 @@ void MQTTBridge::teardownSlot(int index) {
 
   slot.connected = false;
   slot.initial_connect_done = false;
+  slot.broker_uri[0] = '\0';
   slot.token_expires_at = 0;
   slot.last_token_renewal = 0;
   slot.reconnect_backoff = 0;
@@ -951,10 +972,14 @@ void MQTTBridge::maintainSlotConnection(int index, unsigned long now_millis, uns
                                              current_time >= (old_token_expires_at - DISCONNECT_THRESHOLD));
 
         if (old_token_expired_or_imminent || !slot.client->connected()) {
-          // Clean teardown+setup ensures fresh TLS state and credentials
-          MQTT_DEBUG_PRINTLN("MQTT%d token renewal: reconnecting with fresh client", index + 1);
-          teardownSlot(index);
-          setupSlot(index);
+          // Disconnect + reconnect with fresh credentials, reusing existing client
+          // to avoid internal heap leak/fragmentation from destroy/create cycles
+          MQTT_DEBUG_PRINTLN("MQTT%d token renewal: reconnecting with fresh credentials", index + 1);
+          if (slot.client->connected()) {
+            slot.client->disconnect();
+          }
+          slot.client->setCredentials(_jwt_username, slot.auth_token);
+          slot.client->reconnect();
           reconnect_attempted = true;
         } else {
           // Token renewed but old one still valid — just update credentials for next reconnect
@@ -1943,16 +1968,14 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
   }
   #endif
 
-  // JSON buffer: prefer PSRAM; fallback to stack if allocation fails
-  static const size_t PUBLISH_JSON_BUFFER_SIZE = 2048;
-  char* json_buffer_psram = (char*)psram_malloc(PUBLISH_JSON_BUFFER_SIZE);
+  // Use pre-allocated PSRAM buffer; fallback to stack if not available
   char json_buffer_stack[1024];
   char json_buffer_large_stack[2048];
   int packet_size = packet->getRawLength();
   char* active_buffer;
   size_t active_buffer_size;
-  if (json_buffer_psram != nullptr) {
-    active_buffer = json_buffer_psram;
+  if (_publish_json_buffer != nullptr) {
+    active_buffer = _publish_json_buffer;
     active_buffer_size = PUBLISH_JSON_BUFFER_SIZE;
   } else {
     active_buffer = (packet_size > 200) ? json_buffer_large_stack : json_buffer_stack;
@@ -1996,22 +2019,20 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
       MQTT_DEBUG_PRINTLN("Failed to build packet JSON for type=%d (len=%d), packet not published", packet_type, len);
     }
   }
-  psram_free(json_buffer_psram);
 }
 
 void MQTTBridge::publishRaw(mesh::Packet* packet) {
   if (!packet) return;
 
-  // JSON buffer: prefer PSRAM; fallback to stack if allocation fails
-  char* json_buffer_psram = (char*)psram_malloc(2048);
+  // Use pre-allocated PSRAM buffer; fallback to stack if not available
   char json_buffer_stack[1024];
   char json_buffer_large_stack[2048];
   int packet_size = packet->getRawLength();
   char* active_buffer;
   size_t active_buffer_size;
-  if (json_buffer_psram != nullptr) {
-    active_buffer = json_buffer_psram;
-    active_buffer_size = 2048;
+  if (_publish_json_buffer != nullptr) {
+    active_buffer = _publish_json_buffer;
+    active_buffer_size = PUBLISH_JSON_BUFFER_SIZE;
   } else {
     active_buffer = (packet_size > 200) ? json_buffer_large_stack : json_buffer_stack;
     active_buffer_size = (packet_size > 200) ? 2048 : 1024;
@@ -2035,7 +2056,6 @@ void MQTTBridge::publishRaw(mesh::Packet* packet) {
       }
     }
   }
-  psram_free(json_buffer_psram);
 }
 
 // ---------------------------------------------------------------------------
@@ -2240,7 +2260,7 @@ void MQTTBridge::runCriticalMemoryCheckAndRecovery() {
 void MQTTBridge::recreateMqttClientsForFragmentationRecovery() {
   // Disconnect, delete, and recreate all MQTT clients so they allocate fresh buffers.
   for (int i = 0; i < MAX_MQTT_SLOTS; i++) {
-    if (_slots[i].enabled) {
+    if (_slots[i].enabled && !_slots[i].connected) {
       teardownSlot(i);
       setupSlot(i);
     }
