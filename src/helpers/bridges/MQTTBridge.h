@@ -10,6 +10,10 @@
 #include "helpers/JWTHelper.h"
 #include "helpers/MQTTPresets.h"
 
+#ifdef WITH_SNMP
+class MeshSNMPAgent;  // Forward declaration
+#endif
+
 #ifdef ESP_PLATFORM
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -186,6 +190,17 @@ private:
   // Cached connection status (updated in callbacks to avoid redundant checks)
   bool _cached_has_connected_slots;
 
+  // Queue staleness tracking
+  unsigned long _queue_disconnected_since;  // 0 = has connected slots
+  static const unsigned long QUEUE_STALE_MS = 300000UL; // Flush queue after 5 min disconnected
+
+  // Recovery: restart ESP after prolonged total failure
+  unsigned long _all_tripped_since;  // 0 = not all tripped
+
+#ifdef WITH_SNMP
+  MeshSNMPAgent* _snmp_agent;
+#endif
+
   // Throttle logging
   unsigned long _last_no_broker_log;
   static const unsigned long NO_BROKER_LOG_INTERVAL = 30000; // Log every 30 seconds max
@@ -216,7 +231,7 @@ private:
   void setupSlot(int index);           // Create/destroy client for a slot based on its preset
   void teardownSlot(int index);        // Disconnect and free slot resources
   void maintainSlotConnections();      // Maintain all slot connections (token renewal, reconnect)
-  void maintainSlotConnection(int index, unsigned long now_millis, unsigned long current_time, bool time_synced, bool& reconnect_attempted);
+  void maintainSlotConnection(int index, unsigned long now_millis, unsigned long current_time, bool time_synced, bool& reconnect_attempted, bool& teardown_attempted);
   bool createSlotAuthToken(int index); // Create/renew JWT token for a slot
   bool publishToSlot(int index, const char* topic, const char* payload, bool retained = false);
   bool publishToAllSlots(const char* topic, const char* payload, bool retained = false);
@@ -304,6 +319,10 @@ public:
 
   void setStatsSources(mesh::Dispatcher* dispatcher, mesh::Radio* radio,
                        mesh::MainBoard* board, mesh::MillisecondClock* ms);
+
+#ifdef WITH_SNMP
+  void setSNMPAgent(MeshSNMPAgent* agent) { _snmp_agent = agent; }
+#endif
 };
 
 #endif

@@ -4,29 +4,55 @@ This document describes the MQTT bridge implementation that allows MeshCore repe
 
 ## Quick Start Guide
 
-### Essential Commands to Get MQTT Repeater Running
+### Essential Commands to Get MQTT Observer Running
 
-**1. Connect to device console via repeater login or serial console (115200 baud)**
+**1. Flash the observer firmware to your device**
 
-**2. Configure WiFi Credentials**
+Use one of the observer build targets (e.g., `heltec_v4_repeater_observer_mqtt`). After flashing, connect to the device console via serial (115200 baud) or repeater login.
+
+**2. Configure radio settings**
+
+If this is a fresh flash or full erase, configure your radio parameters first. These must match other nodes in your mesh:
+
+```bash
+set freq 906.0
+set sf 12
+set cr 5
+set bw 250
+set tx 22
+```
+
+**3. Configure device identity**
+
+```bash
+set name MyObserver
+set mqtt.iata SEA
+```
+
+If migrating from an existing node (e.g., a Raspberry Pi gateway), restore the private key to keep the same identity:
+```bash
+set prv.key <your_64_hex_char_private_key>
+```
+
+**4. Configure WiFi credentials**
 ```bash
 set wifi.ssid YourWiFiNetwork
 set wifi.pwd YourWiFiPassword
 ```
 
-If you wish to upload to the MeshCore Analyzer, also `set mqtt.iata XXX` to a valid IATA airport code.
+**5. (Optional) Disable packet repeating**
 
-**3. Reboot to Connect to WiFi**
+If this observer is receive-only (e.g., using a PCB antenna in a location where repeating would be harmful), disable forwarding:
+```bash
+set repeat off
+```
+
+**6. Reboot to connect**
 ```bash
 reboot
 ```
 
-**4. Toggle bridge.source to rx**
-```bash
-set bridge.source rx
-```
-
-**5. Verify Configuration**
+**7. Verify configuration**
 ```bash
 get wifi.ssid
 get bridge.enabled
@@ -36,16 +62,7 @@ get mqtt.iata
 get mqtt1.preset
 get mqtt2.preset
 get mqtt3.preset
-```
-
-**6. Restart Bridge (if needed)**
-```bash
-# Option A: Toggle bridge off then on
-set bridge.enabled off
-set bridge.enabled on
-
-# Option B: Full device reboot
-reboot
+get mqtt.status
 ```
 
 **That's it!** The device will now:
@@ -59,8 +76,8 @@ reboot
 ## Overview
 
 The MQTT bridge implementation provides:
-- Up to 3 concurrent MQTT connection slots with built-in presets
-- Built-in presets for LetsMesh Analyzer (US/EU) and MeshMapper
+- Up to 6 MQTT connection slots with built-in presets
+- Built-in presets for LetsMesh Analyzer (US/EU), MeshMapper, MeshRank, Waev, Meshomatic, and CascadiaMesh
 - Custom broker support with username/password authentication
 - JWT (Ed25519 device signing) authentication for preset brokers
 - WSS (WebSocket Secure) and direct MQTT transport
@@ -73,7 +90,7 @@ The MQTT bridge implementation provides:
 
 ### Slot-Based Preset System
 
-The MQTT bridge uses a slot-based architecture with up to 3 concurrent connections. Each slot can be configured with a built-in preset or custom broker settings.
+The MQTT bridge uses a slot-based architecture with up to 6 concurrent connections. Each slot can be configured with a built-in preset or custom broker settings.
 
 **Built-in Presets:**
 
@@ -83,17 +100,20 @@ The MQTT bridge uses a slot-based architecture with up to 3 concurrent connectio
 | `analyzer-eu` | mqtt-eu-v1.letsmesh.net:443 | JWT (Ed25519) | WSS |
 | `meshmapper` | mqtt.meshmapper.cc:443 | JWT (Ed25519) | WSS |
 | `meshrank` | meshrank.net:8883 | None (token in topic) | MQTT over TLS |
+| `waev` | mqtt.waev.app:443 | JWT (Ed25519) | WSS |
+| `meshomatic` | us-east.meshomatic.net:443 | JWT (Ed25519) | WSS |
+| `cascadiamesh` | cascadiamesh.ddns.net:1883 | None | MQTT (unencrypted) |
 | `custom` | User-configured | Username/Password | MQTT or WSS |
 | `none` | (disabled) | — | — |
 
 **Default Configuration:**
 - Slot 1: `analyzer-us`
 - Slot 2: `analyzer-eu`
-- Slot 3: `none`
+- Slots 3-6: `none`
 
 **Memory Limits:**
-- With PSRAM: All 3 slots can be active simultaneously
-- Without PSRAM: Maximum 2 active slots (each WSS/TLS connection requires ~40KB internal heap)
+- With PSRAM: All slots can be active simultaneously
+- Without PSRAM: Maximum 2 active TLS/WSS slots (each WSS/TLS connection requires ~40KB internal heap)
 - If more slots are configured than the device supports, excess slots show as `(inactive)` in `get mqtt.status`
 - Slot configurations are preserved in preferences — moving firmware to a PSRAM device activates all slots
 
@@ -130,39 +150,41 @@ pio run -e Station_G2_repeater_observer_mqtt
 
 ### Build Flags
 - `WITH_MQTT_BRIDGE=1` - Enable MQTT bridge (required)
+- `WITH_SNMP=1` - Enable SNMP agent (optional, see [MQTT_SNMP.md](MQTT_SNMP.md))
 - `MQTT_DEBUG=1` - Enable debug logging (optional)
 - `MQTT_WIFI_TX_POWER` - WiFi TX power level (default: `WIFI_POWER_11dBm`)
-- `MQTT_WIFI_POWER_SAVE_DEFAULT` - Default WiFi power save mode (0=min, 1=none, 2=max)
+- ~~`MQTT_WIFI_POWER_SAVE_DEFAULT`~~ - Removed; all builds now default to `none` (no power save)
 
 ## Default Configuration
 
-The MQTT bridge comes with the following defaults:
-- **Origin**: Device name (set automatically)
-- **IATA**: (must be configured)
+The MQTT bridge comes with the following defaults for fresh installs:
+- **Origin**: Device name (set automatically from `set name`)
+- **IATA**: (blank — must be configured for Analyzer presets)
 - **Status Messages**: Enabled
 - **Packet Messages**: Enabled
 - **Raw Messages**: Disabled
 - **TX Messages**: Disabled (RX only by default)
 - **Status Interval**: 5 minutes (300000 ms)
-- **Slot 1**: `analyzer-us` (mqtt-us-v1.letsmesh.net:443)
-- **Slot 2**: `analyzer-eu` (mqtt-eu-v1.letsmesh.net:443)
-- **Slot 3**: `none` (disabled)
-- **WiFi SSID**: "ssid_here" (must be configured)
-- **WiFi Password**: "password_here" (must be configured)
-- **WiFi Power Save**: "min" (minimum power saving, balanced performance and power)
-- **Timezone**: "America/Los_Angeles" (Pacific Time with DST support)
-- **Timezone Offset**: -8 hours (fallback)
+- **Slot 1**: `analyzer-us`
+- **Slot 2**: `analyzer-eu`
+- **Slots 3-6**: `none` (disabled)
+- **WiFi SSID**: (blank — must be configured)
+- **WiFi Password**: (blank — must be configured)
+- **WiFi Power Save**: `none` (no power save)
+- **Timezone**: (blank — uses UTC until configured)
+- **Timezone Offset**: 0 (fallback, no offset)
+- **Repeat (forwarding)**: On (set `repeat off` for receive-only observers)
 
 ## CLI Commands
 
 ### MQTT Slot Commands
 
-Each slot (1-3) supports the following commands:
+Each slot (1-6) supports the following commands:
 
 #### Get Commands
 - `get mqtt1.preset` - Get slot 1 preset name
 - `get mqtt2.preset` - Get slot 2 preset name
-- `get mqtt3.preset` - Get slot 3 preset name
+- `get mqttN.preset` - Get slot N preset name (N = 1-6)
 - `get mqttN.server` - Get custom server hostname for slot N
 - `get mqttN.port` - Get custom server port for slot N
 - `get mqttN.username` - Get custom username for slot N
@@ -171,12 +193,15 @@ Each slot (1-3) supports the following commands:
 - `get mqttN.topic` - Get custom topic template for slot N
 
 #### Set Commands
-- `set mqtt1.preset analyzer-us` - Set slot 1 to LetsMesh Analyzer US
-- `set mqtt1.preset analyzer-eu` - Set slot 1 to LetsMesh Analyzer EU
-- `set mqtt1.preset meshmapper` - Set slot 1 to MeshMapper
-- `set mqtt1.preset meshrank` - Set slot 1 to MeshRank (requires token)
-- `set mqtt1.preset custom` - Set slot 1 to custom broker (configure server/port/username/password)
-- `set mqtt1.preset none` - Disable slot 1
+- `set mqttN.preset analyzer-us` - Set slot N to LetsMesh Analyzer US
+- `set mqttN.preset analyzer-eu` - Set slot N to LetsMesh Analyzer EU
+- `set mqttN.preset meshmapper` - Set slot N to MeshMapper
+- `set mqttN.preset meshrank` - Set slot N to MeshRank (requires token)
+- `set mqttN.preset waev` - Set slot N to Waev
+- `set mqttN.preset meshomatic` - Set slot N to Meshomatic
+- `set mqttN.preset cascadiamesh` - Set slot N to CascadiaMesh
+- `set mqttN.preset custom` - Set slot N to custom broker (configure server/port/username/password)
+- `set mqttN.preset none` - Disable slot N
 - `set mqttN.server <hostname>` - Set custom server hostname for slot N
 - `set mqttN.port <port>` - Set custom server port for slot N (1-65535)
 - `set mqttN.username <username>` - Set custom username for slot N
@@ -229,7 +254,7 @@ When a slot's preset is `custom`, you can define a custom topic template using p
 
 If no custom topic is set, custom slots default to: `meshcore/{iata}/{device}/{type}`
 
-**Note:** Topic templates only apply to `custom` preset slots. Built-in presets (analyzer-us, analyzer-eu, meshmapper, meshrank) always use their hardcoded topic format.
+**Note:** Topic templates only apply to `custom` preset slots. Built-in presets (analyzer-us, analyzer-eu, meshmapper, meshrank, etc.) always use their hardcoded topic format.
 
 ### MQTT Shared Commands
 
@@ -270,7 +295,7 @@ These settings apply across all MQTT slots:
 - `set wifi.pwd <password>` - Set WiFi password
 - `set wifi.powersave none|min|max` - Set WiFi power save mode
   - `none` - No power saving (best performance, highest power consumption)
-  - `min` - Minimum power saving (default, balanced performance and power)
+  - `min` - Minimum power saving (balanced performance and power)
   - `max` - Maximum power saving (lowest power consumption, may affect performance)
 
 ### Timezone Commands
@@ -288,6 +313,26 @@ These settings apply across all MQTT slots:
 - **Common abbreviations**: `PDT`, `PST`, `MDT`, `MST`, `CDT`, `CST`, `EDT`, `EST`, `BST`, `GMT`, `CEST`, `CET`
 - **UTC offsets**: `UTC-8`, `UTC+5`, `+5`, `-8`, etc.
 
+### Device & Radio Commands
+
+These are standard MeshCore commands, not MQTT-specific, but important for observer setup:
+
+#### Get Commands
+- `get name` - Get device name
+- `get repeat` - Get repeat (forwarding) status (on/off)
+- `get freq` - Get radio frequency
+- `get public.key` - Get device public key (for migration)
+
+#### Set Commands
+- `set name <name>` - Set device name (also sets MQTT origin)
+- `set repeat on|off` - Enable/disable packet forwarding (use `off` for receive-only observers)
+- `set prv.key <64-hex-char-key>` - Restore private key (for migrating identity from another device)
+- `set freq <MHz>` - Set radio frequency
+- `set sf <5-12>` - Set LoRa spreading factor
+- `set bw <kHz>` - Set LoRa bandwidth
+- `set cr <5-8>` - Set LoRa coding rate
+- `set tx <dBm>` - Set transmit power
+
 ### Bridge Commands
 
 #### Get Commands
@@ -297,6 +342,18 @@ These settings apply across all MQTT slots:
 #### Set Commands
 - `set bridge.source rx|tx` - Set packet source (rx for received, tx for transmitted)
 - `set bridge.enabled on|off` - Enable/disable bridge
+
+### SNMP Commands
+
+#### Get Commands
+- `get snmp` - Get SNMP agent status (on/off)
+- `get snmp.community` - Get SNMP community string
+
+#### Set Commands
+- `set snmp on|off` - Enable/disable SNMP agent (restart required)
+- `set snmp.community <string>` - Set SNMP community string (restart required, default: `public`)
+
+See [MQTT_SNMP.md](MQTT_SNMP.md) for full SNMP documentation.
 
 ## Command Architecture
 
@@ -309,7 +366,7 @@ The CLI commands are organized into two levels:
 
 ### Bridge-Specific Commands (`mqtt.*`, `mqttN.*`, `wifi.*`, `timezone.*`)
 **Implementation-specific settings** - These only apply to the MQTT bridge:
-- `mqttN.*` - Per-slot MQTT broker configuration (N = 1, 2, or 3)
+- `mqttN.*` - Per-slot MQTT broker configuration (N = 1-6)
 - `mqtt.*` - Shared MQTT settings (message types, origin, IATA, etc.)
 - `wifi.*` - WiFi connection settings for MQTT connectivity
 - `timezone.*` - Timezone configuration for accurate timestamps
@@ -381,12 +438,13 @@ Minimal raw packet data for map integration.
 ## Key Features
 
 ### Slot-Based Preset System
-- Up to 3 concurrent MQTT connections (with PSRAM), 2 without PSRAM
-- Built-in presets for LetsMesh Analyzer (US/EU), MeshMapper, and MeshRank
+- Up to 6 concurrent MQTT connections (with PSRAM), 2 without PSRAM
+- Built-in presets for LetsMesh Analyzer (US/EU), MeshMapper, MeshRank, Waev, Meshomatic, and CascadiaMesh
 - Custom broker support with username/password auth and custom topic templates
 - JWT (Ed25519) authentication for preset brokers, token-in-topic for MeshRank
 - WSS (WebSocket Secure) and direct MQTT over TLS transport
 - Automatic reconnection with exponential backoff per slot
+- Circuit breaker pattern with periodic probes for recovery from prolonged outages
 - JWT token buffers only allocated for JWT-auth slots (memory efficient)
 - Deferred construction: MQTTBridge is heap-allocated in `begin()` to avoid ESP32 static init crashes
 
@@ -413,7 +471,7 @@ Minimal raw packet data for map integration.
 - Proper UTC system time handling
 
 ### Authentication
-- **JWT Authentication**: Ed25519-signed tokens for secure MQTT authentication (used by all built-in presets)
+- **JWT Authentication**: Ed25519-signed tokens for secure MQTT authentication (used by all built-in presets except meshrank and cascadiamesh)
 - **Username/Password**: Standard MQTT authentication for custom brokers
 - **Username Format** (JWT): `v1_{UPPERCASE_PUBLIC_KEY}`
 - **Automatic Token Renewal**: Tokens are renewed before expiration
@@ -432,48 +490,72 @@ The migration happens automatically on first boot after firmware update. No manu
 ## First-Time Setup
 
 ### Prerequisites
-- MeshCore device with MQTT bridge firmware flashed
+- MeshCore device with observer MQTT firmware flashed
 - WiFi network credentials
-- LoRa-capable device for configuration (repeater console)
+- Serial console access (115200 baud) or repeater login via companion app
 
-### Step 1: Configure WiFi
+### Step 1: Configure Radio (after fresh flash/full erase)
+
+If this is a fresh flash, radio parameters must be set to match your mesh network:
+```
+set freq 906.0
+set sf 12
+set cr 5
+set bw 250
+set tx 22
+```
+
+### Step 2: Configure Device Identity
+```
+set name MyObserver
+set mqtt.iata SEA
+```
+
+If migrating from an existing device, restore the private key to keep the same identity:
+```
+set prv.key <your_64_hex_char_private_key>
+```
+
+### Step 3: Configure WiFi
 ```
 set wifi.ssid YourWiFiNetwork
 set wifi.pwd YourWiFiPassword
 reboot
 ```
 
-### Step 2: Configure Device Identity
+### Step 4: Configure Timezone (optional)
 ```
-set mqtt.iata SEA
-get mqtt.origin
+set timezone America/New_York
 ```
 
-### Step 3: Verify Slot Configuration
+Or use an offset as a fallback:
+```
+set timezone.offset -5
+```
+
+### Step 5: (Optional) Disable Repeating
+
+For receive-only observers (e.g., using a PCB antenna or in a location where repeating is not desired):
+```
+set repeat off
+```
+
+### Step 6: Verify Slot Configuration
 ```
 get mqtt1.preset    # Should show: analyzer-us
 get mqtt2.preset    # Should show: analyzer-eu
 get mqtt3.preset    # Should show: none
 ```
 
-### Step 4: (Optional) Add MeshMapper
+### Step 7: (Optional) Add Additional Presets
 ```
 set mqtt3.preset meshmapper
 ```
 
-### Step 5: (Optional) Configure Custom Broker
+### Step 8: Verify Connection
 ```
-set mqtt3.preset custom
-set mqtt3.server your-broker.example.com
-set mqtt3.port 1883
-set mqtt3.username your-username
-set mqtt3.password your-password
-```
-
-### Step 6: Verify Connection
-```
-set bridge.source rx
 get bridge.enabled
+get bridge.source
 get mqtt.status
 get wifi.status
 ```
@@ -492,6 +574,8 @@ reboot
 ```
 get bridge.enabled
 set bridge.enabled on
+get bridge.source          # Should be "rx"
+set bridge.source rx
 get mqtt.status            # Check per-slot connection status
 get mqtt1.preset           # Verify slots are configured
 get mqtt.iata              # IATA must be set for Analyzer presets
@@ -505,6 +589,10 @@ set timezone EST                 # Abbreviation
 set timezone UTC-5               # UTC offset
 ```
 
+## SNMP Monitoring
+
+Observer nodes include an optional SNMP v2c agent that exposes radio stats, MQTT connectivity, memory usage, and network information to standard monitoring tools. See [MQTT_SNMP.md](MQTT_SNMP.md) for setup and OID reference.
+
 ## Dependencies
 
 - **PsychicMqttClient**: MQTT client library (supports WSS and direct MQTT)
@@ -514,3 +602,4 @@ set timezone UTC-5               # UTC offset
 - **WiFi**: ESP32 WiFi functionality
 - **Ed25519**: Cryptographic library for JWT token signing
 - **JWTHelper**: Custom JWT token generation for device authentication
+- **SNMP_Agent**: Optional SNMPv2c agent (0neblock/SNMP_Agent, observer builds only)

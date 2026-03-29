@@ -919,6 +919,9 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.flood_advert_interval = 12; // 12 hours
   _prefs.flood_max = 64;
   _prefs.interference_threshold = 0; // disabled
+#ifdef WITH_MQTT_BRIDGE
+  _prefs.agc_reset_interval = 7;    // 28 seconds (secs/4) — prevents AGC drift on long-running observers
+#endif
 
   // bridge defaults
   _prefs.bridge_enabled = 1;    // enabled
@@ -928,6 +931,10 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.bridge_channel = 1;    // channel 1
 
   StrHelper::strncpy(_prefs.bridge_secret, "LVSITANOS", sizeof(_prefs.bridge_secret));
+
+  // SNMP defaults
+  _prefs.snmp_enabled = 0;
+  StrHelper::strncpy(_prefs.snmp_community, "public", sizeof(_prefs.snmp_community));
 
   // GPS defaults
   _prefs.gps_enabled = 0;
@@ -1010,6 +1017,13 @@ void MyMesh::begin(FILESYSTEM *fs) {
 #ifdef WITH_MQTT_BRIDGE
       // Set stats sources for automatic stats collection
       bridge->setStatsSources(this, _radio, _cli.getBoard(), _ms);
+#ifdef WITH_SNMP
+      if (_prefs.snmp_enabled) {
+        _snmp_agent.setNodeName(_prefs.node_name);
+        _snmp_agent.setFirmwareVersion(getFirmwareVer());
+        bridge->setSNMPAgent(&_snmp_agent);
+      }
+#endif
 #endif
 
       bridge->begin();
@@ -1434,6 +1448,25 @@ void MyMesh::loop() {
   uint32_t now = millis();
   uptime_millis += now - last_millis;
   last_millis = now;
+
+#ifdef WITH_SNMP
+  // Push radio stats to SNMP agent every 2 seconds
+  if (_snmp_agent.isRunning()) {
+    static unsigned long last_snmp_stats = 0;
+    if (now - last_snmp_stats >= 2000) {
+      last_snmp_stats = now;
+      _snmp_agent.updateRadioStats(
+        radio_driver.getPacketsRecv(), radio_driver.getPacketsSent(),
+        radio_driver.getPacketsRecvErrors(),
+        (int16_t)_radio->getNoiseFloor(),
+        (int16_t)radio_driver.getLastRSSI(),
+        (int16_t)(radio_driver.getLastSNR() * 4),
+        getNumSentFlood(), getNumSentDirect(),
+        getNumRecvFlood(), getNumRecvDirect(),
+        getTotalAirTime() / 1000, uptime_millis / 1000);
+    }
+  }
+#endif
 }
 
 // To check if there is pending work

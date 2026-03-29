@@ -72,7 +72,7 @@ struct NodePrefs { // persisted to file
   // WiFi settings
   char wifi_ssid[32];       // WiFi SSID
   char wifi_password[64];  // WiFi password
-  uint8_t wifi_power_save; // WiFi power save mode: 0=min, 1=none, 2=max (default: 0=min)
+  uint8_t wifi_power_save; // WiFi power save mode: 0=min, 1=none, 2=max (default: 1=none)
   
   // Timezone settings
   char timezone_string[32]; // Timezone string (e.g., "America/Los_Angeles")
@@ -96,6 +96,10 @@ struct NodePrefs { // persisted to file
   char mqtt_slot_topic[MAX_MQTT_SLOTS][96];    // Per-slot custom topic template (custom preset only)
 
   uint8_t loop_detect;
+
+  // SNMP settings (optional, only used when WITH_SNMP is defined)
+  uint8_t snmp_enabled;          // boolean: 0=off, 1=on
+  char snmp_community[24];       // community string (default "public")
 };
 
 #ifdef WITH_MQTT_BRIDGE
@@ -137,7 +141,7 @@ struct MQTTPrefs {
   // WiFi settings
   char wifi_ssid[32];       // WiFi SSID
   char wifi_password[64];  // WiFi password
-  uint8_t wifi_power_save; // WiFi power save mode: 0=min, 1=none, 2=max (default: 0=min)
+  uint8_t wifi_power_save; // WiFi power save mode: 0=min, 1=none, 2=max (default: 1=none)
 
   // Timezone settings
   char timezone_string[32]; // Timezone string (e.g., "America/Los_Angeles")

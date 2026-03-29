@@ -4,6 +4,10 @@
 #include <WiFiUdp.h>
 #include <Timezone.h>
 
+#ifdef WITH_SNMP
+#include "../SNMPAgent.h"
+#endif
+
 #ifdef ESP_PLATFORM
 #include <esp_wifi.h>
 #include <esp_heap_caps.h>
@@ -168,8 +172,12 @@ MQTTBridge::MQTTBridge(NodePrefs *prefs, mesh::PacketManager *mgr, mesh::RTCCloc
       _cached_has_connected_slots(false),
       _last_memory_check(0), _skipped_publishes(0), _last_fragmentation_recovery(0),
       _fragmentation_pressure_since(0), _last_critical_check_run(0),
-      _last_no_broker_log(0), _last_config_warning(0),
+      _last_no_broker_log(0), _queue_disconnected_since(0), _all_tripped_since(0),
+      _last_config_warning(0),
       _dispatcher(nullptr), _radio(nullptr), _board(nullptr), _ms(nullptr),
+#ifdef WITH_SNMP
+      _snmp_agent(nullptr),
+#endif
       _last_wifi_check(0), _last_wifi_status(WL_DISCONNECTED), _wifi_status_initialized(false),
       _wifi_disconnected_time(0), _last_wifi_reconnect_attempt(0), _wifi_reconnect_backoff_attempt(0)
 #ifdef ESP_PLATFORM
@@ -673,6 +681,25 @@ void MQTTBridge::mqttTaskLoop() {
     // Process packet queue
     processPacketQueue();
 
+#ifdef WITH_SNMP
+    // SNMP agent loop — process incoming UDP requests
+    if (_snmp_agent) {
+      if (!_snmp_agent->isRunning() && WiFi.isConnected() && _prefs->snmp_enabled) {
+        _snmp_agent->begin(_prefs->snmp_community);
+        MQTT_DEBUG_PRINTLN("SNMP agent started on port 161 (community: %s)", _prefs->snmp_community);
+      }
+      if (_snmp_agent->isRunning()) {
+        // Update MQTT stats from this core
+        int connected = 0;
+        for (int i = 0; i < MAX_MQTT_SLOTS; i++) {
+          if (_slots[i].enabled && _slots[i].connected) connected++;
+        }
+        _snmp_agent->updateMQTTStats(connected, _queue_count, _skipped_publishes);
+        _snmp_agent->loop();
+      }
+    }
+#endif
+
     // Periodic configuration check (throttled to avoid spam)
     checkConfigurationMismatch();
 
@@ -937,6 +964,9 @@ void MQTTBridge::maintainSlotConnections() {
   // Only allow one reconnect attempt per maintenance cycle to avoid
   // multiple simultaneous TLS handshakes blocking the network stack
   bool reconnect_attempted_this_cycle = false;
+  // Only allow one full teardown+setup per cycle to limit heap fragmentation
+  // when multiple slots fail simultaneously
+  bool teardown_attempted_this_cycle = false;
 
   for (int i = 0; i < MAX_MQTT_SLOTS; i++) {
     if (!_slots[i].enabled || !_slots[i].client) continue;
@@ -946,11 +976,11 @@ void MQTTBridge::maintainSlotConnections() {
       continue;
     }
 
-    maintainSlotConnection(i, now_millis, current_time, time_synced, reconnect_attempted_this_cycle);
+    maintainSlotConnection(i, now_millis, current_time, time_synced, reconnect_attempted_this_cycle, teardown_attempted_this_cycle);
   }
 }
 
-void MQTTBridge::maintainSlotConnection(int index, unsigned long now_millis, unsigned long current_time, bool time_synced, bool& reconnect_attempted) {
+void MQTTBridge::maintainSlotConnection(int index, unsigned long now_millis, unsigned long current_time, bool time_synced, bool& reconnect_attempted, bool& teardown_attempted) {
   MQTTSlot& slot = _slots[index];
 
   if (slot.connected) {
@@ -1037,13 +1067,23 @@ void MQTTBridge::maintainSlotConnection(int index, unsigned long now_millis, uns
           }
           slot.client->connect();
         } else {
-          // Token expired or near expiry — full teardown for fresh TLS + new token
-          bool saved_tripped = slot.circuit_breaker_tripped;
-          MQTT_DEBUG_PRINTLN("MQTT%d token expired/near expiry, full teardown+setup for probe", index + 1);
-          teardownSlot(index);
-          setupSlot(index);
-          _slots[index].circuit_breaker_tripped = saved_tripped;
-          _slots[index].last_reconnect_attempt = now_millis;
+          // Token expired — regenerate token but avoid teardown+setup
+          // which would allocate new TLS context on potentially fragmented heap
+          if (slot.client) {
+            if (createSlotAuthToken(index)) {
+              slot.client->setCredentials(_jwt_username, slot.auth_token);
+              MQTT_DEBUG_PRINTLN("MQTT%d circuit breaker probe (regenerated expired token)", index + 1);
+            }
+            slot.client->connect();
+          } else {
+            // Client was destroyed — must do full setup
+            bool saved_tripped = slot.circuit_breaker_tripped;
+            MQTT_DEBUG_PRINTLN("MQTT%d circuit breaker probe (full setup, no client)", index + 1);
+            teardownSlot(index);
+            setupSlot(index);
+            _slots[index].circuit_breaker_tripped = saved_tripped;
+            _slots[index].last_reconnect_attempt = now_millis;
+          }
         }
       } else {
         slot.client->connect();
@@ -1094,6 +1134,12 @@ void MQTTBridge::maintainSlotConnection(int index, unsigned long now_millis, uns
           slot.client->reconnect();
         } else {
           // Full teardown: token expired/near expiry, or lightweight reconnect failed (backoff 3+)
+          if (teardown_attempted) {
+            // Defer to next cycle to limit heap fragmentation from simultaneous teardowns
+            slot.last_reconnect_attempt = now_millis;
+            return;
+          }
+          teardown_attempted = true;
           uint8_t saved_backoff = slot.reconnect_backoff;
           uint8_t saved_failures = slot.max_backoff_failures;
           MQTT_DEBUG_PRINTLN("MQTT%d full teardown+setup for reconnect (backoff %d)", index + 1, saved_backoff);
@@ -1110,6 +1156,11 @@ void MQTTBridge::maintainSlotConnection(int index, unsigned long now_millis, uns
           slot.client->reconnect();
         } else {
           // Full teardown after lightweight reconnect failed (backoff 3+)
+          if (teardown_attempted) {
+            slot.last_reconnect_attempt = now_millis;
+            return;
+          }
+          teardown_attempted = true;
           uint8_t saved_backoff = slot.reconnect_backoff;
           uint8_t saved_failures = slot.max_backoff_failures;
           MQTT_DEBUG_PRINTLN("MQTT%d full teardown+setup for reconnect (backoff %d)", index + 1, saved_backoff);
@@ -1769,6 +1820,7 @@ void MQTTBridge::processPacketQueue() {
   _queue_count = uxQueueMessagesWaiting(_packet_queue_handle);
 
   if (_queue_count == 0) {
+    _queue_disconnected_since = 0;
     return;
   }
 
@@ -1782,10 +1834,21 @@ void MQTTBridge::processPacketQueue() {
         MQTT_DEBUG_PRINTLN("Queue has %d packets but no slots connected", _queue_count);
         _last_no_broker_log = now;
       }
+      // Flush stale packets after extended disconnect
+      if (_queue_disconnected_since == 0) {
+        _queue_disconnected_since = now;
+      } else if ((now - _queue_disconnected_since) >= QUEUE_STALE_MS) {
+        QueuedPacket discard;
+        while (xQueueReceive(_packet_queue_handle, &discard, 0) == pdTRUE) {}
+        _queue_count = 0;
+        MQTT_DEBUG_PRINTLN("Flushed stale packet queue after %lu ms disconnected", now - _queue_disconnected_since);
+        _queue_disconnected_since = now;
+      }
     }
     return;
   }
 
+  _queue_disconnected_since = 0;
   _last_no_broker_log = 0;
 
   // Adaptive drain: burst-process when queue has backlog, gentle otherwise
@@ -2272,6 +2335,31 @@ void MQTTBridge::runCriticalMemoryCheckAndRecovery() {
     _fragmentation_pressure_since = 0;
     MQTT_DEBUG_PRINTLN("Fragmentation recovery: recreating MQTT clients (max_alloc=%d, pressure %lu min)", (int)max_alloc, (unsigned long)(required_window_ms / 60000));
     recreateMqttClientsForFragmentationRecovery();
+  }
+
+  // Last resort: if ALL enabled slots have circuit breakers tripped for >1 hour,
+  // heap is likely too fragmented for TLS to ever succeed — reboot.
+  bool all_tripped = true;
+  int enabled_count = 0;
+  for (int i = 0; i < MAX_MQTT_SLOTS; i++) {
+    if (_slots[i].enabled) {
+      enabled_count++;
+      if (!_slots[i].circuit_breaker_tripped) {
+        all_tripped = false;
+        break;
+      }
+    }
+  }
+  if (enabled_count > 0 && all_tripped) {
+    if (_all_tripped_since == 0) {
+      _all_tripped_since = now;
+    } else if ((now - _all_tripped_since) >= 3600000UL) {
+      MQTT_DEBUG_PRINTLN("All MQTT slots circuit-breaker tripped for >1 hour. Restarting ESP.");
+      delay(100);
+      ESP.restart();
+    }
+  } else {
+    _all_tripped_since = 0;
   }
 }
 #endif

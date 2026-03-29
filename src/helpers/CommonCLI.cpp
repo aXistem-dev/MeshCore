@@ -159,7 +159,9 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
       remaining -= to_read;
     }
     file.read((uint8_t *)&_prefs->rx_boosted_gain, sizeof(_prefs->rx_boosted_gain));              // 290
-    // next: 291
+    file.read((uint8_t *)&_prefs->snmp_enabled, sizeof(_prefs->snmp_enabled));                    // 291
+    file.read((uint8_t *)&_prefs->snmp_community, sizeof(_prefs->snmp_community));                // 292
+    // next: 316
 
     // sanitise bad pref values
     _prefs->rx_delay_base = constrain(_prefs->rx_delay_base, 0, 20.0f);
@@ -189,6 +191,8 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     _prefs->advert_loc_policy = constrain(_prefs->advert_loc_policy, 0, 2);
 
     _prefs->rx_boosted_gain = constrain(_prefs->rx_boosted_gain, 0, 1); // boolean
+    _prefs->snmp_enabled = constrain(_prefs->snmp_enabled, 0, 1);
+    _prefs->snmp_community[sizeof(_prefs->snmp_community) - 1] = '\0'; // ensure null terminated
 
     file.close();
   }
@@ -274,7 +278,9 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
       remaining -= to_write;
     }
     file.write((uint8_t *)&_prefs->rx_boosted_gain, sizeof(_prefs->rx_boosted_gain));              // 290
-    // next: 291
+    file.write((uint8_t *)&_prefs->snmp_enabled, sizeof(_prefs->snmp_enabled));                    // 291
+    file.write((uint8_t *)&_prefs->snmp_community, sizeof(_prefs->snmp_community));                // 292
+    // next: 316
 
     file.close();
   }
@@ -304,11 +310,7 @@ static void setMQTTPrefsDefaults(MQTTPrefs* prefs) {
     strncpy(prefs->mqtt_slot_preset[i], "none", sizeof(prefs->mqtt_slot_preset[i]) - 1);
     prefs->mqtt_slot_preset[i][sizeof(prefs->mqtt_slot_preset[i]) - 1] = '\0';
   }
-  #ifdef MQTT_WIFI_POWER_SAVE_DEFAULT
-  prefs->wifi_power_save = MQTT_WIFI_POWER_SAVE_DEFAULT; // 0=min, 1=none, 2=max
-  #else
-  prefs->wifi_power_save = 0; // Default to WIFI_PS_MIN_MODEM (0=min)
-  #endif
+  prefs->wifi_power_save = 1; // Default to none (0=min, 1=none, 2=max)
   // String fields are already zero-initialized by memset
 }
 
@@ -714,6 +716,10 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         } else {
           strcpy(reply, "> strict");
         }
+      } else if (memcmp(config, "snmp.community", 14) == 0) {
+        sprintf(reply, "> %s", _prefs->snmp_community);
+      } else if (memcmp(config, "snmp", 4) == 0 && (config[4] == '\0' || config[4] == '\n' || config[4] == '\r')) {
+        strcpy(reply, _prefs->snmp_enabled ? "> on" : "> off");
       } else if (memcmp(config, "tx", 2) == 0 && (config[2] == 0 || config[2] == ' ')) {
         sprintf(reply, "> %d", (int32_t) _prefs->tx_power_dbm);
       } else if (memcmp(config, "freq", 4) == 0) {
@@ -1104,6 +1110,14 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
           savePrefs();
           strcpy(reply, "OK");
         }
+      } else if (memcmp(config, "snmp.community ", 15) == 0) {
+        StrHelper::strncpy(_prefs->snmp_community, &config[15], sizeof(_prefs->snmp_community));
+        savePrefs();
+        strcpy(reply, "OK - restart to apply");
+      } else if (memcmp(config, "snmp ", 5) == 0) {
+        _prefs->snmp_enabled = memcmp(&config[5], "on", 2) == 0;
+        savePrefs();
+        strcpy(reply, "OK - restart to apply");
       } else if (memcmp(config, "tx ", 3) == 0) {
         _prefs->tx_power_dbm = atoi(&config[3]);
         savePrefs();

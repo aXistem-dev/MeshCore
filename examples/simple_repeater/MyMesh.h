@@ -29,6 +29,10 @@
 #define WITH_BRIDGE
 #endif
 
+#ifdef WITH_SNMP
+#include "helpers/SNMPAgent.h"
+#endif
+
 #include <helpers/AdvertDataHelpers.h>
 #include <helpers/ArduinoHelpers.h>
 #include <helpers/ClientACL.h>
@@ -121,6 +125,9 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   ESPNowBridge bridge;
 #elif defined(WITH_MQTT_BRIDGE)
   MQTTBridge* bridge;
+#endif
+#ifdef WITH_SNMP
+  MeshSNMPAgent _snmp_agent;
 #endif
 
   void putNeighbour(const mesh::Identity& id, uint32_t timestamp, float snr);
