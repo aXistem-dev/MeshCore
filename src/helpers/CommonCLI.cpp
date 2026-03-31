@@ -1457,8 +1457,8 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                     _callbacks->restartBridgeSlot(slot);
                     sprintf(reply, "OK - slot %d topic: %s", slot + 1, _prefs->mqtt_slot_topic[slot]);
                   }
-                } else if (memcmp(subcmd, "audience ", 8) == 0) {
-                  StrHelper::strncpy(_prefs->mqtt_slot_audience[slot], &subcmd[8], sizeof(_prefs->mqtt_slot_audience[slot]));
+                } else if (memcmp(subcmd, "audience ", 9) == 0) {
+                  StrHelper::strncpy(_prefs->mqtt_slot_audience[slot], &subcmd[9], sizeof(_prefs->mqtt_slot_audience[slot]));
                   savePrefs();
                   _callbacks->restartBridgeSlot(slot);
                   if (_prefs->mqtt_slot_audience[slot][0] != '\0') {
