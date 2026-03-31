@@ -65,7 +65,7 @@ private:
     bool connected;                 // Updated in callbacks
     bool initial_connect_done;      // True after first connect() call
 
-    // JWT auth state (only used when preset->auth_type == MQTT_AUTH_JWT)
+    // JWT auth state (used by preset JWT slots and custom slots with audience set)
     char* auth_token;               // PSRAM-allocated, AUTH_TOKEN_SIZE bytes
     unsigned long token_expires_at;
     unsigned long last_token_renewal;
@@ -75,6 +75,7 @@ private:
     uint16_t port;
     char username[32];
     char password[64];
+    char audience[64];              // JWT audience for custom JWT slots (empty = username/password)
     char broker_uri[128];           // Persistent URI for custom slots (avoids dangling pointer)
 
     // Reconnect backoff

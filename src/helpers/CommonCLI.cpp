@@ -545,6 +545,7 @@ void CommonCLI::syncMQTTPrefsToNodePrefs() {
     StrHelper::strncpy(_prefs->mqtt_slot_password[i], _mqtt_prefs.mqtt_slot_password[i], sizeof(_prefs->mqtt_slot_password[i]));
     StrHelper::strncpy(_prefs->mqtt_slot_token[i], _mqtt_prefs.mqtt_slot_token[i], sizeof(_prefs->mqtt_slot_token[i]));
     StrHelper::strncpy(_prefs->mqtt_slot_topic[i], _mqtt_prefs.mqtt_slot_topic[i], sizeof(_prefs->mqtt_slot_topic[i]));
+    StrHelper::strncpy(_prefs->mqtt_slot_audience[i], _mqtt_prefs.mqtt_slot_audience[i], sizeof(_prefs->mqtt_slot_audience[i]));
   }
   StrHelper::strncpy(_prefs->mqtt_owner_public_key, _mqtt_prefs.mqtt_owner_public_key, sizeof(_prefs->mqtt_owner_public_key));
   StrHelper::strncpy(_prefs->mqtt_email, _mqtt_prefs.mqtt_email, sizeof(_prefs->mqtt_email));
@@ -574,6 +575,7 @@ void CommonCLI::syncNodePrefsToMQTTPrefs() {
     StrHelper::strncpy(_mqtt_prefs.mqtt_slot_password[i], _prefs->mqtt_slot_password[i], sizeof(_mqtt_prefs.mqtt_slot_password[i]));
     StrHelper::strncpy(_mqtt_prefs.mqtt_slot_token[i], _prefs->mqtt_slot_token[i], sizeof(_mqtt_prefs.mqtt_slot_token[i]));
     StrHelper::strncpy(_mqtt_prefs.mqtt_slot_topic[i], _prefs->mqtt_slot_topic[i], sizeof(_mqtt_prefs.mqtt_slot_topic[i]));
+    StrHelper::strncpy(_mqtt_prefs.mqtt_slot_audience[i], _prefs->mqtt_slot_audience[i], sizeof(_mqtt_prefs.mqtt_slot_audience[i]));
   }
   StrHelper::strncpy(_mqtt_prefs.mqtt_owner_public_key, _prefs->mqtt_owner_public_key, sizeof(_mqtt_prefs.mqtt_owner_public_key));
   StrHelper::strncpy(_mqtt_prefs.mqtt_email, _prefs->mqtt_email, sizeof(_mqtt_prefs.mqtt_email));
@@ -893,6 +895,12 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             sprintf(reply, "> %s", _prefs->mqtt_slot_topic[slot]);
           } else {
             strcpy(reply, "> (default: meshcore/{iata}/{device}/{type})");
+          }
+        } else if (memcmp(subcmd, "audience", 8) == 0) {
+          if (_prefs->mqtt_slot_audience[slot][0] != '\0') {
+            sprintf(reply, "> %s", _prefs->mqtt_slot_audience[slot]);
+          } else {
+            strcpy(reply, "> (not set — custom slots use username/password auth)");
           }
         } else {
           sprintf(reply, "??: %s", config);
@@ -1449,6 +1457,21 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                     _callbacks->restartBridgeSlot(slot);
                     sprintf(reply, "OK - slot %d topic: %s", slot + 1, _prefs->mqtt_slot_topic[slot]);
                   }
+                } else if (memcmp(subcmd, "audience ", 8) == 0) {
+                  StrHelper::strncpy(_prefs->mqtt_slot_audience[slot], &subcmd[8], sizeof(_prefs->mqtt_slot_audience[slot]));
+                  savePrefs();
+                  _callbacks->restartBridgeSlot(slot);
+                  if (_prefs->mqtt_slot_audience[slot][0] != '\0') {
+                    sprintf(reply, "OK - slot %d JWT audience: %s", slot + 1, _prefs->mqtt_slot_audience[slot]);
+                  } else {
+                    sprintf(reply, "OK - slot %d JWT audience cleared (using username/password auth)", slot + 1);
+                  }
+                } else if (memcmp(subcmd, "audience", 8) == 0 && subcmd[8] == '\0') {
+                  // "set mqttN.audience" with no value — clear the audience
+                  _prefs->mqtt_slot_audience[slot][0] = '\0';
+                  savePrefs();
+                  _callbacks->restartBridgeSlot(slot);
+                  sprintf(reply, "OK - slot %d JWT audience cleared (using username/password auth)", slot + 1);
                 } else {
                   sprintf(reply, "unknown config: %s", config);
                 }

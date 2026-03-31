@@ -94,6 +94,7 @@ struct NodePrefs { // persisted to file
   // Per-slot extended fields
   char mqtt_slot_token[MAX_MQTT_SLOTS][48];    // Per-slot token (e.g., MeshRank account token)
   char mqtt_slot_topic[MAX_MQTT_SLOTS][96];    // Per-slot custom topic template (custom preset only)
+  char mqtt_slot_audience[MAX_MQTT_SLOTS][64]; // JWT audience (non-empty enables JWT auth for custom slots)
 
   uint8_t loop_detect;
 
@@ -173,6 +174,7 @@ struct MQTTPrefs {
   // --- New fields (appended at end for migration safety) ---
   char mqtt_slot_token[MAX_MQTT_SLOTS][48];    // Per-slot token (e.g., MeshRank account token)
   char mqtt_slot_topic[MAX_MQTT_SLOTS][96];    // Per-slot custom topic template (custom preset only)
+  char mqtt_slot_audience[MAX_MQTT_SLOTS][64];  // JWT audience (non-empty enables JWT auth for custom slots)
 };
 
 // 3-slot MQTTPrefs layout — used for migrating from 3-slot to 6-slot format.

@@ -97,7 +97,7 @@ static const MQTTPresetDef MQTT_PRESETS[MQTT_PRESET_COUNT] = {
   { "meshrank",      "mqtts://meshrank.net:8883",               nullptr,                   ISRG_ROOT_X1, MQTT_AUTH_NONE, MQTT_TOPIC_MESHRANK, 0,    false, 0 },
   { "waev",          "wss://mqtt.waev.app:443/mqtt",            "mqtt.waev.app",           GTS_ROOT_R4,  MQTT_AUTH_JWT,  MQTT_TOPIC_MESHCORE, 3300, false, 55 },
   { "meshomatic",    "wss://us-east.meshomatic.net:443/mqtt",    "us-east.meshomatic.net",  ISRG_ROOT_X1, MQTT_AUTH_JWT,  MQTT_TOPIC_MESHCORE, 0,    true,  55 },
-  { "cascadiamesh",  "mqtt://cascadiamesh.ddns.net:1883",       nullptr,                   nullptr,      MQTT_AUTH_NONE, MQTT_TOPIC_MESHCORE, 0,    true,  0 },
+  { "cascadiamesh",  "wss://mqtt-v1.cascadiamesh.org:443/mqtt",  "mqtt-v1.cascadiamesh.org", ISRG_ROOT_X1, MQTT_AUTH_JWT,  MQTT_TOPIC_MESHCORE, 0,    true,  55 },
 };
 
 // Find a preset by name, returns nullptr if not found

@@ -102,7 +102,7 @@ The MQTT bridge uses a slot-based architecture with up to 6 concurrent connectio
 | `meshrank` | meshrank.net:8883 | None (token in topic) | MQTT over TLS |
 | `waev` | mqtt.waev.app:443 | JWT (Ed25519) | WSS |
 | `meshomatic` | us-east.meshomatic.net:443 | JWT (Ed25519) | WSS |
-| `cascadiamesh` | cascadiamesh.ddns.net:1883 | None | MQTT (unencrypted) |
+| `cascadiamesh` | mqtt-v1.cascadiamesh.org:443 | JWT (Ed25519) | WSS |
 | `custom` | User-configured | Username/Password | MQTT or WSS |
 | `none` | (disabled) | — | — |
 
@@ -218,6 +218,7 @@ Each slot (1-6) supports the following commands:
 - `get mqttN.password` - Get custom password for slot N
 - `get mqttN.token` - Get per-slot token (e.g., MeshRank account token)
 - `get mqttN.topic` - Get custom topic template for slot N
+- `get mqttN.audience` - Get JWT audience for slot N (custom slots only)
 
 #### Set Commands
 - `set mqttN.preset analyzer-us` - Set slot N to LetsMesh Analyzer US
@@ -235,6 +236,8 @@ Each slot (1-6) supports the following commands:
 - `set mqttN.password <password>` - Set custom password for slot N
 - `set mqttN.token <token>` - Set per-slot token (required for MeshRank preset)
 - `set mqttN.topic <template>` - Set custom topic template (custom preset only, see below)
+- `set mqttN.audience <audience>` - Set JWT audience for custom slot (enables Ed25519 JWT auth)
+- `set mqttN.audience` - Clear JWT audience (reverts to username/password auth)
 
 **Note:** Custom server/port/username/password settings only apply when the slot's preset is `custom`.
 
@@ -258,6 +261,26 @@ set mqtt3.server your-broker.example.com
 set mqtt3.port 1883
 set mqtt3.username your-username
 set mqtt3.password your-password
+```
+
+#### Example: Custom Broker with JWT Authentication (Ed25519)
+
+For community brokers that support the MeshCore JWT auth protocol (same as the built-in presets), set the `audience` field to enable Ed25519-signed JWT authentication:
+```bash
+set mqtt3.preset custom
+set mqtt3.server wss://my-broker.example.com:443/mqtt
+set mqtt3.port 443
+set mqtt3.audience my-broker.example.com
+```
+
+When `audience` is set, the device will:
+- Connect with username `v1_{PUBLIC_KEY}` and an Ed25519-signed JWT as the password
+- Automatically renew tokens before expiry (default 24h lifetime)
+- Include owner public key and email in the JWT payload (if configured via `set mqtt.owner` / `set mqtt.email`)
+
+To revert a slot back to username/password auth, clear the audience:
+```bash
+set mqtt3.audience
 ```
 
 #### Example: Custom Broker with Custom Topic Template

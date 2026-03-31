@@ -359,6 +359,8 @@ void MQTTBridge::begin() {
         _slots[i].username[sizeof(_slots[i].username) - 1] = '\0';
         strncpy(_slots[i].password, _prefs->mqtt_slot_password[i], sizeof(_slots[i].password) - 1);
         _slots[i].password[sizeof(_slots[i].password) - 1] = '\0';
+        strncpy(_slots[i].audience, _prefs->mqtt_slot_audience[i], sizeof(_slots[i].audience) - 1);
+        _slots[i].audience[sizeof(_slots[i].audience) - 1] = '\0';
       } else {
         const MQTTPresetDef* preset = findMQTTPreset(preset_name);
         if (preset) {
@@ -831,7 +833,8 @@ void MQTTBridge::setupSlot(int index) {
   if (slot.preset && slot.preset->keepalive > 0) {
     slot.client->setKeepAlive(slot.preset->keepalive);
   }
-  optimizeMqttClientConfig(slot.client, slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT);
+  bool uses_jwt = (slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT) || slot.audience[0] != '\0';
+  optimizeMqttClientConfig(slot.client, uses_jwt);
 
   // Callbacks (capture index by value)
   slot.client->onConnect([this, index](bool sessionPresent) {
@@ -968,7 +971,19 @@ void MQTTBridge::setupSlot(int index) {
       MQTT_DEBUG_PRINTLN("MQTT%d custom broker uses non-TLS transport", index + 1);
     }
 
-    if (strlen(slot.username) > 0) {
+    // Custom slot authentication: JWT if audience is set, else username/password
+    if (slot.audience[0] != '\0') {
+      // JWT auth for custom slot — allocate token buffer and create initial token
+      if (!slot.auth_token) {
+        slot.auth_token = (char*)psram_malloc(AUTH_TOKEN_SIZE);
+        if (slot.auth_token) slot.auth_token[0] = '\0';
+      }
+      createSlotAuthToken(index);
+      if (slot.auth_token && strlen(slot.auth_token) > 0) {
+        slot.client->setCredentials(_jwt_username, slot.auth_token);
+      }
+      MQTT_DEBUG_PRINTLN("MQTT%d custom broker using JWT auth (audience: %s)", index + 1, slot.audience);
+    } else if (strlen(slot.username) > 0) {
       slot.client->setCredentials(slot.username, slot.password);
     }
   }
@@ -1044,7 +1059,9 @@ void MQTTBridge::maintainSlotConnections() {
     if (!_slots[i].enabled || !_slots[i].client) continue;
 
     // JWT slots need time sync before we can manage tokens
-    if (_slots[i].preset && _slots[i].preset->auth_type == MQTT_AUTH_JWT && !can_do_jwt) {
+    bool slot_jwt = (_slots[i].preset && _slots[i].preset->auth_type == MQTT_AUTH_JWT) ||
+                    (!_slots[i].preset && _slots[i].audience[0] != '\0' && _slots[i].auth_token != nullptr);
+    if (slot_jwt && !can_do_jwt) {
       continue;
     }
 
@@ -1060,8 +1077,10 @@ void MQTTBridge::maintainSlotConnection(int index, unsigned long now_millis, uns
     slot.max_backoff_failures = 0;
   }
 
-  // JWT token renewal (only for preset slots with JWT auth)
-  if (slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT) {
+  // JWT token renewal (for preset JWT slots and custom slots with audience set)
+  bool slot_uses_jwt = (slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT) ||
+                       (!slot.preset && slot.audience[0] != '\0' && slot.auth_token != nullptr);
+  if (slot_uses_jwt) {
     bool token_needs_renewal = false;
     if (!time_synced) {
       token_needs_renewal = (slot.token_expires_at == 0);
@@ -1125,7 +1144,7 @@ void MQTTBridge::maintainSlotConnection(int index, unsigned long now_millis, uns
       slot.last_reconnect_attempt = now_millis;
       reconnect_attempted = true;
       MQTT_DEBUG_PRINTLN("MQTT%d circuit breaker probe (attempting single reconnect after %lu ms)", index + 1, probe_elapsed);
-      if (slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT) {
+      if (slot_uses_jwt) {
         unsigned long current_time = time(nullptr);
         bool token_still_valid = slot.token_expires_at > 0 &&
                                 current_time < slot.token_expires_at &&
@@ -1189,7 +1208,7 @@ void MQTTBridge::maintainSlotConnection(int index, unsigned long now_millis, uns
       }
       MQTT_DEBUG_PRINTLN("MQTT%d reconnecting (backoff level %d, failures at max: %d)", index + 1, slot.reconnect_backoff, slot.max_backoff_failures);
       reconnect_attempted = true;
-      if (slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT) {
+      if (slot_uses_jwt) {
         unsigned long current_time = time(nullptr);
         bool token_still_valid = slot.token_expires_at > 0 &&
                                 current_time < slot.token_expires_at &&
@@ -1250,9 +1269,18 @@ void MQTTBridge::maintainSlotConnection(int index, unsigned long now_millis, uns
 bool MQTTBridge::createSlotAuthToken(int index) {
   if (index < 0 || index >= MAX_MQTT_SLOTS) return false;
   MQTTSlot& slot = _slots[index];
-  if (!_identity || !slot.preset || slot.preset->auth_type != MQTT_AUTH_JWT || !slot.auth_token) {
-    return false;
+  if (!_identity || !slot.auth_token) return false;
+
+  // Determine JWT audience: preset takes priority, then custom slot audience field
+  const char* audience = nullptr;
+  unsigned long base_lifetime = 86400; // default 24h
+  if (slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT) {
+    audience = slot.preset->jwt_audience;
+    if (slot.preset->token_lifetime > 0) base_lifetime = slot.preset->token_lifetime;
+  } else if (slot.audience[0] != '\0') {
+    audience = slot.audience;
   }
+  if (!audience || audience[0] == '\0') return false;
 
   // Ensure JWT username is set
   if (_jwt_username[0] == '\0') {
@@ -1278,9 +1306,6 @@ bool MQTTBridge::createSlotAuthToken(int index) {
   const char* email = (_prefs->mqtt_email[0] != '\0') ? _prefs->mqtt_email : nullptr;
 
   unsigned long current_time = time(nullptr);
-  // Use preset-specific lifetime if set, otherwise default to 24h
-  // Stagger token expiry per slot to avoid simultaneous renewal/reconnect
-  unsigned long base_lifetime = (slot.preset->token_lifetime > 0) ? slot.preset->token_lifetime : 86400;
   // Stagger token expiry per slot to avoid simultaneous renewal/reconnect
   // Use 5% of lifetime per slot, capped at 300s, so short-lived tokens aren't over-reduced
   unsigned long stagger = index * min((unsigned long)300, base_lifetime / 20);
@@ -1288,7 +1313,7 @@ bool MQTTBridge::createSlotAuthToken(int index) {
   bool time_synced = (current_time >= 1000000000);
 
   if (JWTHelper::createAuthToken(
-      *_identity, slot.preset->jwt_audience,
+      *_identity, audience,
       0, expires_in, slot.auth_token, AUTH_TOKEN_SIZE,
       owner_key, client_version, email)) {
     slot.token_expires_at = time_synced ? (current_time + expires_in) : 0;
@@ -2534,8 +2559,9 @@ void MQTTBridge::syncTimeWithNTP() {
     if (_slots_setup_done && was_ntp_synced) {
       unsigned long current_time = (unsigned long)time(nullptr);
       for (int i = 0; i < _max_active_slots; i++) {
-        if (_slots[i].enabled && _slots[i].preset &&
-            _slots[i].preset->auth_type == MQTT_AUTH_JWT) {
+        bool slot_jwt = (_slots[i].preset && _slots[i].preset->auth_type == MQTT_AUTH_JWT) ||
+                        (!_slots[i].preset && _slots[i].audience[0] != '\0' && _slots[i].auth_token != nullptr);
+        if (_slots[i].enabled && slot_jwt) {
           // Check if the slot's token was created with a stale time
           // (token_expires_at would be far in the past relative to current time)
           if (_slots[i].token_expires_at > 0 && current_time > _slots[i].token_expires_at) {
