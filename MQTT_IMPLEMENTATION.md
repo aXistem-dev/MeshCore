@@ -627,6 +627,9 @@ set bridge.enabled on
 get bridge.source          # Should be "rx"
 set bridge.source rx
 get mqtt.status            # Check per-slot connection status
+get mqtt1.diag             # Last slot error details (TLS/sock/time)
+get mqtt2.diag
+get mqtt3.diag
 get mqtt1.preset           # Verify slots are configured
 get mqtt.iata              # IATA must be set for Analyzer presets
 ```

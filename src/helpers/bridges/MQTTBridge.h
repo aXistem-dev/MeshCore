@@ -90,6 +90,8 @@ private:
     int32_t last_tls_stack_err;     // mbedTLS stack error
     int last_sock_errno;            // socket errno
     unsigned long last_error_time;  // millis() of last error
+    uint32_t disconnect_count;      // Number of disconnect callbacks since boot
+    unsigned long first_disconnect_time; // millis() of first disconnect after boot
   };
 
   static const size_t AUTH_TOKEN_SIZE = 768;

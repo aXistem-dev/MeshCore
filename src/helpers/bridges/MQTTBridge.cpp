@@ -234,6 +234,13 @@ void MQTTBridge::formatSlotDiagReply(char* buf, size_t bufsize, int slot_index) 
   }
 
   int pos = snprintf(buf, bufsize, "> mqtt%d: %s", slot_index + 1, state);
+  if (slot.disconnect_count > 0) {
+    pos += snprintf(buf + pos, bufsize - pos, ", dc:%lu", (unsigned long)slot.disconnect_count);
+    if (slot.first_disconnect_time > 0) {
+      unsigned long first_disc_age_sec = (millis() - slot.first_disconnect_time) / 1000;
+      pos += snprintf(buf + pos, bufsize - pos, ", first_disc:%lus", first_disc_age_sec);
+    }
+  }
 
   // If connected with no errors, we're done
   if (slot.connected && slot.last_error_time == 0) {
@@ -947,9 +954,11 @@ void MQTTBridge::setupSlot(int index) {
   slot.client->setAutoReconnect(false);  // We handle reconnect with our own backoff logic
   bool uses_jwt = (slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT) || slot.audience[0] != '\0';
   optimizeMqttClientConfig(slot.client, uses_jwt);  // sets 45s keepalive default
+  #ifndef MQTT_FORCE_KEEPALIVE_45
   if (slot.preset && slot.preset->keepalive > 0) {
     slot.client->setKeepAlive(slot.preset->keepalive);  // preset overrides default
   }
+  #endif
 
   // Callbacks (capture index by value)
   slot.client->onConnect([this, index](bool sessionPresent) {
@@ -967,6 +976,10 @@ void MQTTBridge::setupSlot(int index) {
   });
   slot.client->onDisconnect([this, index](bool sessionPresent) {
     MQTT_DEBUG_PRINTLN("MQTT%d disconnected", index + 1);
+    _slots[index].disconnect_count++;
+    if (_slots[index].first_disconnect_time == 0) {
+      _slots[index].first_disconnect_time = millis();
+    }
     _slots[index].connected = false;
     updateCachedConnectionStatus();
   });
