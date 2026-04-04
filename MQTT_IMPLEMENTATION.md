@@ -15,12 +15,11 @@ Use one of the observer build targets (e.g., `heltec_v4_repeater_observer_mqtt`)
 If this is a fresh flash or full erase, configure your radio parameters first. These must match other nodes in your mesh:
 
 ```bash
-set freq 910.525
-set sf 7
-set cr 5
-set bw 62.5
+set radio 910.525 62.5 7 5
 set tx 22
 ```
+
+Format: `set radio <freq_MHz> <bw_kHz> <sf> <cr>`
 
 **3. Configure device identity**
 
@@ -164,7 +163,7 @@ Some MQTT observer builds use a non-default partition table to accommodate the l
 
 You can flash the merged firmware using either the web flasher or the command line:
 
-- **Web flasher (recommended):** Use the [MeshCore Web Flasher](https://flasher.meshcore.co.uk/) to flash the `*-merged.bin` file directly from your browser — no tools to install.
+- **Web flasher (recommended):** Use the [MeshCore Web Flasher](https://meshcore.io/flasher) to flash the `*-merged.bin` file directly from your browser — no tools to install.
 - **Command line:**
   ```bash
   # Build the merged binary
@@ -384,10 +383,6 @@ These are standard MeshCore commands, not MQTT-specific, but important for obser
 - `set name <name>` - Set device name (also sets MQTT origin)
 - `set repeat on|off` - Enable/disable packet forwarding (use `off` for receive-only observers)
 - `set prv.key <64-hex-char-key>` - Restore private key (for migrating identity from another device)
-- `set freq <MHz>` - Set radio frequency
-- `set sf <5-12>` - Set LoRa spreading factor
-- `set bw <kHz>` - Set LoRa bandwidth
-- `set cr <5-8>` - Set LoRa coding rate
 - `set tx <dBm>` - Set transmit power
 
 ### Bridge Commands
@@ -561,10 +556,7 @@ The migration happens automatically on first boot after firmware update. No manu
 
 If this is a fresh flash, radio parameters must be set to match your mesh network:
 ```
-set freq 906.0
-set sf 12
-set cr 5
-set bw 250
+set radio 910.525 62.5 7 5
 set tx 22
 ```
 
