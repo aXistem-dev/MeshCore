@@ -8,15 +8,25 @@
   static UITask ui_task(display);
 #endif
 
+
 StdRNG fast_rng;
 SimpleMeshTables tables;
 MyMesh the_mesh(board, radio_driver, *new ArduinoMillis(), fast_rng, rtc_clock, tables);
+
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
+  static void sensecap_send_advert() { the_mesh.sendSelfAdvertisement(0, false); }
+#endif
 
 void halt() {
   while (1) ;
 }
 
 static char command[MAX_POST_TEXT_LEN+1];
+
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_)
+static unsigned long userBtnDownAt = 0;
+#define USER_BTN_HOLD_OFF_MILLIS 1500
+#endif
 
 void setup() {
   Serial.begin(115200);
@@ -76,6 +86,10 @@ void setup() {
   ui_task.begin(the_mesh.getNodePrefs(), FIRMWARE_BUILD_DATE, FIRMWARE_VERSION);
 #endif
 
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
+  board.beginHeadless(&sensors, sensecap_send_advert);
+#endif
+
   // send out initial zero hop Advertisement to the mesh
 #if ENABLE_ADVERT_ON_BOOT == 1
   the_mesh.sendSelfAdvertisement(16000, false);
@@ -107,8 +121,24 @@ void loop() {
     command[0] = 0;  // reset command buffer
   }
 
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_)
+  // Hold the user button to power off the SenseCAP Solar repeater.
+  int btnState = digitalRead(PIN_USER_BTN);
+  if (btnState == LOW) {
+    if (userBtnDownAt == 0) {
+      userBtnDownAt = millis();
+    } else if ((unsigned long)(millis() - userBtnDownAt) >= USER_BTN_HOLD_OFF_MILLIS) {
+      Serial.println("Powering off...");
+      board.powerOff();  // does not return
+    }
+  } else {
+    userBtnDownAt = 0;
+  }
+#endif
+
   the_mesh.loop();
   sensors.loop();
+  board.loop();
 #ifdef DISPLAY_CLASS
   ui_task.loop();
 #endif

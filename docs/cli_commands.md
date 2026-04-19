@@ -915,6 +915,45 @@ region save
 
 ---
 
+#### View or change the telemetry location policy
+**Usage:**
+- `gps telem`
+- `gps telem <policy>`
+
+**Parameters:** 
+- `policy`: `deny`|`allow`|`always` 
+  - `deny`: never include location in telemetry responses
+  - `allow`: include location only for non-guest users (access control: read-only or higher) when requested
+  - `always`: include location for all users who can request telemetry (including guests)
+
+**Default:** `allow`
+
+**Note:** This controls whether real GPS coordinates are included in telemetry responses. It is separate from `gps advert`, which controls location in advertisements.
+
+---
+
+#### GPS power-save (repeaters with GPS_POWER_SAVE)
+
+**Usage:**
+- `gps saver` — Get power-save mode
+- `gps saver <mode>` — Set mode
+- `gps hold` — Get hold time (seconds)
+- `gps hold <sec>` — Set hold time (5–240 s)
+- `gps timeout` — Get no-fix timeout (minutes)
+- `gps timeout <min>` — Set timeout (1–15 min)
+- `gps interval` — Get wake interval (seconds)
+- `gps interval <value>` — Set interval (e.g. 15m, 30m, 1h, 2d or 900–2592000 s)
+
+**Parameters:**
+- `mode`: `off` | `bootonly` | `periodic`
+- `sec`: 5–240 (default 15)
+- `min`: 1–15 (default 5)
+- `value`: `Nm` (N minutes, 15–43200), `Nh` (N hours, 1–720), `Nd` (N days, 1–30), or raw seconds (900–2592000)
+
+**Defaults:** mode=bootonly, hold=15 s, timeout=5 min, interval=604800 (7 d)
+
+---
+
 ### Sensors (When sensor support is compiled in)
 
 #### View the list of sensors on this node
@@ -927,7 +966,7 @@ region save
 
 ---
 
-#### View or change thevalue of a sensor
+#### View or change the value of a sensor
 **Usage:** 
 - `sensor get <key>`
 - `sensor set <key> <value>`
@@ -935,6 +974,9 @@ region save
 **Parameters:**
 - `key`: Sensor setting name
 - `value`: The value to set the sensor to
+
+**Repeater/room-server prefs (not in sensor list):**
+- `telem_loc_policy`: 0=deny, 1=allow, 2=always (see `gps telem`)
 
 ---
 

@@ -14,6 +14,10 @@
 #define ADVERT_LOC_SHARE      1
 #define ADVERT_LOC_PREFS      2
 
+#define TELEM_LOC_DENY        0   // never include location in telemetry
+#define TELEM_LOC_ALLOW       1   // include when requester has TELEM_PERM_LOCATION (non-guest)
+#define TELEM_LOC_ALWAYS      2   // always include (even guests)
+
 #define LOOP_DETECT_OFF       0
 #define LOOP_DETECT_MINIMAL   1
 #define LOOP_DETECT_MODERATE  2
@@ -61,6 +65,12 @@ struct NodePrefs { // persisted to file
   uint8_t rx_boosted_gain; // power settings
   uint8_t path_hash_mode;   // which path mode to use when sending
   uint8_t loop_detect;
+  #if GPS_POWER_SAVE_ACTIVE
+  uint8_t gps_saver_mode;       // 0=off, 1=bootonly, 2=periodic
+  uint8_t gps_saver_hold;       // 5–240 s, default 15
+  uint8_t gps_timeout_min;      // 1–15 min, default 5
+  #endif
+  uint8_t telem_loc_policy;     // 0=deny, 1=allow (non-guest), 2=always
 };
 
 class CommonCLICallbacks {

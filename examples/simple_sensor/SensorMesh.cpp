@@ -731,6 +731,9 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
   _prefs.gps_enabled = 0;
   _prefs.gps_interval = 0;
   _prefs.advert_loc_policy = ADVERT_LOC_PREFS;
+  #if GPS_POWER_SAVE_ACTIVE
+  _prefs.gps_saver_mode = 1;
+  #endif
 
   memset(default_scope.key, 0, sizeof(default_scope.key));
 }
@@ -774,6 +777,9 @@ void SensorMesh::begin(FILESYSTEM* fs) {
 
 #if ENV_INCLUDE_GPS == 1
   applyGpsPrefs();
+  #if GPS_POWER_SAVE_ACTIVE
+  sensors.setGpsOffPersistCallback([](void* user) { ((SensorMesh*)user)->persistGpsOff(); }, this);
+  #endif
 #endif
 }
 

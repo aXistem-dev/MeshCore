@@ -4,15 +4,30 @@
 #include <Arduino.h>
 #include <helpers/NRF52Board.h>
 
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
+class EnvironmentSensorManager;
+#endif
+
 class SenseCapSolarBoard : public NRF52BoardDCDC {
 protected:
 #ifdef NRF52_POWER_MANAGEMENT
   void initiateShutdown(uint8_t reason) override;
 #endif
 
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
+  void headlessPollButtons();
+  void headlessPollGpsLed();
+#endif
+
 public:
   SenseCapSolarBoard() : NRF52Board("SENSECAP_SOLAR_OTA") {}
   void begin();
+  void powerOff() override;
+  void loop() override;
+
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
+  void beginHeadless(EnvironmentSensorManager* sensors, void (*onSendAdvert)(void));
+#endif
 
 #if defined(P_LORA_TX_LED)
   void onBeforeTransmit() override {
@@ -37,24 +52,17 @@ public:
     return "Seeed SenseCap Solar";
   }
 
-  void powerOff() override {
-    digitalWrite(LED_WHITE, LOW);
-    digitalWrite(LED_BLUE, LOW);
-
-#ifdef PIN_USER_BTN
-    while (digitalRead(PIN_USER_BTN) == LOW);
-    // Keep pull-up enabled in system-off so the wake line doesn't float low.
-    nrf_gpio_cfg_sense_input(digitalPinToInterrupt(g_ADigitalPinMap[PIN_USER_BTN]), NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
-#elif defined(PIN_BUTTON1)
-    while (digitalRead(PIN_BUTTON1) == LOW);
-    // Keep pull-up enabled in system-off so the wake line doesn't float low.
-    nrf_gpio_cfg_sense_input(digitalPinToInterrupt(g_ADigitalPinMap[PIN_BUTTON1]), NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
+private:
+  EnvironmentSensorManager* _headless_sensors = nullptr;
+  void (*_headless_on_send_advert)(void) = nullptr;
+  static const unsigned long HEADLESS_PRESS_WINDOW_MS = 600;
+  uint8_t _headless_usr_press_count = 0;
+  unsigned long _headless_usr_window_end = 0;
+  bool _headless_usr_was_pressed = false;
+  uint8_t _headless_gps_led_state = 0;
+  unsigned long _headless_gps_led_ts = 0;
+  bool _headless_gps_led_was_valid = false;
+  bool _headless_gps_led_was_active = false;
 #endif
-
-#ifdef NRF52_POWER_MANAGEMENT
-    initiateShutdown(SHUTDOWN_REASON_USER);
-#else
-    sd_power_system_off();
-#endif
-  }
 };

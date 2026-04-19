@@ -30,8 +30,8 @@
 #define LED_STATE_ON            (1)     // State when LED is litted
 
 // Buttons
-#define PIN_BUTTON1             (13)
-#define PIN_BUTTON2             (20)
+#define PIN_BUTTON1             (13)  // PWR
+#define PIN_BUTTON2             (20)  // USR
 #define PIN_USER_BTN            PIN_BUTTON1
 
 #define VBAT_ENABLE             (19)    // Output LOW to enable reading of the BAT voltage.
