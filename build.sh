@@ -64,9 +64,6 @@ case $1 in
     ;;
 esac
 
-# cache project config json for use in get_platform_for_env()
-PIO_CONFIG_JSON=$(pio project config --json-output)
-
 # $1 should be the string to find (case insensitive)
 get_pio_envs_containing_string() {
   shopt -s nocasematch
@@ -93,7 +90,8 @@ get_pio_envs_ending_with_string() {
 # $1 should be the environment name
 get_platform_for_env() {
   local env_name=$1
-  echo "$PIO_CONFIG_JSON" | python3 -c "
+  # Pipe fresh JSON each call — caching in a bash variable can truncate large configs and break json.load().
+  pio project config --json-output 2>/dev/null | python3 -c "
 import sys, json, re
 data = json.load(sys.stdin)
 for section, options in data:
