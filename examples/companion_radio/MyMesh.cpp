@@ -925,6 +925,7 @@ void MyMesh::begin(bool has_display) {
   _prefs.tx_power_dbm = constrain(_prefs.tx_power_dbm, -9, MAX_LORA_TX_POWER);
   _prefs.gps_enabled = constrain(_prefs.gps_enabled, 0, 1);  // Ensure boolean 0 or 1
   _prefs.gps_interval = constrain(_prefs.gps_interval, 0, 86400);  // Max 24 hours
+  _prefs.client_repeat = _prefs.client_repeat ? 1 : 0;
 
 #ifdef BLE_PIN_CODE // 123456 by default
   if (_prefs.ble_pin == 0) {
@@ -972,12 +973,13 @@ struct FreqRange {
   uint32_t lower_freq, upper_freq;
 };
 
-// Allow client repeat on preset frequency bands (lowest–highest preset per band).
-// 433: Portugal 433.375 – EU 433.65; 868–869: 869.525 – 869.618; 915–920: USA 910.525 – Vietnam 920.25
+// Client repeat: kHz ranges covering all LoRa ISM presets used with MeshCore boards (EU433 / EU868 / US902–928).
+// Repo defaults: platformio [arduino_base] LORA_FREQ=869.618 MHz; example #ifndef fallbacks use 915.0 MHz.
+// Docs/examples also cite 869.525, 867.5, 915.8 MHz — all fall inside the EU868 or US902 bands below.
 static FreqRange repeat_freq_ranges[] = {
-  { 433375, 433650 },   // 433 MHz band
-  { 869525, 869618 },   // 868–869 MHz band
-  { 910525, 920250 }    // 915–920 MHz band (USA, AU, NZ, VN)
+  { 433050, 434790 },   // EU 433 MHz ISM (typical 433.x LoRa presets)
+  { 863000, 870000 },   // EU 863–870 MHz (868.x / 869.x MeshCore & doc examples)
+  { 902000, 928000 },   // US 902–928 MHz (915.x defaults and variants)
 };
 
 bool MyMesh::isValidClientRepeatFreq(uint32_t f) const {

@@ -208,6 +208,7 @@ void DataStore::loadPrefs(NodePrefs& prefs, double& node_lat, double& node_lon) 
     prefs.autoadd_config = 0;
     prefs.autoadd_max_hops = 0;
     prefs.rx_boosted_gain = 0;
+    prefs.client_repeat = 0;
     memset(prefs.default_scope_name, 0, sizeof(prefs.default_scope_name));
     memset(prefs.default_scope_key, 0, sizeof(prefs.default_scope_key));
   }

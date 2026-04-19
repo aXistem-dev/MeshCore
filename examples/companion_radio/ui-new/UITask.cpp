@@ -684,6 +684,7 @@ class SettingsScreen : public UIScreen {
     SCREEN_BRIGHTNESS,
     TIMEZONE,
     SHARE_POS_IN_ADVERTS,
+    PACKET_FWD,
     BACK,
     Count
   };
@@ -694,7 +695,8 @@ class SettingsScreen : public UIScreen {
     SCREEN_SCREENSAVER_SUBMENU,
     SCREEN_BRIGHTNESS_SUBMENU,
     TIMEZONE_SUBMENU,
-    SHARE_POS_IN_ADVERTS_SUBMENU
+    SHARE_POS_IN_ADVERTS_SUBMENU,
+    PACKET_FWD_SUBMENU
   };
 
   enum BrightnessItem {
@@ -771,7 +773,7 @@ public:
       // Build menu items dynamically - screensaver only shown if screen_always_on is enabled
       uint8_t visible_count = 0;
       uint8_t visible_items[SettingItem::Count];
-      const char* item_names[] = {"Screen Always On", "Screensaver", "Screen Brightness", "Timezone", "Share pos in adv.", "Back"};
+      const char* item_names[] = {"Screen Always On", "Screensaver", "Screen Brightness", "Timezone", "Share pos in adv.", "Packet FWD", "Back"};
       
       // Build list of visible items
       for (uint8_t i = 0; i < SettingItem::Count; i++) {
@@ -858,6 +860,14 @@ public:
           display.print(": ");
           char value_str[4];
           strcpy(value_str, (_node_prefs->advert_loc_policy == ADVERT_LOC_SHARE) ? "Yes" : "No");
+          int value_width = display.getTextWidth(value_str);
+          display.setCursor(display.width() - value_width - 2, item_y);
+          display.print(value_str);
+        } else if (item == SettingItem::PACKET_FWD) {
+          display.print(item_names[item]);
+          display.print(": ");
+          char value_str[4];
+          strcpy(value_str, _node_prefs->client_repeat ? "ON" : "OFF");
           int value_width = display.getTextWidth(value_str);
           display.setCursor(display.width() - value_width - 2, item_y);
           display.print(value_str);
@@ -997,6 +1007,26 @@ public:
         display.setCursor(display.width() / 2 - 10, y);
         display.print(options[i]);
       }
+    } else if (_state == PACKET_FWD_SUBMENU) {
+      display.setColor(DisplayDriver::GREEN);
+      display.drawTextCentered(display.width() / 2, 0, "Packet FWD");
+      display.drawRect(0, 10, display.width(), 1);  // separator line
+
+      int y = 20;
+      const char* options[] = {"OFF", "ON"};
+      uint8_t current_option = _node_prefs->client_repeat ? 1 : 0;
+
+      for (uint8_t i = 0; i < 2; i++, y += 15) {
+        if (i == current_option) {
+          display.setColor(DisplayDriver::YELLOW);
+          display.fillRect(0, y - 2, display.width(), 13);
+          display.setColor(DisplayDriver::DARK);
+        } else {
+          display.setColor(DisplayDriver::LIGHT);
+        }
+        display.setCursor(display.width() / 2 - 10, y);
+        display.print(options[i]);
+      }
     }
     
     return 1000;  // refresh every second
@@ -1061,6 +1091,9 @@ public:
         } else if (_selected_item == SettingItem::SHARE_POS_IN_ADVERTS) {
           _state = SHARE_POS_IN_ADVERTS_SUBMENU;
           return true;
+        } else if (_selected_item == SettingItem::PACKET_FWD) {
+          _state = PACKET_FWD_SUBMENU;
+          return true;
         } else if (_selected_item == SettingItem::BACK) {
           _task->gotoHomeScreen();
           return true;
@@ -1102,6 +1135,16 @@ public:
       }
       if (c == KEY_ENTER) {
         // Select and save
+        the_mesh.savePrefs();
+        _state = MAIN_MENU;
+        return true;
+      }
+    } else if (_state == PACKET_FWD_SUBMENU) {
+      if (c == KEY_NEXT || c == KEY_RIGHT || c == KEY_PREV || c == KEY_LEFT) {
+        _node_prefs->client_repeat = _node_prefs->client_repeat ? 0 : 1;
+        return true;
+      }
+      if (c == KEY_ENTER) {
         the_mesh.savePrefs();
         _state = MAIN_MENU;
         return true;
