@@ -1381,7 +1381,6 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
     }
     _auto_off = millis() + AUTO_OFF_MILLIS;  // extend the auto-off timer
     _next_refresh = 100;  // trigger refresh
-    }
   }
 }
 
