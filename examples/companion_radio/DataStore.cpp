@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <cstring>
 #include "DataStore.h"
 
 #if defined(EXTRAFS) || defined(QSPIFLASH)
@@ -207,6 +208,8 @@ void DataStore::loadPrefs(NodePrefs& prefs, double& node_lat, double& node_lon) 
     prefs.autoadd_config = 0;
     prefs.autoadd_max_hops = 0;
     prefs.rx_boosted_gain = 0;
+    memset(prefs.default_scope_name, 0, sizeof(prefs.default_scope_name));
+    memset(prefs.default_scope_key, 0, sizeof(prefs.default_scope_key));
   }
 }
 
@@ -276,6 +279,13 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& no
       _prefs.autoadd_max_hops = 0;
       _prefs.rx_boosted_gain = 0;
     }
+    if (file.available() >= (int)(sizeof(_prefs.default_scope_name) + sizeof(_prefs.default_scope_key))) {
+      file.read((uint8_t *)_prefs.default_scope_name, sizeof(_prefs.default_scope_name));
+      file.read((uint8_t *)_prefs.default_scope_key, sizeof(_prefs.default_scope_key));
+    } else {
+      memset(_prefs.default_scope_name, 0, sizeof(_prefs.default_scope_name));
+      memset(_prefs.default_scope_key, 0, sizeof(_prefs.default_scope_key));
+    }
 
     file.close();
   }
@@ -318,6 +328,8 @@ void DataStore::savePrefs(const NodePrefs& _prefs, double node_lat, double node_
     file.write((uint8_t *)&_prefs.autoadd_config, sizeof(_prefs.autoadd_config));           // 95
     file.write((uint8_t *)&_prefs.autoadd_max_hops, sizeof(_prefs.autoadd_max_hops));        // 96
     file.write((uint8_t *)&_prefs.rx_boosted_gain, sizeof(_prefs.rx_boosted_gain));          // 97
+    file.write((uint8_t *)_prefs.default_scope_name, sizeof(_prefs.default_scope_name));
+    file.write((uint8_t *)_prefs.default_scope_key, sizeof(_prefs.default_scope_key));
 
     file.close();
   }
