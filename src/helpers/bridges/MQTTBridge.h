@@ -296,6 +296,21 @@ private:
   void updateCachedConnectionStatus();
 
   #ifdef ESP_PLATFORM
+  // Snapshot of the heap regions that gate TLS handshakes. On Phase 2d arena
+  // builds the TLS context lives in a dedicated mbedtls arena while the
+  // PsychicMqttClient + esp-mqtt objects live in main internal heap; both
+  // regions must have room before a slot can (re)connect. On legacy builds
+  // arena_active is false and main_max alone drives the decision.
+  struct TlsHeapStatus {
+    size_t main_max;             // largest contiguous block in MALLOC_CAP_INTERNAL
+    size_t arena_max;            // largest contiguous block in mbedtls arena (0 if inactive)
+    bool   arena_active;         // true if Phase 2d arena is live
+    bool   can_handshake;        // both regions have room for a fresh TLS handshake + client
+    bool   below_recovery_floor; // at least one region below the gray-zone trigger floor
+    bool   below_restart_floor;  // at least one region below the hard-restart floor
+  };
+  TlsHeapStatus assessTlsHeap() const;
+
   void runCriticalMemoryCheckAndRecovery();
   #endif
   void recreateMqttClientsForFragmentationRecovery();

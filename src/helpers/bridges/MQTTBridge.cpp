@@ -1,4 +1,5 @@
 #include "MQTTBridge.h"
+#include "MbedtlsArena.h"
 #include "../MQTTMessageBuilder.h"
 #include <NTPClient.h>
 #include <WiFiUdp.h>
@@ -16,6 +17,11 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <mbedtls/platform.h>
+#ifdef MQTT_DIAG_VERBOSE
+#include <sdkconfig.h>
+#include <mbedtls/ssl.h>
+#include <mbedtls/version.h>
+#endif
 #endif
 
 // Helper function to strip quotes from strings (both single and double quotes)
@@ -383,6 +389,101 @@ MQTTBridge::MQTTBridge(NodePrefs *prefs, mesh::PacketManager *mgr, mesh::RTCCloc
 void MQTTBridge::begin() {
   MQTT_DEBUG_PRINTLN("Initializing MQTT Bridge...");
 
+  // Phase 2d: dedicated mbedtls arena on non-PSRAM MQTT builds. Carves a
+  // contiguous internal-heap region and installs runtime calloc/free hooks so
+  // all mbedtls allocations (MQTT TLS, HTTPS OTA, etc.) are confined there.
+  // Main-heap fragmentation from TLS churn is eliminated; failure to reserve
+  // the arena falls back silently to legacy behaviour.
+  #if defined(ESP_PLATFORM) && defined(MQTT_MBEDTLS_ARENA_BYTES)
+  mbedtlsArenaInit((size_t)MQTT_MBEDTLS_ARENA_BYTES);
+  #endif
+
+  #if defined(ESP_PLATFORM) && defined(MQTT_DIAG_VERBOSE)
+  // Diagnostic-only: dump the compile-time mbedtls/sdkconfig macros the prebuilt
+  // Arduino-ESP32 mbedtls library was built against. These values are what the
+  // prebuilt libmbedtls.a actually uses; -D CONFIG_MBEDTLS_* overrides in
+  // build_flags only reach the application translation units and do NOT alter
+  // the prebuilt library. Interpretation of the log tells us whether Phase 2b
+  // (shrink mbedtls) and Phase 2c (session tickets) require a platform
+  // migration (pioarduino / arduino+espidf hybrid) to take effect.
+  {
+    char mbed_ver[32] = {0};
+    mbedtls_version_get_string(mbed_ver);
+    MQTT_DEBUG_PRINTLN("MQTT-DIAG mbedtls version=%s", mbed_ver);
+
+    #ifdef CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=%d", CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN);
+    #else
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=unset");
+    #endif
+    #ifdef CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=%d", CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN);
+    #else
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=unset");
+    #endif
+    #ifdef CONFIG_MBEDTLS_DYNAMIC_BUFFER
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG CONFIG_MBEDTLS_DYNAMIC_BUFFER=on");
+    #else
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG CONFIG_MBEDTLS_DYNAMIC_BUFFER=unset");
+    #endif
+    #ifdef CONFIG_MBEDTLS_CLIENT_SSL_SESSION_TICKETS
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG CONFIG_MBEDTLS_CLIENT_SSL_SESSION_TICKETS=on");
+    #else
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG CONFIG_MBEDTLS_CLIENT_SSL_SESSION_TICKETS=unset");
+    #endif
+    #ifdef CONFIG_MBEDTLS_SSL_SESSION_TICKETS
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG CONFIG_MBEDTLS_SSL_SESSION_TICKETS=on");
+    #else
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG CONFIG_MBEDTLS_SSL_SESSION_TICKETS=unset");
+    #endif
+    #ifdef CONFIG_MBEDTLS_HAVE_TIME
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG CONFIG_MBEDTLS_HAVE_TIME=on");
+    #else
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG CONFIG_MBEDTLS_HAVE_TIME=unset");
+    #endif
+    #ifdef CONFIG_MBEDTLS_ECDH_C
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG CONFIG_MBEDTLS_ECDH_C=on");
+    #else
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG CONFIG_MBEDTLS_ECDH_C=unset");
+    #endif
+    #ifdef CONFIG_MBEDTLS_ECDSA_C
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG CONFIG_MBEDTLS_ECDSA_C=on");
+    #else
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG CONFIG_MBEDTLS_ECDSA_C=unset");
+    #endif
+    #ifdef CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=on");
+    #else
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=unset");
+    #endif
+    #ifdef MBEDTLS_SSL_MAX_CONTENT_LEN
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG MBEDTLS_SSL_MAX_CONTENT_LEN=%d", MBEDTLS_SSL_MAX_CONTENT_LEN);
+    #else
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG MBEDTLS_SSL_MAX_CONTENT_LEN=unset");
+    #endif
+    #ifdef MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH=on");
+    #else
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH=unset");
+    #endif
+    #ifdef MBEDTLS_SSL_IN_CONTENT_LEN
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG MBEDTLS_SSL_IN_CONTENT_LEN=%d", MBEDTLS_SSL_IN_CONTENT_LEN);
+    #else
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG MBEDTLS_SSL_IN_CONTENT_LEN=unset");
+    #endif
+    #ifdef MBEDTLS_SSL_OUT_CONTENT_LEN
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG MBEDTLS_SSL_OUT_CONTENT_LEN=%d", MBEDTLS_SSL_OUT_CONTENT_LEN);
+    #else
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG MBEDTLS_SSL_OUT_CONTENT_LEN=unset");
+    #endif
+    #ifdef MBEDTLS_SSL_SESSION_TICKETS
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG MBEDTLS_SSL_SESSION_TICKETS=on");
+    #else
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG MBEDTLS_SSL_SESSION_TICKETS=unset");
+    #endif
+  }
+  #endif
+
   // PSRAM diagnostic - helps debug memory fragmentation on boards with external RAM
   #ifdef BOARD_HAS_PSRAM
   {
@@ -733,6 +834,9 @@ void MQTTBridge::mqttTaskLoop() {
   #ifdef MQTT_MEMORY_DEBUG
   static unsigned long last_agent_log = 0;
   #endif
+  #ifdef MQTT_DIAG_VERBOSE
+  static unsigned long last_diag_heap_info = 0;
+  #endif
   while (true) {
     #ifdef MQTT_MEMORY_DEBUG
     // #region agent log
@@ -749,6 +853,28 @@ void MQTTBridge::mqttTaskLoop() {
       agentLogHeap("MQTTBridge.cpp:mqttTaskLoop", "mqtt_loop_60s", "H5", free_h, max_alloc, internal_f, spiram_f);
     }
     // #endregion
+    #endif
+
+    #ifdef MQTT_DIAG_VERBOSE
+    {
+      unsigned long now_diag = millis();
+      if (last_diag_heap_info == 0 || now_diag - last_diag_heap_info >= 300000UL) {
+        last_diag_heap_info = now_diag;
+        multi_heap_info_t info;
+        heap_caps_get_info(&info, MALLOC_CAP_INTERNAL);
+        MQTT_DEBUG_PRINTLN("MQTT-DIAG heap_info total_free=%u largest_free=%u min_free=%u alloc_blocks=%u free_blocks=%u total_blocks=%u",
+          (unsigned)info.total_free_bytes, (unsigned)info.largest_free_block,
+          (unsigned)info.minimum_free_bytes, (unsigned)info.allocated_blocks,
+          (unsigned)info.free_blocks, (unsigned)info.total_blocks);
+        if (mbedtlsArenaIsActive()) {
+          MQTT_DEBUG_PRINTLN("MQTT-DIAG arena cap=%u free=%u largest=%u min_free=%u",
+            (unsigned)mbedtlsArenaCapacity(),
+            (unsigned)mbedtlsArenaFreeSize(),
+            (unsigned)mbedtlsArenaLargestFreeBlock(),
+            (unsigned)mbedtlsArenaMinimumFreeSize());
+        }
+      }
+    }
     #endif
 
     unsigned long now = millis();
@@ -907,12 +1033,25 @@ void MQTTBridge::mqttTaskLoop() {
             _last_status_publish = now;
             _last_status_retry = 0;
             MQTT_DEBUG_PRINTLN("Status published successfully, next publish in %lu ms", _status_interval);
-            // If we're in the hole but just proved connectivity, recover sooner than the dedicated pressure timer
-            size_t max_alloc = ESP.getMaxAllocHeap();
-            if (max_alloc < 58000 && (now - _last_fragmentation_recovery) > 300000) {
+            // If heap is under pressure but we just proved connectivity,
+            // recover sooner than the dedicated pressure timer. Arena-aware:
+            // on arena builds the pre-arena 58 KB main-heap floor is always
+            // crossed by design, so use the shared below_recovery_floor
+            // signal which accounts for both regions.
+            TlsHeapStatus tls_status = assessTlsHeap();
+            bool under_pressure = tls_status.arena_active
+                ? tls_status.below_recovery_floor
+                : (ESP.getMaxAllocHeap() < 58000);
+            if (under_pressure && (now - _last_fragmentation_recovery) > 300000) {
               _last_fragmentation_recovery = now;
               _fragmentation_pressure_since = 0;
-              MQTT_DEBUG_PRINTLN("Fragmentation recovery after status (max_alloc=%d)", (int)max_alloc);
+              if (tls_status.arena_active) {
+                MQTT_DEBUG_PRINTLN("Fragmentation recovery after status (main=%d arena=%d)",
+                    (int)tls_status.main_max, (int)tls_status.arena_max);
+              } else {
+                MQTT_DEBUG_PRINTLN("Fragmentation recovery after status (max_alloc=%d)",
+                    (int)tls_status.main_max);
+              }
               recreateMqttClientsForFragmentationRecovery();
             }
           } else {
@@ -957,6 +1096,13 @@ void MQTTBridge::setupSlot(int index) {
 
   // Don't recreate if already exists
   if (slot.client) return;
+
+  #if defined(ESP_PLATFORM) && defined(MQTT_DIAG_VERBOSE)
+  size_t diag_setup_max_before = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+  size_t diag_setup_free_before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+  MQTT_DEBUG_PRINTLN("MQTT-DIAG slot=%d phase=setup_begin max=%u free=%u",
+    index + 1, (unsigned)diag_setup_max_before, (unsigned)diag_setup_free_before);
+  #endif
 
   slot.client = new PsychicMqttClient();
   slot.client->setAutoReconnect(false);  // We handle reconnect with our own backoff logic
@@ -1132,11 +1278,40 @@ void MQTTBridge::setupSlot(int index) {
 
   slot.client->connect();
   slot.initial_connect_done = true;
+
+  #if defined(ESP_PLATFORM) && defined(MQTT_DIAG_VERBOSE)
+  {
+    size_t diag_setup_max_after = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    size_t diag_setup_free_after = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    // Deltas are signed: setup generally allocates (negative delta means heap shrank)
+    long diag_max_delta = (long)diag_setup_max_after - (long)diag_setup_max_before;
+    long diag_free_delta = (long)diag_setup_free_after - (long)diag_setup_free_before;
+    MQTT_DEBUG_PRINTLN("MQTT-DIAG slot=%d phase=setup_end max=%u free=%u d_max=%ld d_free=%ld",
+      index + 1, (unsigned)diag_setup_max_after, (unsigned)diag_setup_free_after,
+      diag_max_delta, diag_free_delta);
+    if (mbedtlsArenaIsActive()) {
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG slot=%d phase=setup_end arena_free=%u arena_largest=%u",
+        index + 1,
+        (unsigned)mbedtlsArenaFreeSize(),
+        (unsigned)mbedtlsArenaLargestFreeBlock());
+    }
+  }
+  #endif
 }
 
 void MQTTBridge::teardownSlot(int index) {
   if (index < 0 || index >= RUNTIME_MQTT_SLOTS) return;
   MQTTSlot& slot = _slots[index];
+
+  #if defined(ESP_PLATFORM) && defined(MQTT_DIAG_VERBOSE)
+  size_t diag_td_max_before = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+  size_t diag_td_free_before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+  bool diag_had_client = (slot.client != nullptr);
+  bool diag_was_connected = diag_had_client && slot.client->connected();
+  MQTT_DEBUG_PRINTLN("MQTT-DIAG slot=%d phase=teardown_begin max=%u free=%u had_client=%d was_connected=%d",
+    index + 1, (unsigned)diag_td_max_before, (unsigned)diag_td_free_before,
+    (int)diag_had_client, (int)diag_was_connected);
+  #endif
 
   if (slot.client) {
     if (slot.client->connected()) {
@@ -1165,6 +1340,24 @@ void MQTTBridge::teardownSlot(int index) {
   slot.last_reconnect_attempt = 0;
   slot.last_log_time = 0;
   slot.last_deferred_log_ms = 0;
+
+  #if defined(ESP_PLATFORM) && defined(MQTT_DIAG_VERBOSE)
+  {
+    size_t diag_td_max_after = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    size_t diag_td_free_after = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    long diag_max_delta = (long)diag_td_max_after - (long)diag_td_max_before;
+    long diag_free_delta = (long)diag_td_free_after - (long)diag_td_free_before;
+    MQTT_DEBUG_PRINTLN("MQTT-DIAG slot=%d phase=teardown_end max=%u free=%u d_max=%ld d_free=%ld",
+      index + 1, (unsigned)diag_td_max_after, (unsigned)diag_td_free_after,
+      diag_max_delta, diag_free_delta);
+    if (mbedtlsArenaIsActive()) {
+      MQTT_DEBUG_PRINTLN("MQTT-DIAG slot=%d phase=teardown_end arena_free=%u arena_largest=%u",
+        index + 1,
+        (unsigned)mbedtlsArenaFreeSize(),
+        (unsigned)mbedtlsArenaLargestFreeBlock());
+    }
+  }
+  #endif
 }
 
 void MQTTBridge::maintainSlotConnections() {
@@ -1283,19 +1476,32 @@ void MQTTBridge::maintainSlotConnection(int index, unsigned long now_millis, uns
     }
   }
 
-  // Pre-flight: don't attempt TLS if there isn't enough contiguous internal heap.
-  // Each failed attempt allocates ~42 KB, fails, and frees slightly fragmented — over many
-  // cycles this degrades max_alloc from 70 KB to unusable. Block early to stop accumulation.
+  // Pre-flight: don't attempt TLS if there isn't enough contiguous heap in
+  // the regions the handshake will touch. On arena builds that's two regions
+  // (main heap for PsychicMqttClient + esp-mqtt, arena for mbedtls SSL
+  // buffers); on legacy builds it's main heap only. Each failed attempt
+  // allocates ~42 KB, fails, and frees slightly fragmented — over many
+  // cycles this degrades the largest free block to unusable. Block early to
+  // stop accumulation.
+  //
+  // Only gate when the slot is not already connected — a connected slot
+  // doesn't need a handshake, and on arena builds main_max steady-state
+  // sits well below the handshake floor by design, which would otherwise
+  // spam the deferred log every maintain cycle.
   #ifdef ESP_PLATFORM
-  {
-    static const size_t MIN_TLS_HEAP = 45000;
+  if (!slot.connected) {
     static const unsigned long DEFERRED_LOG_INTERVAL_MS = 30000UL;
-    size_t avail = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-    if (avail < MIN_TLS_HEAP) {
+    TlsHeapStatus status = assessTlsHeap();
+    if (!status.can_handshake) {
       if (now_millis - slot.last_deferred_log_ms >= DEFERRED_LOG_INTERVAL_MS || slot.last_deferred_log_ms == 0) {
         slot.last_deferred_log_ms = now_millis;
-        MQTT_DEBUG_PRINTLN("MQTT%d connect deferred: max_block=%d < %d (heap too fragmented)",
-            index + 1, (int)avail, (int)MIN_TLS_HEAP);
+        if (status.arena_active) {
+          MQTT_DEBUG_PRINTLN("MQTT%d connect deferred: main_max=%d arena_max=%d (heap too fragmented)",
+              index + 1, (int)status.main_max, (int)status.arena_max);
+        } else {
+          MQTT_DEBUG_PRINTLN("MQTT%d connect deferred: max_block=%d < 45000 (heap too fragmented)",
+              index + 1, (int)status.main_max);
+        }
       }
       return;
     }
@@ -1514,7 +1720,15 @@ bool MQTTBridge::publishToSlot(int index, const char* topic, const char* payload
     static unsigned long last_fail_log = 0;
     unsigned long now = millis();
     if (now - last_fail_log > 60000) {
+      #if defined(ESP_PLATFORM) && defined(MQTT_DIAG_VERBOSE)
+      size_t diag_pub_max = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+      size_t diag_pub_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+      MQTT_DEBUG_PRINTLN("MQTT%d publish failed (result=%d qos=%u len=%u max=%u free=%u)",
+        index + 1, result, (unsigned)qos, (unsigned)strlen(payload),
+        (unsigned)diag_pub_max, (unsigned)diag_pub_free);
+      #else
       MQTT_DEBUG_PRINTLN("MQTT%d publish failed (result=%d)", index + 1, result);
+      #endif
       last_fail_log = now;
     }
     return false;
@@ -2332,22 +2546,48 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
                                 float snr, float rssi) {
   if (!packet) return;
 
-  // Memory pressure check: Skip publishes when heap is severely fragmented
+  // Memory pressure check: skip publishes when heap is severely fragmented.
+  //
+  // Arena builds: publishing on an established session does not run another
+  // handshake. The mbedtls record encrypt reuses the existing TLS context
+  // allocations in the arena; only a small encrypt buffer and the esp-mqtt
+  // outbox entry are allocated per publish. Main heap only needs room for
+  // the outbox enqueue (~2-3 KB) and arena only needs room for a record
+  // (<16 KB). Using the pre-arena 52 KB main-heap gate would skip every
+  // publish because main_max sits at ~16 KB by design. We back off only
+  // when either region is truly starved.
+  //
+  // Legacy builds: keep the original single-region gate exactly as before.
   #ifdef ESP32
   #if defined(BOARD_HAS_PSRAM)
   static const size_t PUBLISH_SKIP_MAX_ALLOC_THRESHOLD = 60000;
   #else
   static const size_t PUBLISH_SKIP_MAX_ALLOC_THRESHOLD = 52000;
   #endif
+  static const size_t PUBLISH_SKIP_ARENA_MAIN_FLOOR  = 4000;
+  static const size_t PUBLISH_SKIP_ARENA_ARENA_FLOOR = 8000;
   unsigned long now = millis();
   if (now - _last_memory_check > 5000) {
+    TlsHeapStatus tls = assessTlsHeap();
     size_t max_alloc = ESP.getMaxAllocHeap();
-    if (max_alloc < PUBLISH_SKIP_MAX_ALLOC_THRESHOLD) {
+    bool skip;
+    if (tls.arena_active) {
+      skip = (tls.main_max < PUBLISH_SKIP_ARENA_MAIN_FLOOR) ||
+             (tls.arena_max < PUBLISH_SKIP_ARENA_ARENA_FLOOR);
+    } else {
+      skip = (max_alloc < PUBLISH_SKIP_MAX_ALLOC_THRESHOLD);
+    }
+    if (skip) {
       _skipped_publishes++;
       static unsigned long last_skip_log = 0;
       if (now - last_skip_log > 60000) {
-        MQTT_DEBUG_PRINTLN("MQTT: Skipping publish due to memory pressure (Max alloc: %d, threshold: %d, skipped: %d)",
-                           max_alloc, (int)PUBLISH_SKIP_MAX_ALLOC_THRESHOLD, _skipped_publishes);
+        if (tls.arena_active) {
+          MQTT_DEBUG_PRINTLN("MQTT: Skipping publish due to memory pressure (main_max=%d arena_max=%d, skipped: %d)",
+                             (int)tls.main_max, (int)tls.arena_max, _skipped_publishes);
+        } else {
+          MQTT_DEBUG_PRINTLN("MQTT: Skipping publish due to memory pressure (Max alloc: %d, threshold: %d, skipped: %d)",
+                             (int)max_alloc, (int)PUBLISH_SKIP_MAX_ALLOC_THRESHOLD, _skipped_publishes);
+        }
         last_skip_log = now;
       }
       return;
@@ -2579,6 +2819,71 @@ void MQTTBridge::storeRawRadioData(const uint8_t* raw_data, int len, float snr, 
 // ---------------------------------------------------------------------------
 
 #ifdef ESP_PLATFORM
+// ---------------------------------------------------------------------------
+// assessTlsHeap()
+//
+// Single source of truth for "can the firmware currently support a TLS
+// handshake?". Phase 1 (pre-arena) answered this with a single
+// MALLOC_CAP_INTERNAL largest-free-block check against MIN_TLS_HEAP=45000.
+// Phase 2d splits the memory cost in two:
+//   - TLS context (mbedtls SSL buffers, ~40 KB) lives in the dedicated arena.
+//   - PsychicMqttClient wrapper + esp-mqtt client struct (~13 KB) live in the
+//     main internal heap and are allocated fresh on every recreate.
+// Both regions must have room or the handshake fails, so we need two gates.
+// When the arena is not active (PSRAM builds, diag builds without the flag,
+// or a failed boot reservation) we fall back to the original single-region
+// check.
+//
+// Floors are calibrated from the first-boot arena log:
+//   - MAIN_APP_FLOOR=15000 covers a fresh PsychicMqttClient + esp-mqtt
+//     allocation (observed ~13.3 KB delta at setup_end).
+//   - ARENA_TLS_FLOOR=45000 matches the legacy MIN_TLS_HEAP the pre-flight
+//     already proved adequate for an mbedtls handshake.
+//   - Recovery floors sit ~5 KB below the handshake floor so we don't thrash
+//     between recovery and successful reconnect on a fresh session.
+//   - Restart floors sit at the "no hope" point — below these no amount of
+//     recovery will free enough contiguous memory, so a clean reboot is the
+//     only path forward.
+// ---------------------------------------------------------------------------
+MQTTBridge::TlsHeapStatus MQTTBridge::assessTlsHeap() const {
+  TlsHeapStatus s{};
+  s.main_max     = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+  s.arena_active = mbedtlsArenaIsActive();
+  s.arena_max    = s.arena_active ? mbedtlsArenaLargestFreeBlock() : 0;
+
+  if (s.arena_active) {
+    // Two-region gates. Handshake needs both main (for the client wrapper)
+    // and arena (for the TLS context).
+    constexpr size_t MAIN_APP_FLOOR          = 15000;
+    constexpr size_t ARENA_TLS_FLOOR         = 45000;
+    constexpr size_t MAIN_RECOVERY_FLOOR     = 10000;
+    constexpr size_t ARENA_RECOVERY_FLOOR    = 40000;
+    constexpr size_t MAIN_RESTART_FLOOR      = 6000;
+    constexpr size_t ARENA_RESTART_FLOOR     = 20000;
+
+    s.can_handshake        = (s.main_max >= MAIN_APP_FLOOR) &&
+                             (s.arena_max >= ARENA_TLS_FLOOR);
+    s.below_recovery_floor = (s.main_max < MAIN_RECOVERY_FLOOR) ||
+                             (s.arena_max < ARENA_RECOVERY_FLOOR);
+    s.below_restart_floor  = (s.main_max < MAIN_RESTART_FLOOR) ||
+                             (s.arena_max < ARENA_RESTART_FLOOR);
+  } else {
+    // Legacy single-region behaviour (kept identical to pre-arena builds).
+    constexpr size_t LEGACY_HANDSHAKE_FLOOR  = 45000;
+    constexpr size_t LEGACY_RECOVERY_FLOOR   = 45000;
+    #if defined(BOARD_HAS_PSRAM)
+    constexpr size_t LEGACY_RESTART_FLOOR    = 45000;
+    #else
+    constexpr size_t LEGACY_RESTART_FLOOR    = 40000;
+    #endif
+
+    s.can_handshake        = (s.main_max >= LEGACY_HANDSHAKE_FLOOR);
+    s.below_recovery_floor = (s.main_max < LEGACY_RECOVERY_FLOOR);
+    s.below_restart_floor  = (s.main_max < LEGACY_RESTART_FLOOR);
+  }
+  return s;
+}
+
 void MQTTBridge::runCriticalMemoryCheckAndRecovery() {
   const unsigned long CRITICAL_CHECK_INTERVAL_MS = 60000;
   #if defined(BOARD_HAS_PSRAM)
@@ -2609,6 +2914,7 @@ void MQTTBridge::runCriticalMemoryCheckAndRecovery() {
   size_t max_alloc = ESP.getMaxAllocHeap();
   size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
   size_t internal_max_block = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+  TlsHeapStatus tls = assessTlsHeap();
   #ifdef MQTT_MEMORY_DEBUG
   unsigned long spiram_f = 0;
   #ifdef BOARD_HAS_PSRAM
@@ -2617,13 +2923,17 @@ void MQTTBridge::runCriticalMemoryCheckAndRecovery() {
   agentLogHeap("MQTTBridge.cpp:runCriticalMemoryCheckAndRecovery", "critical_memory_check", "H1_H4", free_h, max_alloc, internal_free, spiram_f);
   #endif
 
-  // Pressure timer: track how long max_alloc has been below moderate threshold
-  if (max_alloc >= PRESSURE_THRESHOLD_MODERATE) {
+  // Pressure timer: arena-aware. On arena builds, below_recovery_floor fires
+  // when either main heap or the arena dips below the recovery threshold —
+  // the pre-arena PRESSURE_THRESHOLD_MODERATE no longer makes sense against
+  // main heap alone because main sits at a steady ~16 KB by design.
+  bool under_pressure = tls.arena_active
+      ? tls.below_recovery_floor
+      : (max_alloc < PRESSURE_THRESHOLD_MODERATE);
+  if (!under_pressure) {
     _fragmentation_pressure_since = 0;
-  } else {
-    if (_fragmentation_pressure_since == 0) {
-      _fragmentation_pressure_since = now;
-    }
+  } else if (_fragmentation_pressure_since == 0) {
+    _fragmentation_pressure_since = now;
   }
 
   // Rate-limited diagnostic logging (every 15 min)
@@ -2633,13 +2943,26 @@ void MQTTBridge::runCriticalMemoryCheckAndRecovery() {
 
     // Always log heap state including internal heap (critical for diagnosing
     // repeater hangs caused by internal heap exhaustion masked by PSRAM)
-    MQTT_DEBUG_PRINTLN("Heap: free=%d max=%d int_free=%d int_max=%d",
-        (int)free_h, (int)max_alloc, (int)internal_free, (int)internal_max_block);
+    if (tls.arena_active) {
+      MQTT_DEBUG_PRINTLN("Heap: free=%d max=%d int_free=%d int_max=%d arena_max=%d",
+          (int)free_h, (int)max_alloc, (int)internal_free, (int)internal_max_block,
+          (int)tls.arena_max);
+    } else {
+      MQTT_DEBUG_PRINTLN("Heap: free=%d max=%d int_free=%d int_max=%d",
+          (int)free_h, (int)max_alloc, (int)internal_free, (int)internal_max_block);
+    }
 
-    if (max_alloc < PRESSURE_THRESHOLD_CRITICAL) {
-      MQTT_DEBUG_PRINTLN("CRITICAL: Low memory! Free: %d, Max: %d", (int)free_h, (int)max_alloc);
-    } else if (max_alloc < PRESSURE_THRESHOLD_MODERATE) {
-      MQTT_DEBUG_PRINTLN("WARNING: Memory pressure. Free: %d, Max: %d", (int)free_h, (int)max_alloc);
+    if (tls.arena_active) {
+      if (!tls.can_handshake) {
+        MQTT_DEBUG_PRINTLN("WARNING: TLS handshake floor breached (main=%d arena=%d)",
+            (int)tls.main_max, (int)tls.arena_max);
+      }
+    } else {
+      if (max_alloc < PRESSURE_THRESHOLD_CRITICAL) {
+        MQTT_DEBUG_PRINTLN("CRITICAL: Low memory! Free: %d, Max: %d", (int)free_h, (int)max_alloc);
+      } else if (max_alloc < PRESSURE_THRESHOLD_MODERATE) {
+        MQTT_DEBUG_PRINTLN("WARNING: Memory pressure. Free: %d, Max: %d", (int)free_h, (int)max_alloc);
+      }
     }
 
     // Internal heap pressure check (PSRAM boards only — total heap can look fine
@@ -2661,41 +2984,65 @@ void MQTTBridge::runCriticalMemoryCheckAndRecovery() {
     MQTT_DEBUG_PRINTLN("MQTT clients active: %d", n_active);
   }
 
-  // Dedicated recovery
-  unsigned long required_window_ms = (max_alloc < PRESSURE_THRESHOLD_CRITICAL)
-      ? PRESSURE_WINDOW_CRITICAL_MS
-      : PRESSURE_WINDOW_MODERATE_MS;
-  bool allow_recovery = !_cached_has_connected_slots || max_alloc < HARD_RECOVERY_THRESHOLD;
+  // Dedicated recovery. The "critical vs moderate" window split only applies
+  // to pre-arena builds where main heap pressure has two tiers. On arena
+  // builds we have a single recovery signal (below_recovery_floor) and use
+  // the moderate window. allow_recovery gates whether we'll tear down
+  // already-connected slots: on pre-arena, HARD_RECOVERY_THRESHOLD catches
+  // main-heap degradation while slots are connected; on arena builds the
+  // same concept maps to below_recovery_floor since it includes arena state.
+  unsigned long required_window_ms;
+  bool allow_recovery;
+  if (tls.arena_active) {
+    required_window_ms = PRESSURE_WINDOW_MODERATE_MS;
+    allow_recovery = !_cached_has_connected_slots || tls.below_recovery_floor;
+  } else {
+    required_window_ms = (max_alloc < PRESSURE_THRESHOLD_CRITICAL)
+        ? PRESSURE_WINDOW_CRITICAL_MS
+        : PRESSURE_WINDOW_MODERATE_MS;
+    allow_recovery = !_cached_has_connected_slots || max_alloc < HARD_RECOVERY_THRESHOLD;
+  }
   if (_fragmentation_pressure_since != 0 &&
       allow_recovery &&
       (now - _fragmentation_pressure_since) >= required_window_ms &&
       (now - _last_fragmentation_recovery) >= RECOVERY_THROTTLE_MS) {
     _last_fragmentation_recovery = now;
     _fragmentation_pressure_since = 0;
-    MQTT_DEBUG_PRINTLN("Fragmentation recovery: recreating MQTT clients (max_alloc=%d, pressure %lu min)", (int)max_alloc, (unsigned long)(required_window_ms / 60000));
+    if (tls.arena_active) {
+      MQTT_DEBUG_PRINTLN("Fragmentation recovery: recreating MQTT clients (main=%d arena=%d, pressure %lu min)",
+          (int)tls.main_max, (int)tls.arena_max, (unsigned long)(required_window_ms / 60000));
+    } else {
+      MQTT_DEBUG_PRINTLN("Fragmentation recovery: recreating MQTT clients (max_alloc=%d, pressure %lu min)",
+          (int)max_alloc, (unsigned long)(required_window_ms / 60000));
+    }
     recreateMqttClientsForFragmentationRecovery();
-    // Arm post-recovery escalation: if max_alloc hasn't recovered above MIN_TLS_HEAP
-    // within 60 s, the two-phase recovery failed and a clean reboot is the only option.
+    // Arm post-recovery escalation: if heap hasn't recovered to handshake
+    // viability within 60 s, the two-phase recovery failed and a clean
+    // reboot is the only option.
     _post_recovery_escalation_deadline = now + 60000UL;
   }
 
-  // Gray-zone trigger: MIN_TLS_HEAP (45000) is the pre-flight floor below which new
-  // TLS handshakes are blocked. If we sit below that floor with zero connected slots,
-  // no reconnect can succeed and we'll spin indefinitely. After 180 s of that state,
-  // force the two-phase recovery; the old pressure-window path only triggers after
-  // much longer windows and doesn't always apply when the gray-zone trap is active
-  // above PRESSURE_THRESHOLD_MODERATE but below MIN_TLS_HEAP.
-  static const size_t MIN_TLS_HEAP = 45000;
+  // Gray-zone trigger: below the handshake floor with zero connected slots
+  // means no reconnect can succeed and we'll spin indefinitely. After 180 s
+  // of that state, force the two-phase recovery; the pressure-window path
+  // only triggers after much longer windows and doesn't always apply when
+  // the gray-zone trap is active above PRESSURE_THRESHOLD_MODERATE but below
+  // the handshake floor.
   static const unsigned long STUCK_TRIGGER_MS = 180000UL;  // 3 min
   static const unsigned long STUCK_COOLDOWN_MS = 600000UL; // 10 min between attempts
-  bool in_gray_zone = (!_cached_has_connected_slots && max_alloc < MIN_TLS_HEAP);
+  bool in_gray_zone = (!_cached_has_connected_slots && !tls.can_handshake);
   if (in_gray_zone) {
     if (_stuck_below_tls_since == 0) {
       _stuck_below_tls_since = now;
     } else if ((now - _stuck_below_tls_since) >= STUCK_TRIGGER_MS &&
                (now - _last_fragmentation_recovery) >= STUCK_COOLDOWN_MS) {
-      MQTT_DEBUG_PRINTLN("Gray-zone recovery: no slots connected, max_alloc=%d < %d for %lu s",
-          (int)max_alloc, (int)MIN_TLS_HEAP, (now - _stuck_below_tls_since) / 1000);
+      if (tls.arena_active) {
+        MQTT_DEBUG_PRINTLN("Gray-zone recovery: no slots connected, main=%d arena=%d below floor for %lu s",
+            (int)tls.main_max, (int)tls.arena_max, (now - _stuck_below_tls_since) / 1000);
+      } else {
+        MQTT_DEBUG_PRINTLN("Gray-zone recovery: no slots connected, max_alloc=%d below 45000 for %lu s",
+            (int)tls.main_max, (now - _stuck_below_tls_since) / 1000);
+      }
       _last_fragmentation_recovery = now;
       _stuck_below_tls_since = 0;
       _fragmentation_pressure_since = 0;
@@ -2707,15 +3054,23 @@ void MQTTBridge::runCriticalMemoryCheckAndRecovery() {
   }
 
   // Post-recovery escalation: if the two-phase recovery just ran and 60 s later
-  // we're still stuck below the TLS floor with no slots connected, the recovery
-  // failed (either the allocator couldn't coalesce or something else is pinning
-  // the heap). Fall through to a clean reboot rather than spin forever.
+  // we're still stuck below the handshake floor with no slots connected, the
+  // recovery failed (either the allocator couldn't coalesce or something
+  // else is pinning the heap). Fall through to a clean reboot rather than
+  // spin forever.
   if (_post_recovery_escalation_deadline != 0 && now >= _post_recovery_escalation_deadline) {
-    bool still_stuck = !_cached_has_connected_slots && max_alloc < MIN_TLS_HEAP;
+    TlsHeapStatus post = assessTlsHeap();
+    bool still_stuck = !_cached_has_connected_slots && !post.can_handshake;
     if (still_stuck) {
-      MQTT_DEBUG_PRINTLN("CRITICAL: two-phase recovery failed to restore TLS viability "
-          "(max_alloc=%d < %d, no slots connected) — restarting.",
-          (int)max_alloc, (int)MIN_TLS_HEAP);
+      if (post.arena_active) {
+        MQTT_DEBUG_PRINTLN("CRITICAL: two-phase recovery failed to restore TLS viability "
+            "(main=%d arena=%d, no slots connected) — restarting.",
+            (int)post.main_max, (int)post.arena_max);
+      } else {
+        MQTT_DEBUG_PRINTLN("CRITICAL: two-phase recovery failed to restore TLS viability "
+            "(max_alloc=%d, no slots connected) — restarting.",
+            (int)post.main_max);
+      }
       delay(100);
       ESP.restart();
     }
@@ -2747,26 +3102,28 @@ void MQTTBridge::runCriticalMemoryCheckAndRecovery() {
     _all_tripped_since = 0;
   }
 
-  // Hard restart when max_alloc has been critically low for an extended period.
-  // The all-tripped check above misses "one slot connected, one slot failing" scenarios
-  // where _cached_has_connected_slots=true keeps circuit_breaker_tripped from firing.
-  // Below the TLS viability floor, further reconnect attempts are futile and only
-  // accumulate fragmentation. A clean reboot is the reliable recovery path.
-  #if defined(BOARD_HAS_PSRAM)
-  const size_t CRITICAL_RESTART_THRESHOLD = 45000;
-  #else
-  // Non-PSRAM: raised from 35000 to 40000 so we actually restart when stuck in
-  // the gray zone (observed stuck value 35828 > 35000 previously evaded restart
-  // while still below MIN_TLS_HEAP=45000, trapping the device in a no-recovery loop).
-  const size_t CRITICAL_RESTART_THRESHOLD = 40000;
-  #endif
+  // Hard restart when the TLS-gating heap regions have been critically low
+  // for an extended period. The all-tripped check above misses "one slot
+  // connected, one slot failing" scenarios where _cached_has_connected_slots=true
+  // keeps circuit_breaker_tripped from firing. Below the TLS viability floor
+  // further reconnect attempts are futile and only accumulate fragmentation.
+  // A clean reboot is the reliable recovery path.
+  //
+  // Arena-aware: tls.below_restart_floor fires when either main heap or the
+  // arena sits below its "no hope" floor. Legacy builds use the main-heap-only
+  // floor baked into assessTlsHeap().
   const unsigned long CRITICAL_RESTART_WINDOW_MS = 300000;  // 5 minutes
-  if (max_alloc < CRITICAL_RESTART_THRESHOLD) {
+  if (tls.below_restart_floor) {
     if (_critical_heap_since == 0) {
       _critical_heap_since = now;
     } else if ((now - _critical_heap_since) >= CRITICAL_RESTART_WINDOW_MS) {
-      MQTT_DEBUG_PRINTLN("CRITICAL: max_alloc=%d below %d for >5 min — restarting to recover heap.",
-          (int)max_alloc, (int)CRITICAL_RESTART_THRESHOLD);
+      if (tls.arena_active) {
+        MQTT_DEBUG_PRINTLN("CRITICAL: heap below restart floor for >5 min (main=%d arena=%d) — restarting.",
+            (int)tls.main_max, (int)tls.arena_max);
+      } else {
+        MQTT_DEBUG_PRINTLN("CRITICAL: max_alloc=%d below restart floor for >5 min — restarting to recover heap.",
+            (int)tls.main_max);
+      }
       delay(100);
       ESP.restart();
     }
