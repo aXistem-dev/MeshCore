@@ -631,6 +631,22 @@ This document provides an overview of CLI commands that can be sent to MeshCore 
 
 **Default:** `64`
 
+**Note:** This applies to all flood packets (`ROUTE_TYPE_FLOOD` and `ROUTE_TYPE_TRANSPORT_FLOOD`).
+
+---
+
+#### Limit the number of hops for unscoped flood messages only
+**Usage:**
+- `get unscoped.flood.max`
+- `set unscoped.flood.max <value>`
+
+**Parameters:**
+- `value`: Maximum unscoped flood hop count (0-64)
+
+**Default:** `64`
+
+**Note:** This applies only to `ROUTE_TYPE_FLOOD` packets (unscoped flood). Scoped flood packets (`ROUTE_TYPE_TRANSPORT_FLOOD`) are not affected by this setting. This only has effect when `unscoped.flood.max` is lower than `flood.max`.
+
 ---
 
 ### ACL

@@ -45,6 +45,7 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
 #endif
   if (file) {
     uint8_t pad[8];
+    uint8_t unscoped_flood_max_encoded = 0;
 
     file.read((uint8_t *)&_prefs->airtime_factor, sizeof(_prefs->airtime_factor));    // 0
     file.read((uint8_t *)&_prefs->node_name, sizeof(_prefs->node_name));              // 4
@@ -70,7 +71,7 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *)&_prefs->agc_reset_interval, sizeof(_prefs->agc_reset_interval));         // 120
     file.read((uint8_t *)&_prefs->path_hash_mode, sizeof(_prefs->path_hash_mode));                 // 121
     file.read((uint8_t *)&_prefs->loop_detect, sizeof(_prefs->loop_detect));                       // 122
-    file.read(pad, 1);                                                                             // 123
+    file.read((uint8_t *)&unscoped_flood_max_encoded, sizeof(unscoped_flood_max_encoded));         // 123
     file.read((uint8_t *)&_prefs->flood_max, sizeof(_prefs->flood_max));                           // 124
     file.read((uint8_t *)&_prefs->flood_advert_interval, sizeof(_prefs->flood_advert_interval));   // 125
     file.read((uint8_t *)&_prefs->interference_threshold, sizeof(_prefs->interference_threshold)); // 126
@@ -104,6 +105,12 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     _prefs->multi_acks = constrain(_prefs->multi_acks, 0, 1);
     _prefs->adc_multiplier = constrain(_prefs->adc_multiplier, 0.0f, 10.0f);
     _prefs->path_hash_mode = constrain(_prefs->path_hash_mode, 0, 2);   // NOTE: mode 3 reserved for future
+    if (unscoped_flood_max_encoded == 0) {
+      // Legacy prefs had this byte unused and written as zero.
+      _prefs->unscoped_flood_max = 64;
+    } else {
+      _prefs->unscoped_flood_max = constrain(unscoped_flood_max_encoded - 1, 0, 64);
+    }
 
     // sanitise bad bridge pref values
     _prefs->bridge_enabled = constrain(_prefs->bridge_enabled, 0, 1);
@@ -135,6 +142,7 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
 #endif
   if (file) {
     uint8_t pad[8];
+    uint8_t unscoped_flood_max_encoded = constrain(_prefs->unscoped_flood_max, 0, 64) + 1;
     memset(pad, 0, sizeof(pad));
 
     file.write((uint8_t *)&_prefs->airtime_factor, sizeof(_prefs->airtime_factor));    // 0
@@ -161,7 +169,7 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *)&_prefs->agc_reset_interval, sizeof(_prefs->agc_reset_interval));         // 120
     file.write((uint8_t *)&_prefs->path_hash_mode, sizeof(_prefs->path_hash_mode));                 // 121
     file.write((uint8_t *)&_prefs->loop_detect, sizeof(_prefs->loop_detect));                       // 122
-    file.write(pad, 1);                                                                             // 123
+    file.write((uint8_t *)&unscoped_flood_max_encoded, sizeof(unscoped_flood_max_encoded));        // 123
     file.write((uint8_t *)&_prefs->flood_max, sizeof(_prefs->flood_max));                           // 124
     file.write((uint8_t *)&_prefs->flood_advert_interval, sizeof(_prefs->flood_advert_interval));   // 125
     file.write((uint8_t *)&_prefs->interference_threshold, sizeof(_prefs->interference_threshold)); // 126
@@ -607,6 +615,15 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     } else {
       strcpy(reply, "Error, max 64");
     }
+  } else if (memcmp(config, "unscoped.flood.max ", 19) == 0) {
+    uint8_t m = atoi(&config[19]);
+    if (m <= 64) {
+      _prefs->unscoped_flood_max = m;
+      savePrefs();
+      strcpy(reply, "OK");
+    } else {
+      strcpy(reply, "Error, max 64");
+    }
   } else if (memcmp(config, "direct.txdelay ", 15) == 0) {
     float f = atof(&config[15]);
     if (f >= 0 && f <= 2.0f) {
@@ -784,6 +801,8 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     sprintf(reply, "> %s", StrHelper::ftoa(_prefs->tx_delay_factor));
   } else if (memcmp(config, "flood.max", 9) == 0) {
     sprintf(reply, "> %d", (uint32_t)_prefs->flood_max);
+  } else if (memcmp(config, "unscoped.flood.max", 18) == 0) {
+    sprintf(reply, "> %d", (uint32_t)_prefs->unscoped_flood_max);
   } else if (memcmp(config, "direct.txdelay", 14) == 0) {
     sprintf(reply, "> %s", StrHelper::ftoa(_prefs->direct_tx_delay_factor));
   } else if (memcmp(config, "owner.info", 10) == 0) {

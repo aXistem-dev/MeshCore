@@ -304,6 +304,7 @@ float SensorMesh::getAirtimeBudgetFactor() const {
 bool SensorMesh::allowPacketForward(const mesh::Packet* packet) {
   if (_prefs.disable_fwd) return false;
   if (packet->isRouteFlood() && packet->getPathHashCount() >= _prefs.flood_max) return false;
+  if (packet->getRouteType() == ROUTE_TYPE_FLOOD && packet->getPathHashCount() >= _prefs.unscoped_flood_max) return false;
   return true;
 }
 
@@ -725,6 +726,7 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
   _prefs.flood_advert_interval = 0;   // disabled
   _prefs.disable_fwd = true;
   _prefs.flood_max = 64;
+  _prefs.unscoped_flood_max = 64;
   _prefs.interference_threshold = 0;  // disabled
 
   // GPS defaults

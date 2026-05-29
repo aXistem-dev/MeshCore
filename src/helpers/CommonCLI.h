@@ -61,6 +61,7 @@ struct NodePrefs { // persisted to file
   uint8_t rx_boosted_gain; // power settings
   uint8_t path_hash_mode;   // which path mode to use when sending
   uint8_t loop_detect;
+  uint8_t unscoped_flood_max;  // max hops for ROUTE_TYPE_FLOOD only
 };
 
 class CommonCLICallbacks {
