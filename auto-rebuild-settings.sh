@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Automated rebuild script - updates dev-cnfi with latest upstream and triggers GitHub Actions build
+# Automated rebuild script - updates dev-slunsecore with latest upstream and triggers GitHub Actions build
 # Can be run via cron or manually
 # Usage: ./auto-rebuild-settings.sh [--push]
 #
-# Note: This script updates dev-cnfi branch. GitHub Actions automatically builds on push.
+# Note: This script updates dev-slunsecore branch. GitHub Actions automatically builds on push.
 
 set -e
 
@@ -16,8 +16,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Configuration
-MAIN_BRANCH="main"
-DEPLOYMENT_BRANCH="dev-cnfi"
+DEPLOYMENT_BRANCH="dev-slunsecore"
 AUTO_PUSH=false
 
 # Parse arguments
@@ -37,20 +36,20 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo -e "${BLUE}=== Auto-Update dev-cnfi with Latest Upstream ===${NC}\n"
+echo -e "${BLUE}=== Auto-Update dev-slunsecore with Latest Upstream ===${NC}\n"
 
-# Use the update script which handles everything
-if [ -f "update-dev-cnfi.sh" ]; then
-    echo -e "${YELLOW}Running update-dev-cnfi.sh...${NC}"
-    ./update-dev-cnfi.sh
-    
+if [ -f "rebuild-with-settings.sh" ]; then
+    echo -e "${YELLOW}Running rebuild-with-settings.sh...${NC}"
+    if [ "$AUTO_PUSH" = true ]; then
+        AUTO_PUSH=true ./rebuild-with-settings.sh
+    else
+        ./rebuild-with-settings.sh
+    fi
+
     if [ $? -eq 0 ]; then
-        echo -e "\n${GREEN}✓ dev-cnfi updated successfully${NC}"
-        
+        echo -e "\n${GREEN}✓ dev-slunsecore updated successfully${NC}"
+
         if [ "$AUTO_PUSH" = true ]; then
-            echo -e "\n${YELLOW}Pushing dev-cnfi to trigger GitHub Actions build...${NC}"
-            git checkout "$DEPLOYMENT_BRANCH"
-            git push origin "$DEPLOYMENT_BRANCH" 2>&1 | grep -v "^$" || true
             echo -e "${GREEN}  ✓ Pushed to origin - GitHub Actions will build automatically${NC}"
             echo -e "${BLUE}  Check build status: https://github.com/axistem-dev/MeshCore/actions${NC}"
         else
@@ -63,6 +62,6 @@ if [ -f "update-dev-cnfi.sh" ]; then
         exit 1
     fi
 else
-    echo -e "${RED}Error: update-dev-cnfi.sh not found${NC}"
+    echo -e "${RED}Error: rebuild-with-settings.sh not found${NC}"
     exit 1
 fi

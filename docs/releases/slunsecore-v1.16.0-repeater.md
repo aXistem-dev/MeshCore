@@ -1,24 +1,25 @@
 # SlunseCore Repeater Firmware v1.16.0
 
-SlunseCore repeater builds are based on **MeshCore v1.16.0** with SlunseCore custom features preserved.
+SlunseCore repeater builds track **MeshCore v1.16.0** with SlunseCore custom features preserved.
 
-**Upstream release:** [MeshCore v1.16.0](https://github.com/meshcore-dev/MeshCore)
+**Official upstream release:** [MeshCore v1.16.0 — 6 Jun 2026](https://blog.meshcore.io/2026/06/06/release-1-16-0)
 
 ## SlunseCore changes
 
-- **MeshCore v1.16.0 sync**: Flood limits, region defaults, power-saving CLI, path hash support, and related upstream fixes merged into `dev-slunsecore`.
-- **GPS saver**: SlunseCore GPS power-save CLI commands retained (see `docs/cli_commands.md`).
-- **SenseCap Solar**: Headless operation with remapped LoRa TX LED and button actions preserved.
+- **GPS saver** — SlunseCore GPS power-save CLI commands (`gps saver`, `gps hold`, `gps interval`, `gps telem`, etc.; see `docs/cli_commands.md`).
+- **SenseCap Solar** — Headless operation with remapped LoRa TX LED and USR/PWR button actions.
+
+## MeshCore v1.16.0 (included)
+
+Highlights from the [official release notes](https://blog.meshcore.io/2026/06/06/release-1-16-0):
+
+- New CLI vars `flood.max.unscoped` and `flood.max.advert`
+- ESP repeater power-saving improvements
+- Extended ACK support, `region def` CLI, path hash fixes
+- Longer preamble for lower spreading factors; new board support
+
+See the [full MeshCore v1.16.0 changelog](https://blog.meshcore.io/2026/06/06/release-1-16-0) for all fixes and new devices.
 
 ## Flashing
 
-Download the firmware from the release assets below, go to [flasher.meshcore.io](https://flasher.meshcore.io/), choose **Custom firmware** (at the bottom of the page), and flash the downloaded bin or zip.
-
----
-
-## Full SlunseCore features
-
-- SenseCap Solar headless button/LED behaviour
-- GPS power-save boot-only and periodic modes
-- GPS prefs sanitization on upgrade
-- Telemetry location policy (`gps telem` CLI)
+Download from the release assets → [flasher.meshcore.io](https://flasher.meshcore.io/) → **Custom firmware**.

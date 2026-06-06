@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# Rebuild workflow: Updates dev-cnfi with latest upstream and triggers GitHub Actions build
+# Rebuild workflow: Updates dev-slunsecore with latest upstream and triggers GitHub Actions build
 # This script:
 # 1. Syncs upstream/main to origin/main
-# 2. Merges main into dev-cnfi (applies your customizations)
+# 2. Merges main into dev-slunsecore (applies your customizations)
 # 3. Optionally pushes to trigger GitHub Actions build
 #
-# Note: GitHub Actions automatically builds all 6 firmware targets on push to dev-cnfi
+# Note: GitHub Actions automatically builds all 6 firmware targets on push to dev-slunsecore
 
 set -e  # Exit on error
 
@@ -19,7 +19,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 MAIN_BRANCH="main"
-DEPLOYMENT_BRANCH="dev-cnfi"
+DEPLOYMENT_BRANCH="dev-slunsecore"
 AUTO_PUSH=false  # Set to true to automatically push after update
 
 # Get script directory
@@ -52,7 +52,7 @@ else
     echo -e "${GREEN}  ✓ origin/$MAIN_BRANCH is already up to date${NC}"
 fi
 
-# Step 3: Update dev-cnfi with latest main
+# Step 3: Update dev-slunsecore with latest main
 echo -e "\n${YELLOW}Step 3: Updating $DEPLOYMENT_BRANCH with latest $MAIN_BRANCH...${NC}"
 git checkout "$DEPLOYMENT_BRANCH" 2>&1 | grep -v "^$" || true
 
@@ -89,4 +89,3 @@ fi
 
 echo -e "\n${GREEN}=== Done ===${NC}"
 echo -e "${BLUE}Note: Firmware builds are handled automatically by GitHub Actions on push${NC}"
-

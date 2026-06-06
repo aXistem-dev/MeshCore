@@ -375,14 +375,14 @@ jobs:
         if: steps.check_build.outputs.file_count > 0
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "dev-cnfi-${{ steps.commit.outputs.commit_hash }}"
+          tag_name: "dev-slunsecore-${{ steps.commit.outputs.commit_hash }}"
           name: "Settings Screen Build - ${{ steps.version.outputs.version }}"
           body: |
             ## Settings Screen Firmware Build
 
             **Version:** ${{ steps.version.outputs.version }}
             **Commit:** ${{ steps.commit.outputs.commit_hash }}
-            **Branch:** dev-cnfi
+            **Branch:** dev-slunsecore
 
             ### Built Firmwares
 
@@ -401,7 +401,7 @@ jobs:
             - Screensaver with clock
             - Timezone selection
 
-            **Note:** This is an automated build from the dev-cnfi branch (customizations on top of latest main).
+            **Note:** This is an automated build from the dev-slunsecore branch (SlunseCore customizations on top of upstream MeshCore).
           draft: false
           prerelease: true
           files: out/*
