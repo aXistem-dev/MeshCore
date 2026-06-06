@@ -180,7 +180,7 @@ class HomeScreen : public UIScreen {
   bool sensors_scroll = false;
   int sensors_scroll_offset = 0;
   int next_sensors_refresh = 0;
-  
+
   void refresh_sensors() {
     if (millis() > next_sensors_refresh) {
       sensors_lpp.reset();
@@ -204,7 +204,7 @@ class HomeScreen : public UIScreen {
 
 public:
   HomeScreen(UITask* task, mesh::RTCClock* rtc, SensorManager* sensors, NodePrefs* node_prefs)
-     : _task(task), _rtc(rtc), _sensors(sensors), _node_prefs(node_prefs), _page(0), 
+     : _task(task), _rtc(rtc), _sensors(sensors), _node_prefs(node_prefs), _page(0),
        _shutdown_init(false), sensors_lpp(200) {  }
   
   uint8_t getCurrentPage() const { return _page; }
@@ -250,7 +250,7 @@ public:
         IPAddress ip = WiFi.localIP();
         snprintf(tmp, sizeof(tmp), "IP: %d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
         display.setTextSize(1);
-        display.drawTextCentered(display.width() / 2, 54, tmp); 
+        display.drawTextCentered(display.width() / 2, 54, tmp);
       #endif
       if (_task->hasConnection()) {
         display.setColor(DisplayDriver::GREEN);
@@ -278,10 +278,10 @@ public:
         } else {
           sprintf(tmp, "%dh", secs / (60*60));
         }
-        
+
         int timestamp_width = display.getTextWidth(tmp);
         int max_name_width = display.width() - timestamp_width - 1;
-        
+
         char filtered_recent_name[sizeof(a->name)];
         display.translateUTF8ToBlocks(filtered_recent_name, a->name, sizeof(filtered_recent_name));
         display.drawTextEllipsized(0, y, max_name_width, filtered_recent_name);
@@ -347,7 +347,7 @@ public:
         display.drawTextRightAlign(display.width()-1, y, buf);
         y = y + 12;
         display.drawTextLeftAlign(0, y, "pos");
-        sprintf(buf, "%.4f %.4f", 
+        sprintf(buf, "%.4f %.4f",
           nmea->getLatitude()/1000000., nmea->getLongitude()/1000000.);
         display.drawTextRightAlign(display.width()-1, y, buf);
         y = y + 12;
@@ -677,6 +677,15 @@ static const char* TIMEZONE_LABELS[] = {
 
 static const uint8_t TIMEZONE_COUNT = sizeof(TIMEZONE_OFFSETS) / sizeof(TIMEZONE_OFFSETS[0]);
 
+#define AUTO_ADD_OVERWRITE_OLDEST (1 << 0)
+#define AUTO_ADD_CHAT             (1 << 1)
+#define AUTO_ADD_REPEATER         (1 << 2)
+#define AUTO_ADD_ROOM             (1 << 3)
+#define AUTO_ADD_SENSOR           (1 << 4)
+
+static const uint8_t MAX_HOPS_OPTIONS[] = {0, 1, 2, 4, 8, 16, 32, 64};
+static const uint8_t MAX_HOPS_OPTION_COUNT = sizeof(MAX_HOPS_OPTIONS) / sizeof(MAX_HOPS_OPTIONS[0]);
+
 class SettingsScreen : public UIScreen {
   enum SettingItem {
     SCREEN_ALWAYS_ON,
@@ -685,6 +694,11 @@ class SettingsScreen : public UIScreen {
     TIMEZONE,
     SHARE_POS_IN_ADVERTS,
     PACKET_FWD,
+#ifdef PIN_BUZZER
+    BUZZER,
+#endif
+    PATH_HASH,
+    AUTO_ADD,
     BACK,
     Count
   };
@@ -696,7 +710,17 @@ class SettingsScreen : public UIScreen {
     SCREEN_BRIGHTNESS_SUBMENU,
     TIMEZONE_SUBMENU,
     SHARE_POS_IN_ADVERTS_SUBMENU,
-    PACKET_FWD_SUBMENU
+    PACKET_FWD_SUBMENU,
+#ifdef PIN_BUZZER
+    BUZZER_SUBMENU,
+#endif
+    PATH_HASH_SUBMENU,
+    PATH_HASH_WARN_SUBMENU,
+    AUTOADD_SUBMENU,
+    AUTOADD_MODE_SUBMENU,
+    AUTOADD_TYPES_SUBMENU,
+    AUTOADD_OVERWRITE_SUBMENU,
+    AUTOADD_MAXHOPS_SUBMENU
   };
 
   enum BrightnessItem {
@@ -718,7 +742,47 @@ class SettingsScreen : public UIScreen {
   uint8_t _main_menu_scroll_offset;  // Scroll offset for main settings menu
   uint8_t _timezone_scroll_offset;  // Scroll offset for timezone submenu
   int16_t _original_timezone;  // Store original timezone for restore on cancel
+  uint8_t _pending_path_hash;  // path hash value awaiting warning confirm
   
+  bool isManualAutoAdd() const {
+    return (_node_prefs->manual_add_contacts & 1) != 0;
+  }
+
+  uint8_t buildVisibleItems(uint8_t* visible_items) const {
+    uint8_t visible_count = 0;
+    for (uint8_t i = 0; i < SettingItem::Count; i++) {
+      if (i == SettingItem::SCREEN_SCREENSAVER && !_node_prefs->screen_always_on) {
+        continue;
+      }
+      visible_items[visible_count++] = i;
+    }
+    return visible_count;
+  }
+
+  const char* getItemLabel(SettingItem item) const {
+    switch (item) {
+      case SCREEN_ALWAYS_ON: return "Screen Always On";
+      case SCREEN_SCREENSAVER: return "Screensaver";
+      case SCREEN_BRIGHTNESS: return "Screen Brightness";
+      case TIMEZONE: return "Timezone";
+      case SHARE_POS_IN_ADVERTS: return "Share pos in adv.";
+      case PACKET_FWD: return "Packet FWD";
+#ifdef PIN_BUZZER
+      case BUZZER: return "Buzzer";
+#endif
+      case PATH_HASH: return "Path hash";
+      case AUTO_ADD: return "Auto-add";
+      case BACK: return "Back";
+      default: return "";
+    }
+  }
+
+  uint8_t findMaxHopsIndex(uint8_t hops) const {
+    for (uint8_t i = 0; i < MAX_HOPS_OPTION_COUNT; i++) {
+      if (MAX_HOPS_OPTIONS[i] == hops) return i;
+    }
+    return 0;
+  }
   // Helper to find timezone index from offset
   uint8_t findTimezoneIndex(int16_t offset_minutes) {
     for (uint8_t i = 0; i < TIMEZONE_COUNT; i++) {
@@ -770,18 +834,8 @@ public:
       display.drawRect(0, 10, display.width(), 1);  // separator line
 
       int y = 18;
-      // Build menu items dynamically - screensaver only shown if screen_always_on is enabled
-      uint8_t visible_count = 0;
       uint8_t visible_items[SettingItem::Count];
-      const char* item_names[] = {"Screen Always On", "Screensaver", "Screen Brightness", "Timezone", "Share pos in adv.", "Packet FWD", "Back"};
-      
-      // Build list of visible items
-      for (uint8_t i = 0; i < SettingItem::Count; i++) {
-        if (i == SettingItem::SCREEN_SCREENSAVER && !_node_prefs->screen_always_on) {
-          continue;  // Skip screensaver if screen_always_on is disabled
-        }
-        visible_items[visible_count++] = i;
-      }
+      uint8_t visible_count = buildVisibleItems(visible_items);
       
       // Find which visible item corresponds to _selected_item
       uint8_t visible_idx = 0;
@@ -819,8 +873,7 @@ public:
         }
         display.setCursor(2, item_y);
         if (item == SettingItem::SCREEN_ALWAYS_ON) {
-          // Print "Screen Always On: " and then the value
-          display.print(item_names[item]);
+          display.print(getItemLabel((SettingItem)item));
           display.print(": ");
           char value_str[4];
           strcpy(value_str, _node_prefs->screen_always_on ? "ON" : "OFF");
@@ -828,8 +881,7 @@ public:
           display.setCursor(display.width() - value_width - 2, item_y);
           display.print(value_str);
         } else if (item == SettingItem::SCREEN_SCREENSAVER) {
-          // Print "Screensaver: " and then the value
-          display.print(item_names[item]);
+          display.print(getItemLabel((SettingItem)item));
           display.print(": ");
           char value_str[4];
           strcpy(value_str, _node_prefs->screen_screensaver ? "ON" : "OFF");
@@ -837,8 +889,7 @@ public:
           display.setCursor(display.width() - value_width - 2, item_y);
           display.print(value_str);
         } else if (item == SettingItem::TIMEZONE) {
-          // Print "Timezone: " and then the value
-          display.print(item_names[item]);
+          display.print(getItemLabel((SettingItem)item));
           display.print(": ");
           char tz_str[10];
           int16_t tz_offset = _node_prefs->timezone_offset_minutes;
@@ -855,8 +906,7 @@ public:
           display.setCursor(display.width() - value_width - 2, item_y);
           display.print(tz_str);
         } else if (item == SettingItem::SHARE_POS_IN_ADVERTS) {
-          // Print "Share pos in adverts: " and then the value
-          display.print(item_names[item]);
+          display.print(getItemLabel((SettingItem)item));
           display.print(": ");
           char value_str[4];
           strcpy(value_str, (_node_prefs->advert_loc_policy == ADVERT_LOC_SHARE) ? "Yes" : "No");
@@ -864,15 +914,41 @@ public:
           display.setCursor(display.width() - value_width - 2, item_y);
           display.print(value_str);
         } else if (item == SettingItem::PACKET_FWD) {
-          display.print(item_names[item]);
+          display.print(getItemLabel((SettingItem)item));
           display.print(": ");
           char value_str[4];
           strcpy(value_str, _node_prefs->client_repeat ? "ON" : "OFF");
           int value_width = display.getTextWidth(value_str);
           display.setCursor(display.width() - value_width - 2, item_y);
           display.print(value_str);
+#ifdef PIN_BUZZER
+        } else if (item == SettingItem::BUZZER) {
+          display.print(getItemLabel((SettingItem)item));
+          display.print(": ");
+          char value_str[4];
+          strcpy(value_str, _node_prefs->buzzer_quiet ? "OFF" : "ON");
+          int value_width = display.getTextWidth(value_str);
+          display.setCursor(display.width() - value_width - 2, item_y);
+          display.print(value_str);
+#endif
+        } else if (item == SettingItem::PATH_HASH) {
+          display.print(getItemLabel((SettingItem)item));
+          display.print(": ");
+          char value_str[8];
+          sprintf(value_str, "%d-byte", _node_prefs->path_hash_mode + 1);
+          int value_width = display.getTextWidth(value_str);
+          display.setCursor(display.width() - value_width - 2, item_y);
+          display.print(value_str);
+        } else if (item == SettingItem::AUTO_ADD) {
+          display.print(getItemLabel((SettingItem)item));
+          display.print(": ");
+          char value_str[8];
+          strcpy(value_str, isManualAutoAdd() ? "Manual" : "All");
+          int value_width = display.getTextWidth(value_str);
+          display.setCursor(display.width() - value_width - 2, item_y);
+          display.print(value_str);
         } else {
-          display.print(item_names[item]);
+          display.print(getItemLabel((SettingItem)item));
         }
       }
       
@@ -1027,6 +1103,172 @@ public:
         display.setCursor(display.width() / 2 - 10, y);
         display.print(options[i]);
       }
+#ifdef PIN_BUZZER
+    } else if (_state == BUZZER_SUBMENU) {
+      display.setColor(DisplayDriver::GREEN);
+      display.drawTextCentered(display.width() / 2, 0, "Buzzer");
+      display.drawRect(0, 10, display.width(), 1);
+
+      int y = 20;
+      const char* options[] = {"ON", "OFF"};
+      uint8_t current_option = _node_prefs->buzzer_quiet ? 1 : 0;
+
+      for (uint8_t i = 0; i < 2; i++, y += 15) {
+        if (i == current_option) {
+          display.setColor(DisplayDriver::YELLOW);
+          display.fillRect(0, y - 2, display.width(), 13);
+          display.setColor(DisplayDriver::DARK);
+        } else {
+          display.setColor(DisplayDriver::LIGHT);
+        }
+        display.setCursor(display.width() / 2 - 10, y);
+        display.print(options[i]);
+      }
+#endif
+    } else if (_state == PATH_HASH_SUBMENU) {
+      display.setColor(DisplayDriver::GREEN);
+      display.drawTextCentered(display.width() / 2, 0, "Path hash");
+      display.drawRect(0, 10, display.width(), 1);
+
+      int y = 18;
+      const char* options[] = {"1-byte", "2-byte", "3-byte", "Back"};
+      for (uint8_t i = 0; i < 4; i++, y += 12) {
+        if (i == _selected_item) {
+          display.setColor(DisplayDriver::YELLOW);
+          display.fillRect(0, y - 2, display.width(), 11);
+          display.setColor(DisplayDriver::DARK);
+        } else {
+          display.setColor(DisplayDriver::LIGHT);
+        }
+        display.setCursor(2, y);
+        display.print(options[i]);
+      }
+    } else if (_state == PATH_HASH_WARN_SUBMENU) {
+      display.setColor(DisplayDriver::YELLOW);
+      display.drawTextCentered(display.width() / 2, 8, "Warning");
+      display.setColor(DisplayDriver::LIGHT);
+      display.setTextSize(1);
+      display.setCursor(2, 22);
+      display.print("Old repeaters may");
+      display.setCursor(2, 32);
+      display.print("drop messages.");
+      display.setCursor(2, 44);
+      display.print("Enter=OK");
+    } else if (_state == AUTOADD_SUBMENU) {
+      display.setColor(DisplayDriver::GREEN);
+      display.drawTextCentered(display.width() / 2, 0, "Auto-add");
+      display.drawRect(0, 10, display.width(), 1);
+
+      const char* labels[] = {"Mode", "Types", "Overwrite", "Max hops", "Back"};
+      int y = 18;
+      for (uint8_t i = 0; i < 5; i++, y += 12) {
+        if (i == _selected_item) {
+          display.setColor(DisplayDriver::YELLOW);
+          display.fillRect(0, y - 2, display.width(), 11);
+          display.setColor(DisplayDriver::DARK);
+        } else {
+          display.setColor(DisplayDriver::LIGHT);
+        }
+        display.setCursor(2, y);
+        display.print(labels[i]);
+        if (i == 0) {
+          display.print(": ");
+          display.print(isManualAutoAdd() ? "Manual" : "All");
+        } else if (i == 2) {
+          display.print(": ");
+          display.print((_node_prefs->autoadd_config & AUTO_ADD_OVERWRITE_OLDEST) ? "ON" : "OFF");
+        } else if (i == 3) {
+          char hops_str[6];
+          if (_node_prefs->autoadd_max_hops == 0) strcpy(hops_str, "All");
+          else sprintf(hops_str, "%d", _node_prefs->autoadd_max_hops);
+          display.print(": ");
+          display.print(hops_str);
+        }
+      }
+    } else if (_state == AUTOADD_MODE_SUBMENU) {
+      display.setColor(DisplayDriver::GREEN);
+      display.drawTextCentered(display.width() / 2, 0, "Add mode");
+      display.drawRect(0, 10, display.width(), 1);
+      int y = 20;
+      const char* options[] = {"Auto all", "Manual"};
+      uint8_t cur = isManualAutoAdd() ? 1 : 0;
+      for (uint8_t i = 0; i < 2; i++, y += 15) {
+        if (i == cur) {
+          display.setColor(DisplayDriver::YELLOW);
+          display.fillRect(0, y - 2, display.width(), 13);
+          display.setColor(DisplayDriver::DARK);
+        } else {
+          display.setColor(DisplayDriver::LIGHT);
+        }
+        display.setCursor(2, y);
+        display.print(options[i]);
+      }
+    } else if (_state == AUTOADD_TYPES_SUBMENU) {
+      display.setColor(DisplayDriver::GREEN);
+      display.drawTextCentered(display.width() / 2, 0, "Contact types");
+      display.drawRect(0, 10, display.width(), 1);
+      const char* labels[] = {"Chat", "Repeater", "Room", "Sensor", "Back"};
+      const uint8_t bits[] = {AUTO_ADD_CHAT, AUTO_ADD_REPEATER, AUTO_ADD_ROOM, AUTO_ADD_SENSOR, 0};
+      int y = 16;
+      for (uint8_t i = 0; i < 5; i++, y += 11) {
+        if (i == _selected_item) {
+          display.setColor(DisplayDriver::YELLOW);
+          display.fillRect(0, y - 2, display.width(), 10);
+          display.setColor(DisplayDriver::DARK);
+        } else {
+          display.setColor(DisplayDriver::LIGHT);
+        }
+        display.setCursor(2, y);
+        display.print(labels[i]);
+        if (i < 4) {
+          display.print(": ");
+          display.print((_node_prefs->autoadd_config & bits[i]) ? "ON" : "OFF");
+        }
+      }
+    } else if (_state == AUTOADD_OVERWRITE_SUBMENU) {
+      display.setColor(DisplayDriver::GREEN);
+      display.drawTextCentered(display.width() / 2, 0, "Overwrite");
+      display.drawRect(0, 10, display.width(), 1);
+      int y = 20;
+      const char* options[] = {"OFF", "ON"};
+      uint8_t cur = (_node_prefs->autoadd_config & AUTO_ADD_OVERWRITE_OLDEST) ? 1 : 0;
+      for (uint8_t i = 0; i < 2; i++, y += 15) {
+        if (i == cur) {
+          display.setColor(DisplayDriver::YELLOW);
+          display.fillRect(0, y - 2, display.width(), 13);
+          display.setColor(DisplayDriver::DARK);
+        } else {
+          display.setColor(DisplayDriver::LIGHT);
+        }
+        display.setCursor(display.width() / 2 - 10, y);
+        display.print(options[i]);
+      }
+    } else if (_state == AUTOADD_MAXHOPS_SUBMENU) {
+      display.setColor(DisplayDriver::GREEN);
+      display.drawTextCentered(display.width() / 2, 0, "Max hops");
+      display.drawRect(0, 10, display.width(), 1);
+      int y = 16;
+      for (uint8_t i = 0; i < MAX_HOPS_OPTION_COUNT + 1; i++, y += 11) {
+        if (i == _selected_item) {
+          display.setColor(DisplayDriver::YELLOW);
+          display.fillRect(0, y - 2, display.width(), 10);
+          display.setColor(DisplayDriver::DARK);
+        } else {
+          display.setColor(DisplayDriver::LIGHT);
+        }
+        display.setCursor(2, y);
+        if (i < MAX_HOPS_OPTION_COUNT) {
+          if (MAX_HOPS_OPTIONS[i] == 0) display.print("Unlimited");
+          else if (MAX_HOPS_OPTIONS[i] == 1) display.print("Direct only");
+          else {
+            char buf[8];
+            sprintf(buf, "%d hops", MAX_HOPS_OPTIONS[i]);
+            display.print(buf);
+          }
+        } else {
+          display.print("Back");
+        }
+      }
     }
     
     return 1000;  // refresh every second
@@ -1034,17 +1276,8 @@ public:
 
   bool handleInput(char c) override {
     if (_state == MAIN_MENU) {
-      // Build list of visible items (screensaver only if screen_always_on is enabled)
-      uint8_t visible_count = 0;
       uint8_t visible_items[SettingItem::Count];
-      for (uint8_t i = 0; i < SettingItem::Count; i++) {
-        if (i == SettingItem::SCREEN_SCREENSAVER && !_node_prefs->screen_always_on) {
-          continue;  // Skip screensaver if screen_always_on is disabled
-        }
-        visible_items[visible_count++] = i;
-      }
-      
-      // Find current visible index
+      uint8_t visible_count = buildVisibleItems(visible_items);
       uint8_t visible_idx = 0;
       for (uint8_t i = 0; i < visible_count; i++) {
         if (visible_items[i] == _selected_item) {
@@ -1093,6 +1326,19 @@ public:
           return true;
         } else if (_selected_item == SettingItem::PACKET_FWD) {
           _state = PACKET_FWD_SUBMENU;
+          return true;
+#ifdef PIN_BUZZER
+        } else if (_selected_item == SettingItem::BUZZER) {
+          _state = BUZZER_SUBMENU;
+          return true;
+#endif
+        } else if (_selected_item == SettingItem::PATH_HASH) {
+          _state = PATH_HASH_SUBMENU;
+          _selected_item = _node_prefs->path_hash_mode;
+          return true;
+        } else if (_selected_item == SettingItem::AUTO_ADD) {
+          _state = AUTOADD_SUBMENU;
+          _selected_item = 0;
           return true;
         } else if (_selected_item == SettingItem::BACK) {
           _task->gotoHomeScreen();
@@ -1147,6 +1393,141 @@ public:
       if (c == KEY_ENTER) {
         the_mesh.savePrefs();
         _state = MAIN_MENU;
+        return true;
+      }
+#ifdef PIN_BUZZER
+    } else if (_state == BUZZER_SUBMENU) {
+      if (c == KEY_NEXT || c == KEY_RIGHT || c == KEY_PREV || c == KEY_LEFT) {
+        _node_prefs->buzzer_quiet = _node_prefs->buzzer_quiet ? 0 : 1;
+        return true;
+      }
+      if (c == KEY_ENTER) {
+        _task->setBuzzerQuiet(_node_prefs->buzzer_quiet != 0);
+        _state = MAIN_MENU;
+        return true;
+      }
+#endif
+    } else if (_state == PATH_HASH_SUBMENU) {
+      if (c == KEY_NEXT || c == KEY_RIGHT) {
+        _selected_item = (_selected_item + 1) % 4;
+        return true;
+      }
+      if (c == KEY_PREV || c == KEY_LEFT) {
+        _selected_item = (_selected_item + 3) % 4;
+        return true;
+      }
+      if (c == KEY_ENTER) {
+        if (_selected_item == 3) {
+          _state = MAIN_MENU;
+        } else if (_selected_item == 0) {
+          _node_prefs->path_hash_mode = 0;
+          the_mesh.savePrefs();
+          _state = MAIN_MENU;
+        } else {
+          _pending_path_hash = _selected_item;
+          _state = PATH_HASH_WARN_SUBMENU;
+        }
+        return true;
+      }
+    } else if (_state == PATH_HASH_WARN_SUBMENU) {
+      if (c == KEY_ENTER) {
+        _node_prefs->path_hash_mode = _pending_path_hash;
+        the_mesh.savePrefs();
+        _state = MAIN_MENU;
+        return true;
+      }
+      if (c == KEY_PREV || c == KEY_LEFT || c == KEY_NEXT || c == KEY_RIGHT) {
+        _state = PATH_HASH_SUBMENU;
+        return true;
+      }
+    } else if (_state == AUTOADD_SUBMENU) {
+      if (c == KEY_NEXT || c == KEY_RIGHT) {
+        _selected_item = (_selected_item + 1) % 5;
+        return true;
+      }
+      if (c == KEY_PREV || c == KEY_LEFT) {
+        _selected_item = (_selected_item + 4) % 5;
+        return true;
+      }
+      if (c == KEY_ENTER) {
+        if (_selected_item == 0) {
+          _state = AUTOADD_MODE_SUBMENU;
+        } else if (_selected_item == 1) {
+          if (isManualAutoAdd()) {
+            _state = AUTOADD_TYPES_SUBMENU;
+            _selected_item = 0;
+          }
+        } else if (_selected_item == 2) {
+          _state = AUTOADD_OVERWRITE_SUBMENU;
+        } else if (_selected_item == 3) {
+          _state = AUTOADD_MAXHOPS_SUBMENU;
+          _selected_item = findMaxHopsIndex(_node_prefs->autoadd_max_hops);
+        } else {
+          _state = MAIN_MENU;
+        }
+        return true;
+      }
+    } else if (_state == AUTOADD_MODE_SUBMENU) {
+      if (c == KEY_NEXT || c == KEY_RIGHT || c == KEY_PREV || c == KEY_LEFT) {
+        _node_prefs->manual_add_contacts = isManualAutoAdd() ? 0 : 1;
+        return true;
+      }
+      if (c == KEY_ENTER) {
+        the_mesh.savePrefs();
+        _state = AUTOADD_SUBMENU;
+        _selected_item = 0;
+        return true;
+      }
+    } else if (_state == AUTOADD_TYPES_SUBMENU) {
+      if (c == KEY_NEXT || c == KEY_RIGHT) {
+        _selected_item = (_selected_item + 1) % 5;
+        return true;
+      }
+      if (c == KEY_PREV || c == KEY_LEFT) {
+        _selected_item = (_selected_item + 4) % 5;
+        return true;
+      }
+      if (c == KEY_ENTER) {
+        if (_selected_item == 4) {
+          _state = AUTOADD_SUBMENU;
+          _selected_item = 1;
+        } else {
+          const uint8_t bits[] = {AUTO_ADD_CHAT, AUTO_ADD_REPEATER, AUTO_ADD_ROOM, AUTO_ADD_SENSOR};
+          _node_prefs->autoadd_config ^= bits[_selected_item];
+          the_mesh.savePrefs();
+        }
+        return true;
+      }
+    } else if (_state == AUTOADD_OVERWRITE_SUBMENU) {
+      if (c == KEY_NEXT || c == KEY_RIGHT || c == KEY_PREV || c == KEY_LEFT) {
+        _node_prefs->autoadd_config ^= AUTO_ADD_OVERWRITE_OLDEST;
+        return true;
+      }
+      if (c == KEY_ENTER) {
+        the_mesh.savePrefs();
+        _state = AUTOADD_SUBMENU;
+        _selected_item = 2;
+        return true;
+      }
+    } else if (_state == AUTOADD_MAXHOPS_SUBMENU) {
+      if (c == KEY_NEXT || c == KEY_RIGHT) {
+        _selected_item = (_selected_item + 1) % (MAX_HOPS_OPTION_COUNT + 1);
+        return true;
+      }
+      if (c == KEY_PREV || c == KEY_LEFT) {
+        _selected_item = (_selected_item + MAX_HOPS_OPTION_COUNT) % (MAX_HOPS_OPTION_COUNT + 1);
+        return true;
+      }
+      if (c == KEY_ENTER) {
+        if (_selected_item == MAX_HOPS_OPTION_COUNT) {
+          _state = AUTOADD_SUBMENU;
+          _selected_item = 3;
+        } else {
+          _node_prefs->autoadd_max_hops = MAX_HOPS_OPTIONS[_selected_item];
+          the_mesh.savePrefs();
+          _state = AUTOADD_SUBMENU;
+          _selected_item = 3;
+        }
         return true;
       }
     } else if (_state == TIMEZONE_SUBMENU) {
@@ -1306,6 +1687,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #ifdef PIN_BUZZER
   buzzer.begin();
   buzzer.quiet(_node_prefs->buzzer_quiet);
+  buzzer.startup();
 #endif
 
 #ifdef PIN_VIBRATION
@@ -1484,7 +1866,7 @@ void UITask::loop() {
 #endif
 #if defined(PIN_USER_BTN_ANA)
   if (abs(millis() - _analogue_pin_read_millis) > 10) {
-    ev = analog_btn.check();
+    int ev = analog_btn.check();
     if (ev == BUTTON_EVENT_CLICK) {
       c = checkDisplayOn(KEY_NEXT);
     } else if (ev == BUTTON_EVENT_LONG_PRESS) {
@@ -1547,12 +1929,17 @@ void UITask::loop() {
       _display->endFrame();
     }
 #if AUTO_OFF_MILLIS > 0
-    // Check if screensaver should activate (only if screen_always_on and screensaver are both enabled)
+#ifdef KEEP_DISPLAY_ON_USB
+    // Opt-in: refresh the auto-off deadline while externally powered
+    if (board.isExternalPowered()) {
+      _auto_off = millis() + AUTO_OFF_MILLIS;
+    }
+#endif
+    // Screensaver when screen_always_on and screensaver are both enabled
     if (millis() > _auto_off && _node_prefs && _node_prefs->screen_always_on && _node_prefs->screen_screensaver) {
-      // Activate screensaver if not already active and not on splash screen
       if (curr != screensaver && curr != splash) {
         setCurrScreen(screensaver);
-        _next_refresh = 0;  // Trigger immediate refresh
+        _next_refresh = 0;
       }
     } else if (millis() > _auto_off && !(_node_prefs && _node_prefs->screen_always_on)) {
       _display->turnOff();
@@ -1568,22 +1955,18 @@ void UITask::loop() {
   if (millis() > next_batt_chck) {
     uint16_t milliVolts = getBattMilliVolts();
     if (milliVolts > 0 && milliVolts < AUTO_SHUTDOWN_MILLIVOLTS) {
-
-      // show low battery shutdown alert
-      // we should only do this for eink displays, which will persist after power loss
-      #if defined(THINKNODE_M1) || defined(LILYGO_TECHO)
-      if (_display != NULL) {
-        _display->startFrame();
-        _display->setTextSize(2);
-        _display->setColor(DisplayDriver::RED);
-        _display->drawTextCentered(_display->width() / 2, 20, "Low Battery.");
-        _display->drawTextCentered(_display->width() / 2, 40, "Shutting Down!");
-        _display->endFrame();
+      if(!board.isExternalPowered()) {
+        if (_display != NULL) {
+          _display->startFrame();
+          _display->setTextSize(2);
+          _display->setColor(DisplayDriver::RED);
+          _display->drawTextCentered(_display->width() / 2, 20, "Low Battery.");
+          _display->drawTextCentered(_display->width() / 2, 40, "Shutting Down!");
+          _display->endFrame();
+          if (_display->isEink() == false) { delay(3000); }
+        }
+        shutdown();
       }
-      #endif
-
-      shutdown();
-
     }
     next_batt_chck = millis() + 8000;
   }
@@ -1622,7 +2005,7 @@ char UITask::handleLongPress(char c) {
 }
 
 char UITask::handleDoubleClick(char c) {
-  MESH_DEBUG_PRINTLN("UITask: double click triggered");
+  MESH_DEBUG_PRINTLN("UITask: double-click triggered");
   checkDisplayOn(c);
   return c;
 }
@@ -1643,7 +2026,7 @@ bool UITask::getGPSState() {
         return !strcmp(_sensors->getSettingValue(i), "1");
       }
     }
-  } 
+  }
   return false;
 }
 
@@ -1684,5 +2067,14 @@ void UITask::toggleBuzzer() {
     the_mesh.savePrefs();
     showAlert(buzzer.isQuiet() ? "Buzzer: OFF" : "Buzzer: ON", 800);
     _next_refresh = 0;  // trigger refresh
+  #endif
+}
+
+void UITask::setBuzzerQuiet(bool quiet) {
+  #ifdef PIN_BUZZER
+    buzzer.quiet(quiet);
+    _node_prefs->buzzer_quiet = quiet ? 1 : 0;
+    the_mesh.savePrefs();
+    _next_refresh = 0;
   #endif
 }

@@ -91,6 +91,7 @@ public:
   }
 
   void toggleBuzzer();
+  void setBuzzerQuiet(bool quiet);
   bool getGPSState();
   void toggleGPS();
 
