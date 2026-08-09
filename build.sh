@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# exit when any command fails
+set -e
+
 global_usage() {
   cat - <<EOF
 Usage:
@@ -30,6 +33,9 @@ $ sh build.sh build-repeater-firmwares
 
 Build all chat room server firmwares
 $ sh build.sh build-room-server-firmwares
+
+Build all kiss radio firmwares
+$ sh build.sh build-kiss-radio-firmwares
 
 Environment Variables:
   DISABLE_DEBUG=1: Disables all debug logging flags (MESH_DEBUG, MESH_PACKET_LOGGING, etc.)
@@ -252,6 +258,17 @@ build_room_server_firmwares() {
 
 }
 
+build_kiss_modem_firmwares() {
+
+#  # build specific kiss radio firmwares
+#  build_firmware "Heltec_v3_kiss_modem"
+#  build_firmware "RAK_4631_kiss_modem"
+
+  # build all room server firmwares
+  build_all_firmwares_by_suffix "_kiss_modem"
+
+}
+
 build_firmwares() {
   build_companion_firmwares
   build_repeater_firmwares
@@ -288,4 +305,13 @@ elif [[ $1 == "build-repeater-firmwares" ]]; then
   build_repeater_firmwares
 elif [[ $1 == "build-room-server-firmwares" ]]; then
   build_room_server_firmwares
+elif [[ $1 == "build-kiss-radio-firmwares" ]]; then
+  build_kiss_modem_firmwares
+elif [[ $1 == "get-companion-firmwares-to-build" ]]; then
+  get_pio_envs_ending_with_string "_companion_radio_usb"
+  get_pio_envs_ending_with_string "_companion_radio_ble"
+elif [[ $1 == "get-repeater-firmwares-to-build" ]]; then
+  get_pio_envs_ending_with_string "_repeater"
+elif [[ $1 == "get-room-server-firmwares-to-build" ]]; then
+  get_pio_envs_ending_with_string "_room_server"
 fi
