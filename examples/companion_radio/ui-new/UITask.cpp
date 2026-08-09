@@ -79,12 +79,12 @@ public:
 
   int render(DisplayDriver& display) override {
     // slunsecore logo
-    display.setColor(DisplayDriver::BLUE);
+    display.setColor(UIColor::corp_blue);
     int logoWidth = 128;
     display.drawXbm((display.width() - logoWidth) / 2, 3, slunsecore_logo, logoWidth, 13);
 
     // version info - use smaller font for dev builds
-    display.setColor(DisplayDriver::LIGHT);
+    display.setColor(UIColor::primary_txt);
     display.setTextSize(_is_dev_build ? 1 : 2);
     display.drawTextCentered(display.width()/2, 20, _version_info);
 
@@ -93,6 +93,7 @@ public:
     display.drawTextCentered(display.width()/2, 38, FIRMWARE_BUILD_DATE);
 
     // "Powered by MeshCore"
+    display.setColor(UIColor::secondary_txt);
     display.drawTextCentered(display.width()/2, 52, "Powered by MeshCore");
 
     return 1000;
@@ -147,32 +148,49 @@ class HomeScreen : public UIScreen {
       strcpy(battStr, "CHG");
       textWidth = display.getTextWidth(battStr);
       textX = display.width() - textWidth - 2; // Position near top-right corner
-      display.setColor(DisplayDriver::GREEN);
-    } else {
-      // Convert millivolts to percentage
-      const int minMilliVolts = 3000; // Minimum voltage (e.g., 3.0V)
-      const int maxMilliVolts = 4200; // Maximum voltage (e.g., 4.2V)
-      int batteryPercentage = ((batteryMilliVolts - minMilliVolts) * 100) / (maxMilliVolts - minMilliVolts);
-      if (batteryPercentage < 0) batteryPercentage = 0; // Clamp to 0%
-      if (batteryPercentage > 100) batteryPercentage = 100; // Clamp to 100%
-
-      // Display battery percentage as text in top-right corner
-      sprintf(battStr, "%d%%", batteryPercentage);
-      textWidth = display.getTextWidth(battStr);
-      textX = display.width() - textWidth - 2; // Position near top-right corner
-      
-      // Choose color based on battery level
-      if (batteryPercentage > 50) {
-        display.setColor(DisplayDriver::GREEN);
-      } else if (batteryPercentage > 20) {
-        display.setColor(DisplayDriver::YELLOW);
-      } else {
-        display.setColor(DisplayDriver::RED);
-      }
+      display.setColor(UIColor::title_txt);
+      display.setCursor(textX, textY);
+      display.print(battStr);
+      return;
     }
-    
-    display.setCursor(textX, textY);
-    display.print(battStr);
+
+    // Convert millivolts to percentage
+#ifndef BATT_MIN_MILLIVOLTS
+  #define BATT_MIN_MILLIVOLTS 3000
+#endif
+#ifndef BATT_MAX_MILLIVOLTS
+  #define BATT_MAX_MILLIVOLTS 4200
+#endif
+    const int minMilliVolts = BATT_MIN_MILLIVOLTS;
+    const int maxMilliVolts = BATT_MAX_MILLIVOLTS;
+    int batteryPercentage = ((batteryMilliVolts - minMilliVolts) * 100) / (maxMilliVolts - minMilliVolts);
+    if (batteryPercentage < 0) batteryPercentage = 0; // Clamp to 0%
+    if (batteryPercentage > 100) batteryPercentage = 100; // Clamp to 100%
+
+    // battery icon
+    int iconWidth = 24;
+    int iconHeight = 10;
+    int iconX = display.width() - iconWidth - 5; // Position the icon near the top-right corner
+    int iconY = 0;
+    display.setColor(UIColor::title_txt);
+
+    // battery outline
+    display.drawRect(iconX, iconY, iconWidth, iconHeight);
+
+    // battery "cap"
+    display.fillRect(iconX + iconWidth, iconY + (iconHeight / 4), 3, iconHeight / 2);
+
+    // fill the battery based on the percentage
+    int fillWidth = (batteryPercentage * (iconWidth - 4)) / 100;
+    display.fillRect(iconX + 2, iconY + 2, fillWidth, iconHeight - 4);
+
+    // show muted icon if buzzer is muted
+#ifdef PIN_BUZZER
+    if (_task->isBuzzerQuiet()) {
+      display.setColor(UIColor::warning_txt);
+      display.drawXbm(iconX - 9, iconY + 1, muted_icon, 8, 8);
+    }
+#endif
   }
 
   CayenneLPP sensors_lpp;
@@ -217,34 +235,41 @@ public:
   }
 
   int render(DisplayDriver& display) override {
+    display.setColor(UIColor::title_bkg);
+    display.fillRect(0, 0, display.width(), 12);
     char tmp[80];
     // node name
     display.setTextSize(1);
-    display.setColor(DisplayDriver::GREEN);
+    display.setColor(UIColor::title_txt);
     char filtered_name[sizeof(_node_prefs->node_name)];
     display.translateUTF8ToBlocks(filtered_name, _node_prefs->node_name, sizeof(filtered_name));
-    display.setCursor(0, 0);
+    display.setCursor(0, 2);
     display.print(filtered_name);
 
     // battery voltage
     renderBatteryIndicator(display, _task->getBattMilliVolts());
 
     // curr page indicator
+    if (UIColor::title_bkg == UIColor::window_bkg) {
+      display.setColor(UIColor::title_txt);
+    } else {
+      display.setColor(UIColor::title_bkg);
+    }
     int y = 14;
     int x = display.width() / 2 - 5 * (HomePage::Count-1);
     for (uint8_t i = 0; i < HomePage::Count; i++, x += 10) {
       if (i == _page) {
-        display.fillRect(x-1, y-1, 3, 3);
+        display.fillRect(x-1, y-1, 4, 4);
       } else {
-        display.fillRect(x, y, 1, 1);
+        display.fillRect(x, y, 2, 2);
       }
     }
 
     if (_page == HomePage::FIRST) {
-      display.setColor(DisplayDriver::YELLOW);
+      display.setColor(UIColor::primary_txt);
       display.setTextSize(2);
       sprintf(tmp, "MSG: %d", _task->getMsgCount());
-      display.drawTextCentered(display.width() / 2, 20, tmp);
+      display.drawTextCentered(display.width() / 2, 22, tmp);
 
       #ifdef WIFI_SSID
         IPAddress ip = WiFi.localIP();
@@ -253,19 +278,19 @@ public:
         display.drawTextCentered(display.width() / 2, 54, tmp);
       #endif
       if (_task->hasConnection()) {
-        display.setColor(DisplayDriver::GREEN);
+        display.setColor(UIColor::warning_txt);
         display.setTextSize(1);
         display.drawTextCentered(display.width() / 2, 43, "< Connected >");
 
       } else if (the_mesh.getBLEPin() != 0) { // BT pin
-        display.setColor(DisplayDriver::RED);
+        display.setColor(UIColor::warning_txt);
         display.setTextSize(2);
         sprintf(tmp, "Pin:%d", the_mesh.getBLEPin());
         display.drawTextCentered(display.width() / 2, 43, tmp);
       }
     } else if (_page == HomePage::RECENT) {
       the_mesh.getRecentlyHeard(recent, UI_RECENT_LIST_SIZE);
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::primary_txt);
       int y = 20;
       for (int i = 0; i < UI_RECENT_LIST_SIZE; i++, y += 11) {
         auto a = &recent[i];
@@ -289,7 +314,7 @@ public:
         display.print(tmp);
       }
     } else if (_page == HomePage::RADIO) {
-      display.setColor(DisplayDriver::YELLOW);
+      display.setColor(UIColor::primary_txt);
       display.setTextSize(1);
       // freq / sf
       display.setCursor(0, 20);
@@ -308,15 +333,17 @@ public:
       sprintf(tmp, "Noise floor: %d", radio_driver.getNoiseFloor());
       display.print(tmp);
     } else if (_page == HomePage::BLUETOOTH) {
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::corp_blue);
       display.drawXbm((display.width() - 32) / 2, 18,
-          _task->isSerialEnabled() ? bluetooth_on : bluetooth_off,
+          _task->isBluetoothEnabled() ? bluetooth_on : bluetooth_off,
           32, 32);
+      display.setColor(UIColor::secondary_txt);
       display.setTextSize(1);
       display.drawTextCentered(display.width() / 2, 64 - 11, "toggle: " PRESS_LABEL);
     } else if (_page == HomePage::ADVERT) {
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::corp_blue);
       display.drawXbm((display.width() - 32) / 2, 18, advert_icon, 32, 32);
+      display.setColor(UIColor::secondary_txt);
       display.drawTextCentered(display.width() / 2, 64 - 11, "advert: " PRESS_LABEL);
 #if ENV_INCLUDE_GPS == 1
     } else if (_page == HomePage::GPS) {
@@ -334,24 +361,33 @@ public:
 #else
       strcpy(buf, gps_state ? "gps on" : "gps off");
 #endif
+      display.setColor(UIColor::primary_txt);
       display.drawTextLeftAlign(0, y, buf);
       if (nmea == NULL) {
         y = y + 12;
+        display.setColor(UIColor::secondary_txt);
         display.drawTextLeftAlign(0, y, "Can't access GPS");
       } else {
+        display.setColor(UIColor::primary_txt);
         strcpy(buf, nmea->isValid()?"fix":"no fix");
         display.drawTextRightAlign(display.width()-1, y, buf);
         y = y + 12;
+        display.setColor(UIColor::secondary_txt);
         display.drawTextLeftAlign(0, y, "sat");
+        display.setColor(UIColor::primary_txt);
         sprintf(buf, "%d", nmea->satellitesCount());
         display.drawTextRightAlign(display.width()-1, y, buf);
         y = y + 12;
+        display.setColor(UIColor::secondary_txt);
         display.drawTextLeftAlign(0, y, "pos");
+        display.setColor(UIColor::primary_txt);
         sprintf(buf, "%.4f %.4f",
           nmea->getLatitude()/1000000., nmea->getLongitude()/1000000.);
         display.drawTextRightAlign(display.width()-1, y, buf);
         y = y + 12;
+        display.setColor(UIColor::secondary_txt);
         display.drawTextLeftAlign(0, y, "alt");
+        display.setColor(UIColor::primary_txt);
         sprintf(buf, "%.2f", nmea->getAltitude()/1000.);
         display.drawTextRightAlign(display.width()-1, y, buf);
         y = y + 12;
@@ -419,7 +455,9 @@ public:
             strcpy(name, "unk"); sprintf(buf, "");
         }
         display.setCursor(0, y);
+        display.setColor(UIColor::secondary_txt);
         display.print(name);
+        display.setColor(UIColor::primary_txt);
         display.setCursor(
           display.width()-display.getTextWidth(buf)-1, y
         );
@@ -430,16 +468,18 @@ public:
       else sensors_scroll_offset = 0;
 #endif
     } else if (_page == HomePage::SHUTDOWN) {
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::corp_blue);
       display.setTextSize(1);
       if (_shutdown_init) {
+        display.setColor(UIColor::warning_txt);
         display.drawTextCentered(display.width() / 2, 34, "hibernating...");
       } else {
+        display.setColor(UIColor::secondary_txt);
         display.drawXbm((display.width() - 32) / 2, 18, power_icon, 32, 32);
         display.drawTextCentered(display.width() / 2, 64 - 11, "hibernate:" PRESS_LABEL);
       }
     } else if (_page == HomePage::SETTINGS) {
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       display.setTextSize(1);
       display.drawTextCentered(display.width() / 2, 20, "Settings");
       display.drawTextCentered(display.width() / 2, 40, PRESS_LABEL " to enter");
@@ -460,10 +500,10 @@ public:
       return true;
     }
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
-      if (_task->isSerialEnabled()) {  // toggle Bluetooth on/off
-        _task->disableSerial();
+      if (_task->isBluetoothEnabled()) {  // toggle Bluetooth on/off
+        _task->disableBluetooth();
       } else {
-        _task->enableSerial();
+        _task->enableBluetooth();
       }
       return true;
     }
@@ -536,7 +576,7 @@ public:
     char tmp[16];
     display.setCursor(0, 0);
     display.setTextSize(1);
-    display.setColor(DisplayDriver::GREEN);
+    display.setColor(UIColor::corp_blue);
     sprintf(tmp, "Unread: %d", num_unread);
     display.print(tmp);
 
@@ -556,13 +596,13 @@ public:
     display.drawRect(0, 11, display.width(), 1);  // horiz line
 
     display.setCursor(0, 14);
-    display.setColor(DisplayDriver::YELLOW);
+    display.setColor(UIColor::secondary_txt);
     char filtered_origin[sizeof(p->origin)];
     display.translateUTF8ToBlocks(filtered_origin, p->origin, sizeof(filtered_origin));
     display.print(filtered_origin);
 
     display.setCursor(0, 25);
-    display.setColor(DisplayDriver::LIGHT);
+    display.setColor(UIColor::primary_txt);
     char filtered_msg[sizeof(p->msg)];
     display.translateUTF8ToBlocks(filtered_msg, p->msg, sizeof(filtered_msg));
     display.printWordWrap(filtered_msg, display.width());
@@ -829,7 +869,7 @@ public:
     display.setTextSize(1);
     
     if (_state == MAIN_MENU) {
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       display.drawTextCentered(display.width() / 2, 0, "Settings");
       display.drawRect(0, 10, display.width(), 1);  // separator line
 
@@ -865,11 +905,11 @@ public:
         uint8_t item = visible_items[i];
         int item_y = start_y + (i - _main_menu_scroll_offset) * item_height;
         if (visible_items[i] == _selected_item) {
-          display.setColor(DisplayDriver::YELLOW);
+          display.setColor(UIColor::title_bkg);
           display.fillRect(0, item_y - 2, display.width(), 10);
-          display.setColor(DisplayDriver::DARK);
+          display.setColor(UIColor::title_txt);
         } else {
-          display.setColor(DisplayDriver::LIGHT);
+          display.setColor(UIColor::primary_txt);
         }
         display.setCursor(2, item_y);
         if (item == SettingItem::SCREEN_ALWAYS_ON) {
@@ -917,7 +957,7 @@ public:
           display.print(getItemLabel((SettingItem)item));
           display.print(": ");
           char value_str[4];
-          strcpy(value_str, _node_prefs->client_repeat ? "ON" : "OFF");
+          strcpy(value_str, _node_prefs->isRepeatEn() ? "ON" : "OFF");
           int value_width = display.getTextWidth(value_str);
           display.setCursor(display.width() - value_width - 2, item_y);
           display.print(value_str);
@@ -953,7 +993,7 @@ public:
       }
       
     } else if (_state == SCREEN_ALWAYS_ON_SUBMENU) {
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       display.drawTextCentered(display.width() / 2, 0, "Screen Always On");
       display.drawRect(0, 10, display.width(), 1);  // separator line
 
@@ -963,17 +1003,17 @@ public:
       
       for (uint8_t i = 0; i < 2; i++, y += 15) {
         if (i == current_option) {
-          display.setColor(DisplayDriver::YELLOW);
+          display.setColor(UIColor::title_bkg);
           display.fillRect(0, y - 2, display.width(), 13);
-          display.setColor(DisplayDriver::DARK);
+          display.setColor(UIColor::title_txt);
         } else {
-          display.setColor(DisplayDriver::LIGHT);
+          display.setColor(UIColor::primary_txt);
         }
         display.setCursor(display.width() / 2 - 10, y);
         display.print(options[i]);
       }
     } else if (_state == SCREEN_SCREENSAVER_SUBMENU) {
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       display.drawTextCentered(display.width() / 2, 0, "Screensaver");
       display.drawRect(0, 10, display.width(), 1);  // separator line
 
@@ -983,17 +1023,17 @@ public:
       
       for (uint8_t i = 0; i < 2; i++, y += 15) {
         if (i == current_option) {
-          display.setColor(DisplayDriver::YELLOW);
+          display.setColor(UIColor::title_bkg);
           display.fillRect(0, y - 2, display.width(), 13);
-          display.setColor(DisplayDriver::DARK);
+          display.setColor(UIColor::title_txt);
         } else {
-          display.setColor(DisplayDriver::LIGHT);
+          display.setColor(UIColor::primary_txt);
         }
         display.setCursor(display.width() / 2 - 10, y);
         display.print(options[i]);
       }
     } else if (_state == TIMEZONE_SUBMENU) {
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       display.drawTextCentered(display.width() / 2, 0, "Timezone");
       display.drawRect(0, 10, display.width(), 1);  // separator line
 
@@ -1016,11 +1056,11 @@ public:
       int y = header_height + 6;
       for (uint8_t i = _timezone_scroll_offset; i < total_items && i < _timezone_scroll_offset + max_visible_items; i++, y += item_height) {
         if (i == _selected_item) {
-          display.setColor(DisplayDriver::YELLOW);
+          display.setColor(UIColor::title_bkg);
           display.fillRect(0, y - 2, display.width(), 10);
-          display.setColor(DisplayDriver::DARK);
+          display.setColor(UIColor::title_txt);
         } else {
-          display.setColor(DisplayDriver::LIGHT);
+          display.setColor(UIColor::primary_txt);
         }
         display.setCursor(2, y);
         if (i < TIMEZONE_COUNT) {
@@ -1030,7 +1070,7 @@ public:
         }
       }
     } else if (_state == SCREEN_BRIGHTNESS_SUBMENU) {
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       display.drawTextCentered(display.width() / 2, 0, "Screen Brightness");
       display.drawRect(0, 10, display.width(), 1);  // separator line
 
@@ -1054,17 +1094,17 @@ public:
       // Only render visible items
       for (uint8_t i = _brightness_scroll_offset; i < BRIGHTNESS_COUNT && i < _brightness_scroll_offset + max_visible_items; i++, y += item_height) {
         if (i == _selected_item) {
-          display.setColor(DisplayDriver::YELLOW);
+          display.setColor(UIColor::title_bkg);
           display.fillRect(0, y - 2, display.width(), 10);
-          display.setColor(DisplayDriver::DARK);
+          display.setColor(UIColor::title_txt);
         } else {
-          display.setColor(DisplayDriver::LIGHT);
+          display.setColor(UIColor::primary_txt);
         }
         display.setCursor(2, y);
         display.print(options[i]);
       }
     } else if (_state == SHARE_POS_IN_ADVERTS_SUBMENU) {
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       display.drawTextCentered(display.width() / 2, 0, "Share pos in adv.");
       display.drawRect(0, 10, display.width(), 1);  // separator line
 
@@ -1074,38 +1114,38 @@ public:
       
       for (uint8_t i = 0; i < 2; i++, y += 15) {
         if (i == current_option) {
-          display.setColor(DisplayDriver::YELLOW);
+          display.setColor(UIColor::title_bkg);
           display.fillRect(0, y - 2, display.width(), 13);
-          display.setColor(DisplayDriver::DARK);
+          display.setColor(UIColor::title_txt);
         } else {
-          display.setColor(DisplayDriver::LIGHT);
+          display.setColor(UIColor::primary_txt);
         }
         display.setCursor(display.width() / 2 - 10, y);
         display.print(options[i]);
       }
     } else if (_state == PACKET_FWD_SUBMENU) {
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       display.drawTextCentered(display.width() / 2, 0, "Packet FWD");
       display.drawRect(0, 10, display.width(), 1);  // separator line
 
       int y = 20;
       const char* options[] = {"OFF", "ON"};
-      uint8_t current_option = _node_prefs->client_repeat ? 1 : 0;
+      uint8_t current_option = _node_prefs->isRepeatEn() ? 1 : 0;
 
       for (uint8_t i = 0; i < 2; i++, y += 15) {
         if (i == current_option) {
-          display.setColor(DisplayDriver::YELLOW);
+          display.setColor(UIColor::title_bkg);
           display.fillRect(0, y - 2, display.width(), 13);
-          display.setColor(DisplayDriver::DARK);
+          display.setColor(UIColor::title_txt);
         } else {
-          display.setColor(DisplayDriver::LIGHT);
+          display.setColor(UIColor::primary_txt);
         }
         display.setCursor(display.width() / 2 - 10, y);
         display.print(options[i]);
       }
 #ifdef PIN_BUZZER
     } else if (_state == BUZZER_SUBMENU) {
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       display.drawTextCentered(display.width() / 2, 0, "Buzzer");
       display.drawRect(0, 10, display.width(), 1);
 
@@ -1115,18 +1155,18 @@ public:
 
       for (uint8_t i = 0; i < 2; i++, y += 15) {
         if (i == current_option) {
-          display.setColor(DisplayDriver::YELLOW);
+          display.setColor(UIColor::title_bkg);
           display.fillRect(0, y - 2, display.width(), 13);
-          display.setColor(DisplayDriver::DARK);
+          display.setColor(UIColor::title_txt);
         } else {
-          display.setColor(DisplayDriver::LIGHT);
+          display.setColor(UIColor::primary_txt);
         }
         display.setCursor(display.width() / 2 - 10, y);
         display.print(options[i]);
       }
 #endif
     } else if (_state == PATH_HASH_SUBMENU) {
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       display.drawTextCentered(display.width() / 2, 0, "Path hash");
       display.drawRect(0, 10, display.width(), 1);
 
@@ -1134,19 +1174,19 @@ public:
       const char* options[] = {"1-byte", "2-byte", "3-byte", "Back"};
       for (uint8_t i = 0; i < 4; i++, y += 12) {
         if (i == _selected_item) {
-          display.setColor(DisplayDriver::YELLOW);
+          display.setColor(UIColor::title_bkg);
           display.fillRect(0, y - 2, display.width(), 11);
-          display.setColor(DisplayDriver::DARK);
+          display.setColor(UIColor::title_txt);
         } else {
-          display.setColor(DisplayDriver::LIGHT);
+          display.setColor(UIColor::primary_txt);
         }
         display.setCursor(2, y);
         display.print(options[i]);
       }
     } else if (_state == PATH_HASH_WARN_SUBMENU) {
-      display.setColor(DisplayDriver::YELLOW);
+      display.setColor(UIColor::title_bkg);
       display.drawTextCentered(display.width() / 2, 8, "Warning");
-      display.setColor(DisplayDriver::LIGHT);
+      display.setColor(UIColor::primary_txt);
       display.setTextSize(1);
       display.setCursor(2, 22);
       display.print("Old repeaters may");
@@ -1155,7 +1195,7 @@ public:
       display.setCursor(2, 44);
       display.print("Enter=OK");
     } else if (_state == AUTOADD_SUBMENU) {
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       display.drawTextCentered(display.width() / 2, 0, "Auto-add");
       display.drawRect(0, 10, display.width(), 1);
 
@@ -1163,11 +1203,11 @@ public:
       int y = 18;
       for (uint8_t i = 0; i < 5; i++, y += 12) {
         if (i == _selected_item) {
-          display.setColor(DisplayDriver::YELLOW);
+          display.setColor(UIColor::title_bkg);
           display.fillRect(0, y - 2, display.width(), 11);
-          display.setColor(DisplayDriver::DARK);
+          display.setColor(UIColor::title_txt);
         } else {
-          display.setColor(DisplayDriver::LIGHT);
+          display.setColor(UIColor::primary_txt);
         }
         display.setCursor(2, y);
         display.print(labels[i]);
@@ -1186,7 +1226,7 @@ public:
         }
       }
     } else if (_state == AUTOADD_MODE_SUBMENU) {
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       display.drawTextCentered(display.width() / 2, 0, "Add mode");
       display.drawRect(0, 10, display.width(), 1);
       int y = 20;
@@ -1194,17 +1234,17 @@ public:
       uint8_t cur = isManualAutoAdd() ? 1 : 0;
       for (uint8_t i = 0; i < 2; i++, y += 15) {
         if (i == cur) {
-          display.setColor(DisplayDriver::YELLOW);
+          display.setColor(UIColor::title_bkg);
           display.fillRect(0, y - 2, display.width(), 13);
-          display.setColor(DisplayDriver::DARK);
+          display.setColor(UIColor::title_txt);
         } else {
-          display.setColor(DisplayDriver::LIGHT);
+          display.setColor(UIColor::primary_txt);
         }
         display.setCursor(2, y);
         display.print(options[i]);
       }
     } else if (_state == AUTOADD_TYPES_SUBMENU) {
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       display.drawTextCentered(display.width() / 2, 0, "Contact types");
       display.drawRect(0, 10, display.width(), 1);
       const char* labels[] = {"Chat", "Repeater", "Room", "Sensor", "Back"};
@@ -1212,11 +1252,11 @@ public:
       int y = 16;
       for (uint8_t i = 0; i < 5; i++, y += 11) {
         if (i == _selected_item) {
-          display.setColor(DisplayDriver::YELLOW);
+          display.setColor(UIColor::title_bkg);
           display.fillRect(0, y - 2, display.width(), 10);
-          display.setColor(DisplayDriver::DARK);
+          display.setColor(UIColor::title_txt);
         } else {
-          display.setColor(DisplayDriver::LIGHT);
+          display.setColor(UIColor::primary_txt);
         }
         display.setCursor(2, y);
         display.print(labels[i]);
@@ -1226,7 +1266,7 @@ public:
         }
       }
     } else if (_state == AUTOADD_OVERWRITE_SUBMENU) {
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       display.drawTextCentered(display.width() / 2, 0, "Overwrite");
       display.drawRect(0, 10, display.width(), 1);
       int y = 20;
@@ -1234,27 +1274,27 @@ public:
       uint8_t cur = (_node_prefs->autoadd_config & AUTO_ADD_OVERWRITE_OLDEST) ? 1 : 0;
       for (uint8_t i = 0; i < 2; i++, y += 15) {
         if (i == cur) {
-          display.setColor(DisplayDriver::YELLOW);
+          display.setColor(UIColor::title_bkg);
           display.fillRect(0, y - 2, display.width(), 13);
-          display.setColor(DisplayDriver::DARK);
+          display.setColor(UIColor::title_txt);
         } else {
-          display.setColor(DisplayDriver::LIGHT);
+          display.setColor(UIColor::primary_txt);
         }
         display.setCursor(display.width() / 2 - 10, y);
         display.print(options[i]);
       }
     } else if (_state == AUTOADD_MAXHOPS_SUBMENU) {
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       display.drawTextCentered(display.width() / 2, 0, "Max hops");
       display.drawRect(0, 10, display.width(), 1);
       int y = 16;
       for (uint8_t i = 0; i < MAX_HOPS_OPTION_COUNT + 1; i++, y += 11) {
         if (i == _selected_item) {
-          display.setColor(DisplayDriver::YELLOW);
+          display.setColor(UIColor::title_bkg);
           display.fillRect(0, y - 2, display.width(), 10);
-          display.setColor(DisplayDriver::DARK);
+          display.setColor(UIColor::title_txt);
         } else {
-          display.setColor(DisplayDriver::LIGHT);
+          display.setColor(UIColor::primary_txt);
         }
         display.setCursor(2, y);
         if (i < MAX_HOPS_OPTION_COUNT) {
@@ -1387,7 +1427,7 @@ public:
       }
     } else if (_state == PACKET_FWD_SUBMENU) {
       if (c == KEY_NEXT || c == KEY_RIGHT || c == KEY_PREV || c == KEY_LEFT) {
-        _node_prefs->client_repeat = _node_prefs->client_repeat ? 0 : 1;
+        _node_prefs->setRepeatEn(!_node_prefs->isRepeatEn());
         return true;
       }
       if (c == KEY_ENTER) {
@@ -1616,7 +1656,7 @@ public:
 
   int render(DisplayDriver& display) override {
     // Full screen clock display
-    display.setColor(DisplayDriver::LIGHT);
+    display.setColor(UIColor::primary_txt);
     
     // Use FreeMonoBold18pt7b font for clock (bold monospace is perfect for time display)
     extern const GFXfont FreeMonoBold18pt7b;
@@ -1813,8 +1853,7 @@ void UITask::shutdown(bool restart){
   if (restart) {
     _board->reboot();
   } else {
-    _display->turnOff();
-    radio_driver.powerOff();
+    // Power off board including radio, display, GPS and components
     _board->powerOff();
   }
 }
@@ -1862,6 +1901,16 @@ void UITask::loop() {
     c = handleDoubleClick(KEY_PREV);
   } else if (ev == BUTTON_EVENT_TRIPLE_CLICK) {
     c = handleTripleClick(KEY_SELECT);
+  }
+#endif
+#if defined(UI_HAS_ROTARY_INPUT)
+  RotaryInputEvent rotaryEv = rotary_input.poll();
+  if (c == 0 && _display != NULL && _display->isOn()) {
+    if (rotaryEv == RotaryInputEvent::Next) {
+      c = KEY_NEXT;
+    } else if (rotaryEv == RotaryInputEvent::Prev) {
+      c = KEY_PREV;
+    }
   }
 #endif
 #if defined(PIN_USER_BTN_ANA)
@@ -1917,9 +1966,9 @@ void UITask::loop() {
         _display->setTextSize(1);
         int y = _display->height() / 3;
         int p = _display->height() / 32;
-        _display->setColor(DisplayDriver::DARK);
+        _display->setColor(UIColor::popup_bkg);
         _display->fillRect(p, y, _display->width() - p*2, y);
-        _display->setColor(DisplayDriver::LIGHT);  // draw box border
+        _display->setColor(UIColor::popup_txt);  // draw box border
         _display->drawRect(p, y, _display->width() - p*2, y);
         _display->drawTextCentered(_display->width() / 2, y + p*3, _alert);
         _next_refresh = _alert_expiry;   // will need refresh when alert is dismissed
@@ -1959,7 +2008,7 @@ void UITask::loop() {
         if (_display != NULL) {
           _display->startFrame();
           _display->setTextSize(2);
-          _display->setColor(DisplayDriver::RED);
+          _display->setColor(UIColor::warning_txt);
           _display->drawTextCentered(_display->width() / 2, 20, "Low Battery.");
           _display->drawTextCentered(_display->width() / 2, 40, "Shutting Down!");
           _display->endFrame();
