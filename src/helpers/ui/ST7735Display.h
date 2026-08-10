@@ -6,6 +6,13 @@
 #include "TFT_eSPI.h"
 #include <helpers/RefCountedDigitalPin.h>
 
+// TFT_eSPI's GFXFF font support (Fonts/GFXFF/gfxfont.h) unconditionally bundles every
+// GFX font it ships, including some that are also shipped separately by Adafruit GFX
+// Library under the same symbol names. Anything that also does e.g.
+// `#include <Fonts/FreeMonoBold18pt7b.h>` for the Adafruit copy must skip it here to
+// avoid a duplicate-definition error.
+#define UI_TFT_ESPI_GFXFF_FONTS_LOADED 1
+
 class ST7735Display : public DisplayDriver {
   bool _isOn;
   RefCountedDigitalPin* _peripher_power;
