@@ -3,7 +3,9 @@
 #include "../MyMesh.h"
 #include "target.h"
 #include <RTClib.h>
+#ifndef UI_TFT_ESPI_GFXFF_FONTS_LOADED
 #include <Fonts/FreeMonoBold18pt7b.h>
+#endif
 
 #ifndef AUTO_OFF_MILLIS
   #define AUTO_OFF_MILLIS     15000   // 15 seconds
