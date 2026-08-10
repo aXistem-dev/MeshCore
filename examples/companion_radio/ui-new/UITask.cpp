@@ -731,6 +731,17 @@ static const uint8_t TIMEZONE_COUNT = sizeof(TIMEZONE_OFFSETS) / sizeof(TIMEZONE
 static const uint8_t MAX_HOPS_OPTIONS[] = {0, 1, 2, 4, 8, 16, 32, 64};
 static const uint8_t MAX_HOPS_OPTION_COUNT = sizeof(MAX_HOPS_OPTIONS) / sizeof(MAX_HOPS_OPTIONS[0]);
 
+// On monochrome displays UIColor::title_bkg collapses to the same value as
+// UIColor::window_bkg, which would make a selected-row highlight invisible.
+// Fall back to title_txt/window_bkg (guaranteed to contrast, same idiom used
+// for the HomeScreen page-indicator dots above) when that happens.
+static ColorVal highlightBkg() {
+  return (UIColor::title_bkg == UIColor::window_bkg) ? UIColor::title_txt : UIColor::title_bkg;
+}
+static ColorVal highlightTxt() {
+  return (UIColor::title_bkg == UIColor::window_bkg) ? UIColor::window_bkg : UIColor::title_txt;
+}
+
 class SettingsScreen : public UIScreen {
   enum SettingItem {
     SCREEN_ALWAYS_ON,
@@ -910,9 +921,9 @@ public:
         uint8_t item = visible_items[i];
         int item_y = start_y + (i - _main_menu_scroll_offset) * item_height;
         if (visible_items[i] == _selected_item) {
-          display.setColor(UIColor::title_bkg);
+          display.setColor(highlightBkg());
           display.fillRect(0, item_y - 2, display.width(), 10);
-          display.setColor(UIColor::title_txt);
+          display.setColor(highlightTxt());
         } else {
           display.setColor(UIColor::primary_txt);
         }
@@ -1008,9 +1019,9 @@ public:
       
       for (uint8_t i = 0; i < 2; i++, y += 15) {
         if (i == current_option) {
-          display.setColor(UIColor::title_bkg);
+          display.setColor(highlightBkg());
           display.fillRect(0, y - 2, display.width(), 13);
-          display.setColor(UIColor::title_txt);
+          display.setColor(highlightTxt());
         } else {
           display.setColor(UIColor::primary_txt);
         }
@@ -1028,9 +1039,9 @@ public:
       
       for (uint8_t i = 0; i < 2; i++, y += 15) {
         if (i == current_option) {
-          display.setColor(UIColor::title_bkg);
+          display.setColor(highlightBkg());
           display.fillRect(0, y - 2, display.width(), 13);
-          display.setColor(UIColor::title_txt);
+          display.setColor(highlightTxt());
         } else {
           display.setColor(UIColor::primary_txt);
         }
@@ -1061,9 +1072,9 @@ public:
       int y = header_height + 6;
       for (uint8_t i = _timezone_scroll_offset; i < total_items && i < _timezone_scroll_offset + max_visible_items; i++, y += item_height) {
         if (i == _selected_item) {
-          display.setColor(UIColor::title_bkg);
+          display.setColor(highlightBkg());
           display.fillRect(0, y - 2, display.width(), 10);
-          display.setColor(UIColor::title_txt);
+          display.setColor(highlightTxt());
         } else {
           display.setColor(UIColor::primary_txt);
         }
@@ -1099,9 +1110,9 @@ public:
       // Only render visible items
       for (uint8_t i = _brightness_scroll_offset; i < BRIGHTNESS_COUNT && i < _brightness_scroll_offset + max_visible_items; i++, y += item_height) {
         if (i == _selected_item) {
-          display.setColor(UIColor::title_bkg);
+          display.setColor(highlightBkg());
           display.fillRect(0, y - 2, display.width(), 10);
-          display.setColor(UIColor::title_txt);
+          display.setColor(highlightTxt());
         } else {
           display.setColor(UIColor::primary_txt);
         }
@@ -1119,9 +1130,9 @@ public:
       
       for (uint8_t i = 0; i < 2; i++, y += 15) {
         if (i == current_option) {
-          display.setColor(UIColor::title_bkg);
+          display.setColor(highlightBkg());
           display.fillRect(0, y - 2, display.width(), 13);
-          display.setColor(UIColor::title_txt);
+          display.setColor(highlightTxt());
         } else {
           display.setColor(UIColor::primary_txt);
         }
@@ -1139,9 +1150,9 @@ public:
 
       for (uint8_t i = 0; i < 2; i++, y += 15) {
         if (i == current_option) {
-          display.setColor(UIColor::title_bkg);
+          display.setColor(highlightBkg());
           display.fillRect(0, y - 2, display.width(), 13);
-          display.setColor(UIColor::title_txt);
+          display.setColor(highlightTxt());
         } else {
           display.setColor(UIColor::primary_txt);
         }
@@ -1160,9 +1171,9 @@ public:
 
       for (uint8_t i = 0; i < 2; i++, y += 15) {
         if (i == current_option) {
-          display.setColor(UIColor::title_bkg);
+          display.setColor(highlightBkg());
           display.fillRect(0, y - 2, display.width(), 13);
-          display.setColor(UIColor::title_txt);
+          display.setColor(highlightTxt());
         } else {
           display.setColor(UIColor::primary_txt);
         }
@@ -1179,9 +1190,9 @@ public:
       const char* options[] = {"1-byte", "2-byte", "3-byte", "Back"};
       for (uint8_t i = 0; i < 4; i++, y += 12) {
         if (i == _selected_item) {
-          display.setColor(UIColor::title_bkg);
+          display.setColor(highlightBkg());
           display.fillRect(0, y - 2, display.width(), 11);
-          display.setColor(UIColor::title_txt);
+          display.setColor(highlightTxt());
         } else {
           display.setColor(UIColor::primary_txt);
         }
@@ -1189,7 +1200,7 @@ public:
         display.print(options[i]);
       }
     } else if (_state == PATH_HASH_WARN_SUBMENU) {
-      display.setColor(UIColor::title_bkg);
+      display.setColor(UIColor::warning_txt);
       display.drawTextCentered(display.width() / 2, 8, "Warning");
       display.setColor(UIColor::primary_txt);
       display.setTextSize(1);
@@ -1208,9 +1219,9 @@ public:
       int y = 18;
       for (uint8_t i = 0; i < 5; i++, y += 12) {
         if (i == _selected_item) {
-          display.setColor(UIColor::title_bkg);
+          display.setColor(highlightBkg());
           display.fillRect(0, y - 2, display.width(), 11);
-          display.setColor(UIColor::title_txt);
+          display.setColor(highlightTxt());
         } else {
           display.setColor(UIColor::primary_txt);
         }
@@ -1239,9 +1250,9 @@ public:
       uint8_t cur = isManualAutoAdd() ? 1 : 0;
       for (uint8_t i = 0; i < 2; i++, y += 15) {
         if (i == cur) {
-          display.setColor(UIColor::title_bkg);
+          display.setColor(highlightBkg());
           display.fillRect(0, y - 2, display.width(), 13);
-          display.setColor(UIColor::title_txt);
+          display.setColor(highlightTxt());
         } else {
           display.setColor(UIColor::primary_txt);
         }
@@ -1257,9 +1268,9 @@ public:
       int y = 16;
       for (uint8_t i = 0; i < 5; i++, y += 11) {
         if (i == _selected_item) {
-          display.setColor(UIColor::title_bkg);
+          display.setColor(highlightBkg());
           display.fillRect(0, y - 2, display.width(), 10);
-          display.setColor(UIColor::title_txt);
+          display.setColor(highlightTxt());
         } else {
           display.setColor(UIColor::primary_txt);
         }
@@ -1279,9 +1290,9 @@ public:
       uint8_t cur = (_node_prefs->autoadd_config & AUTO_ADD_OVERWRITE_OLDEST) ? 1 : 0;
       for (uint8_t i = 0; i < 2; i++, y += 15) {
         if (i == cur) {
-          display.setColor(UIColor::title_bkg);
+          display.setColor(highlightBkg());
           display.fillRect(0, y - 2, display.width(), 13);
-          display.setColor(UIColor::title_txt);
+          display.setColor(highlightTxt());
         } else {
           display.setColor(UIColor::primary_txt);
         }
@@ -1295,9 +1306,9 @@ public:
       int y = 16;
       for (uint8_t i = 0; i < MAX_HOPS_OPTION_COUNT + 1; i++, y += 11) {
         if (i == _selected_item) {
-          display.setColor(UIColor::title_bkg);
+          display.setColor(highlightBkg());
           display.fillRect(0, y - 2, display.width(), 10);
-          display.setColor(UIColor::title_txt);
+          display.setColor(highlightTxt());
         } else {
           display.setColor(UIColor::primary_txt);
         }
