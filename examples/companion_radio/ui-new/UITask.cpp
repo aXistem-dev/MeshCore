@@ -3,8 +3,11 @@
 #include "../MyMesh.h"
 #include "target.h"
 #include <RTClib.h>
-#ifndef UI_TFT_ESPI_GFXFF_FONTS_LOADED
-#include <Fonts/FreeMonoBold18pt7b.h>
+#ifdef UI_TFT_ESPI_GFXFF_FONTS_LOADED
+  #define UI_HAS_CLOCK_FONT 1
+#elif __has_include(<Fonts/FreeMonoBold18pt7b.h>)
+  #include <Fonts/FreeMonoBold18pt7b.h>
+  #define UI_HAS_CLOCK_FONT 1
 #endif
 
 #ifndef AUTO_OFF_MILLIS
@@ -1660,9 +1663,11 @@ public:
     // Full screen clock display
     display.setColor(UIColor::primary_txt);
     
+#ifdef UI_HAS_CLOCK_FONT
     // Use FreeMonoBold18pt7b font for clock (bold monospace is perfect for time display)
     extern const GFXfont FreeMonoBold18pt7b;
     display.setCustomFont((void*)&FreeMonoBold18pt7b);
+#endif
     
     // Get current time and format as HH:MM
     uint32_t now = _rtc->getCurrentTime();
