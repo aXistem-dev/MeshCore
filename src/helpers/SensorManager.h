@@ -36,6 +36,13 @@ public:
   /// Default no-op; EnvironmentSensorManager overrides when GPS_POWER_SAVE_ACTIVE.
   virtual void setGpsOffPersistCallback(void (*cb)(void*), void* user) { (void)cb; (void)user; }
 
+  /// Optional: apply SlunseCore's GPS power-save preferences (mode/hold/timeout/interval).
+  /// Default no-op; EnvironmentSensorManager overrides when GPS_POWER_SAVE_ACTIVE. Board-specific
+  /// sensor managers that don't derive from EnvironmentSensorManager safely ignore this.
+  virtual void applyGpsSaverPrefs(uint8_t mode, uint8_t hold, uint8_t timeout_min, uint32_t interval_sec, mesh::RTCClock* rtc) {
+    (void)mode; (void)hold; (void)timeout_min; (void)interval_sec; (void)rtc;
+  }
+
   // Helper functions to manage setting by keys (useful in many places ...)
   const char* getSettingByKey(const char* key) {
     int num = getNumSettings();

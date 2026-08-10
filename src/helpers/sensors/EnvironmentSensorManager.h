@@ -70,7 +70,7 @@ public:
   bool setSettingValue(const char* name, const char* value) override;
   void setRTCClock(mesh::RTCClock* rtc) override;
   #if GPS_POWER_SAVE_ACTIVE
-  void applyGpsSaverPrefs(uint8_t mode, uint8_t hold, uint8_t timeout_min, uint32_t interval_sec, mesh::RTCClock* rtc);
+  void applyGpsSaverPrefs(uint8_t mode, uint8_t hold, uint8_t timeout_min, uint32_t interval_sec, mesh::RTCClock* rtc) override;
   void setGpsOffPersistCallback(void (*cb)(void*), void* user) override;
   #endif
 };
