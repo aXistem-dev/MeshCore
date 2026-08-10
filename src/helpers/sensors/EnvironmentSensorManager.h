@@ -22,8 +22,9 @@ protected:
   bool     gps_detected = false;
   bool     gps_active = false;
   uint32_t gps_update_interval_sec = 1;
+  mesh::RTCClock* _rtc_clock = nullptr;
 
-  #if ENV_INCLUDE_GPS && GPS_POWER_SAVE_ACTIVE
+  #if GPS_POWER_SAVE_ACTIVE
   bool gps_setting = false;           // User intent: GPS on/off
   uint8_t gps_saver_mode = 1;         // 0=off, 1=bootonly, 2=periodic
   uint8_t gps_saver_hold = 15;       // 5–240 s
@@ -38,7 +39,6 @@ protected:
 
   #if ENV_INCLUDE_GPS
   LocationProvider* _location;
-  mesh::RTCClock* _rtc_clock = nullptr;
   void start_gps();
   void stop_gps();
   void initBasicGPS();
