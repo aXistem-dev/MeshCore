@@ -58,12 +58,14 @@ void ESP32Board::enterDeepSleep(uint32_t secs) {
   // Power off LoRa
   radio_driver.powerOff();
 
-  // Keep LoRa inactive during deepsleep
+  // Keep LoRa inactive during deepsleep (no-op on boards with no LoRa radio, e.g. ESP-NOW only)
+#ifdef P_LORA_NSS
   digitalWrite(P_LORA_NSS, HIGH);
 #if defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32C6)
   gpio_hold_en((gpio_num_t)P_LORA_NSS);
 #else
   rtc_gpio_hold_en((gpio_num_t)P_LORA_NSS);
+#endif
 #endif
 
   // Power off GPS if any
