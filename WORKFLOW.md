@@ -125,6 +125,10 @@ When preparing a new slunsecore release:
 
 - [ ] Merge latest MeshCore release into `dev-slunsecore`
 - [ ] Resolve all conflicts in `dev-slunsecore`
+- [ ] Push `dev-slunsecore` and wait for the **Compile Matrix Check** workflow to go green
+      (fast parallel compile-only build across every board/firmware-type — catches drift from
+      the upstream merge in ~20-30 min instead of one board at a time across multi-hour release
+      builds). Fix anything it flags and re-push before continuing.
 - [ ] Test thoroughly in `dev-slunsecore`
 - [ ] Merge `dev-slunsecore` → `slunsecore`
 - [ ] Final testing in `slunsecore`
