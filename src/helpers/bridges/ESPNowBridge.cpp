@@ -9,7 +9,7 @@
 ESPNowBridge *ESPNowBridge::_instance = nullptr;
 
 // Static callback wrappers
-void ESPNowBridge::recv_cb(const uint8_t *mac, const uint8_t *data, int32_t len) {
+void ESPNowBridge::recv_cb(const uint8_t *mac, const uint8_t *data, int len) {
   if (_instance) {
     _instance->onDataRecv(mac, data, len);
   }
