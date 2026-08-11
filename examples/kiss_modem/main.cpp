@@ -20,8 +20,6 @@
 
 #define NOISE_FLOOR_CALIB_INTERVAL_MS 2000
 #define AGC_RESET_INTERVAL_MS 30000
-#define USB_TX_TIMEOUT_MS 50
-#define USB_TX_BUFFER_SIZE 1024
 
 StdRNG rng;
 mesh::LocalIdentity identity;
@@ -113,10 +111,10 @@ void setup() {
   uint32_t start = millis();
   while (!Serial && millis() - start < 3000) delay(10);
   delay(100);
-#if defined(ESP32) && defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
-  Serial.setTxTimeoutMs(USB_TX_TIMEOUT_MS);
-  Serial.setTxBufferSize(USB_TX_BUFFER_SIZE);
-#endif
+  // Note: Serial.setTxTimeoutMs()/setTxBufferSize() USB CDC tuning was tried here but
+  // removed — availability differs across ESP32 chip variants' USB CDC implementations
+  // (HWCDC vs USBCDC) in ways ARDUINO_USB_CDC_ON_BOOT alone doesn't reliably predict,
+  // and the calls are optional performance tuning, not required for correctness.
   modem = new KissModem(Serial, identity, rng, radio_driver, board, sensors);
 #endif
 
