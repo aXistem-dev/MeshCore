@@ -1,0 +1,93 @@
+# Fast, parallel "does everything still compile" smoke test.
+#
+# Runs on every push to dev-slunsecore so drift introduced by merging
+# upstream MeshCore (or by our own board changes) is caught within
+# minutes, in one pass, across the *entire* board/firmware-type matrix —
+# instead of discovering problems one at a time across multi-hour serial
+# release builds. This does NOT build release artifacts or create
+# releases; it's a compile-only gate meant to run well before merging
+# dev-slunsecore into slunsecore.
+#
+# GitHub Actions caps a single matrix at 256 jobs, and this repo has
+# ~600 pio environments, so environments are bucketed into SHARD_COUNT
+# parallel shards; each shard builds its assigned environments serially
+# but shards run concurrently. fail-fast is disabled so one broken board
+# doesn't hide failures in the rest of the matrix.
+
+name: Compile Matrix Check
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - dev-slunsecore
+  workflow_dispatch:
+
+env:
+  SHARD_COUNT: 30
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.shard.outputs.shards }}
+    steps:
+      - name: Clone Repo
+        uses: actions/checkout@v4
+
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-environment
+
+      - name: Generate shard matrix
+        id: shard
+        run: |
+          # native/native_kiss_modem are pio-test-only environments (covered by
+          # run-unit-tests.yml), not real firmware targets — exclude them.
+          readarray -t envs_arr < <(bash build.sh list | grep -v '^native')
+          declare -a shards
+          for i in "${!envs_arr[@]}"; do
+            idx=$((i % SHARD_COUNT))
+            shards[$idx]="${shards[$idx]}${envs_arr[$i]} "
+          done
+          SHARDS_JSON=$(printf '%s\n' "${shards[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "shards=$SHARDS_JSON" >> "$GITHUB_OUTPUT"
+          echo "Split ${#envs_arr[@]} environments into $(echo "$SHARDS_JSON" | jq 'length') shards"
+
+  compile-check:
+    needs: generate-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard_envs: ${{ fromJson(needs.generate-matrix.outputs.shards) }}
+    steps:
+      - name: Clone Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-environment
+
+      - name: Compile shard (compile-only, no artifacts)
+        env:
+          FIRMWARE_VERSION: v0.0.0-smoketest
+        run: |
+          FAILED=""
+          for pio_env in ${{ matrix.shard_envs }}; do
+            echo "::group::Building $pio_env"
+            if bash build.sh build-firmware "$pio_env"; then
+              echo "OK: $pio_env"
+            else
+              echo "FAILED: $pio_env"
+              FAILED="$FAILED $pio_env"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$FAILED" ]; then
+            echo "::error::The following environments failed to build:$FAILED"
+            exit 1
+          fi
