@@ -67,7 +67,11 @@ public:
   void enterDeepSleep(uint32_t secs);
 
   uint32_t getIRQGpio() override {
+#ifdef P_LORA_DIO_1
     return P_LORA_DIO_1; // default for SX1262
+#else
+    return -1; // no LoRa radio on this board (e.g. ESP-NOW only) — matches MeshCore's own "not supported" convention
+#endif
   }
 
   void sleep(uint32_t secs) override {
