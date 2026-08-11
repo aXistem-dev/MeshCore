@@ -2,6 +2,9 @@
 #include <helpers/TxtDataHelpers.h>
 #include "../MyMesh.h"
 #include "target.h"
+#ifdef WIFI_SSID
+  #include <WiFi.h>
+#endif
 #include <RTClib.h>
 #ifdef UI_TFT_ESPI_GFXFF_FONTS_LOADED
   #define UI_HAS_CLOCK_FONT 1
