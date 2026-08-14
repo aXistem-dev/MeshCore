@@ -49,7 +49,7 @@ jobs:
         with:
           tag_name: sc-companion-${{ steps.get_version.outputs.version }}
           name: SlunseCore Companion Firmware ${{ steps.get_version.outputs.version }}
-          body: "Built from branch slunsecore. See latest commits."
+          body_path: docs/releases/slunsecore-${{ steps.get_version.outputs.version }}-companion.md
           draft: true
           files: out/*
           make_latest: false
@@ -69,7 +69,7 @@ jobs:
         with:
           tag_name: sc-room-server-${{ steps.get_version.outputs.version }}
           name: SlunseCore Room Server Firmware ${{ steps.get_version.outputs.version }}
-          body: "Built from branch slunsecore. See latest commits."
+          body_path: docs/releases/slunsecore-${{ steps.get_version.outputs.version }}-room-server.md
           draft: true
           files: out/*
           make_latest: false
@@ -89,7 +89,7 @@ jobs:
         with:
           tag_name: sc-repeater-${{ steps.get_version.outputs.version }}
           name: SlunseCore Repeater Firmware ${{ steps.get_version.outputs.version }}
-          body: "Built from branch slunsecore. See latest commits."
+          body_path: docs/releases/slunsecore-${{ steps.get_version.outputs.version }}-repeater.md
           draft: true
           files: out/*
           make_latest: false
